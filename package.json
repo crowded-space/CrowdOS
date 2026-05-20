@@ -1,0 +1,23 @@
+{
+  "name": "crowdos",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Operating system for collective intelligence.",
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "npm run dev --workspaces --if-present",
+    "build": "npm run build --workspaces --if-present",
+    "test": "npm run test --workspaces --if-present"
+  },
+  "keywords": [
+    "ai",
+    "agents",
+    "orchestration",
+    "governance",
+    "collective-intelligence"
+  ],
+  "author": "",
+  "license": "Apache-2.0"
+}
