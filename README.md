@@ -1,4 +1,4 @@
-# CrowdOS 🐦‍⬛
+# CrowdOS 
 
 > **Operating system for collective intelligence.**
 
