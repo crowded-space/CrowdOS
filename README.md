@@ -1,5 +1,7 @@
 # CrowdOS 
 
+![CrowdOS Banner](assets/banner.png)
+
 > **Operating system for collective intelligence.**
 
 CrowdOS is a provider-agnostic sandbox for building, orchestrating, and governing hierarchical AI agent ecosystems.
