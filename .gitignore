@@ -43,5 +43,5 @@ next-env.d.ts
 *.swo
 
 # Project specific
-assets/banner.png # Keep the banner if you want, but often large assets are ignored. 
-# Actually, I'll leave assets/ alone unless asked to ignore it.
+# (Assets are included for README display)
+
