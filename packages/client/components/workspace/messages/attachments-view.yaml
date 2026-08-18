@@ -1,0 +1,88 @@
+# ACAD Twin-YAML
+# Version: 1.1.0
+# Source: packages/client/components/workspace/messages/attachments-view
+
+block:
+  id: "200b804e-e2ff-4ddb-9724-1de25c5f815e"
+  label: "AttachmentsView"
+  position: { x: 1400, y: 1560 }
+  size: { width: 240, height: 200 }
+  color: "#3498db"
+  collapsed: false
+  ports:
+    imports:
+      - React
+      - useState
+      - Attachment
+      - File
+      - Eye
+      - Download
+      - FileText
+      - ImageIcon
+      - X
+    exports:
+      - AttachmentsView
+
+spec:
+  version: "1.1.0"
+  file:
+    path: packages/client/components/workspace/messages/attachments-view
+    language: typescript
+  imports:
+    - from: "react"
+      symbols:
+        - React
+        - useState
+    - from: "@/types/crowd-os"
+      symbols:
+        - Attachment
+    - from: "lucide-react"
+      symbols:
+        - File
+        - Eye
+        - Download
+        - FileText
+        - ImageIcon
+        - X
+  types:
+    - name: AttachmentsViewProps
+      kind: struct
+      fields:
+        - name: attachments
+          type: "Attachment[]"
+          required: false
+  exports:
+    - name: AttachmentsView
+      kind: function
+      async: false
+      params:
+        - name: { attachments }
+          type: AttachmentsViewProps
+      returns: void
+      doc: "Exported function AttachmentsView."
+      intent:
+        - action: call
+          value: "useState"
+        - action: if
+          condition: "!attachments || attachments.length === 0"
+        - action: return
+          value: "null"
+        - action: if
+          condition: "bytes === undefined"
+        - action: return
+          value: "''"
+        - action: if
+          condition: "bytes < 1024"
+        - action: return
+          value: "`${bytes} B`"
+        - action: if
+          condition: "bytes < 1024 * 1024"
+        - action: return
+          value: "`${(bytes / 1024).toFixed(1)} KB`"
+        - action: call
+          value: "(bytes / 1024).toFixed"
+  constraints:
+    style:
+      indent: 2
+      quotes: double
+      semicolons: true

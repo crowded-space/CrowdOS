@@ -1,0 +1,84 @@
+# ACAD Twin-YAML
+# Version: 1.1.0
+# Source: packages/server/src/runtime/RuntimeRouter
+
+block:
+  id: "1c2ce792-8222-4987-a595-816119b0d35e"
+  label: "RuntimeRouter"
+  position: { x: 3640, y: 780 }
+  size: { width: 240, height: 200 }
+  color: "#d35400"
+  collapsed: false
+  ports:
+    imports:
+      - AgentProfile
+      - RuntimeType
+    exports:
+      - "RuntimeRouter.route"
+
+spec:
+  version: "1.1.0"
+  file:
+    path: packages/server/src/runtime/RuntimeRouter
+    language: typescript
+  imports:
+    - from: "../types/agent.types"
+      symbols:
+        - AgentProfile
+    - from: "./types"
+      symbols:
+        - RuntimeType
+  types:
+    - name: RoutingContext
+      kind: struct
+      fields:
+        - name: agent
+          type: AgentProfile
+          required: true
+        - name: channelName
+          type: string
+          required: false
+        - name: channelTags
+          type: "string[]"
+          required: false
+        - name: explicitRuntime
+          type: RuntimeType
+          required: false
+        - name: librarianAgentId
+          type: string
+          required: false
+  exports:
+    - name: RuntimeRouter.route
+      kind: function
+      async: false
+      params:
+        - name: ctx
+          type: RoutingContext
+      returns: RuntimeType
+      doc: "Method RuntimeRouter.route"
+      intent:
+        - action: if
+          condition: "ctx.explicitRuntime"
+        - action: return
+          value: "ctx.explicitRuntime"
+        - action: if
+          condition: "ctx.librarianAgentId && ctx.agent.id === ctx.librarianAgentId"
+        - action: return
+          value: "'research'"
+        - action: if
+          condition: "ctx.channelTags"
+        - action: if
+          condition: "ctx.channelTags.some((t) => t === 'coding' || t === 'dev')"
+        - action: call
+          value: "ctx.channelTags.some"
+        - action: return
+          value: "'coding'"
+        - action: if
+          condition: "ctx.channelTags.some((t) => t === 'research' || t === 'data')"
+        - action: call
+          value: "ctx.channelTags.some"
+  constraints:
+    style:
+      indent: 2
+      quotes: single
+      semicolons: false

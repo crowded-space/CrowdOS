@@ -1,0 +1,435 @@
+# ACAD Twin-YAML
+# Version: 2.0.0
+# Source: packages/server/src/Agents/agentErrors
+
+block:
+  id: eef1c6c6-14a4-500a-8978-f58c5b480d36
+  label: AgentErrors
+  position: { x: 0, y: 0 }
+  size: { width: 280, height: 220 }
+  color: "#4A90D9"
+  collapsed: false
+  ports: { imports: [ agents, messages, runtimeStates, getDb, getNextSequenceNumber, eq ], exports: [ AgentError, EscalationChain ] }
+spec:
+  version: 2.0.0
+  file:
+    path: packages/server/src/Agents/agentErrors
+    language: typescript
+  target:
+    language: typescript
+    moduleSystem: esmodule
+    compiler: typescript
+  imports:
+    - module: ../db/schema.js
+      imported: agents
+      local: agents
+      kind: value
+    - module: ../db/schema.js
+      imported: messages
+      local: messages
+      kind: value
+    - module: ../db/schema.js
+      imported: runtimeStates
+      local: runtimeStates
+      kind: value
+    - module: ../EventBroker/eventBrokerGate.js
+      imported: EventBroker
+      local: EventBroker
+      kind: type
+    - module: ../Messages/messageGate.js
+      imported: ChannelMessage
+      local: ChannelMessage
+      kind: type
+    - module: ../Shared/config/database.js
+      imported: getDb
+      local: getDb
+      kind: value
+    - module: ../Shared/core/sequenceNumber.js
+      imported: getNextSequenceNumber
+      local: getNextSequenceNumber
+      kind: value
+    - module: ./agentTypes.js
+      imported: AgentProfile
+      local: AgentProfile
+      kind: type
+    - module: drizzle-orm
+      imported: eq
+      local: eq
+      kind: value
+  types:
+    - name: AgentErrorType
+      kind: alias
+      target:
+        type: union
+        options:
+          - string
+          - string
+          - string
+          - string
+          - string
+          - string
+          - string
+  exports:
+    - name: AgentError
+      kind: class
+      methods:
+        - name: constructor
+          kind: method
+          async: false
+          generator: false
+          params:
+            - name: errorType
+              type: AgentErrorType
+              optional: false
+              rest: false
+            - name: message
+              type: string
+              optional: false
+              rest: false
+            - name: errorCode
+              type: float
+              optional: true
+              rest: false
+          returns: any
+          throws: []
+          operations:
+            - op: call
+              target: $super
+              args:
+                - message
+          effects: []
+    - name: EscalationChain
+      kind: class
+      methods:
+        - name: escalate
+          kind: method
+          async: true
+          generator: false
+          params:
+            - name: broker
+              type: EventBroker
+              optional: false
+              rest: false
+            - name: agent
+              type: AgentProfile
+              optional: false
+              rest: false
+            - name: channelId
+              type: string
+              optional: false
+              rest: false
+            - name: errorType
+              type: AgentErrorType
+              optional: false
+              rest: false
+            - name: errorMessage
+              type: string
+              optional: false
+              rest: false
+          returns: void
+          throws: []
+          operations:
+            - op: call
+              target: $getDb
+              args: []
+              assignTo: db
+            - op: call
+              target: $console.log
+              args:
+                - "`[EscalationChain] Escalating error from @${agent.name} (L${agent.authorityLevel}): ${errorMessage}`"
+            - op: call
+              target: $broker.emit
+              args:
+                - "\"escalation:created\""
+                - |-
+                  {
+                        id: `esc-${Date.now()}`,
+                        type: errorType === "LOOP_DETECTED" ? "loop_detected" : "warning",
+                        agentId: agent.id,
+                        message: errorMessage,
+                        timestamp: new Date().toISOString(),
+                        details: { channelId }
+                      }
+            - op: branch
+              condition: errorType === "LOOP_DETECTED"
+              then:
+                - op: call
+                  target: $broker.emit
+                  args:
+                    - "\"strike:initiated\" as any"
+                    - |-
+                      {
+                              agentId: agent.id,
+                              strikeCount: 1,
+                              maxStrikes: 3,
+                              reason: "Infinite self-loop detected. 3 consecutive generated outputs show high lexical similarity >= 0.9.",
+                              channelId,
+                              timestamp: new Date().toISOString()
+                            }
+            - op: call
+              target: $unknownCall
+              args:
+                - eq(agents.id, agent.id)
+              awaited: true
+            - op: call
+              target: $broker.emit
+              args:
+                - "\"agent:status\""
+                - "{ agentId: agent.id, status: \"paused\" }"
+            - op: call
+              target: $unknownCall
+              args:
+                - "1"
+              awaited: true
+            - op: branch
+              condition: state
+              then:
+                - op: call
+                  target: $unknownCall
+                  args:
+                    - eq(runtimeStates.agentId, agent.id)
+                  awaited: true
+            - op: branch
+              condition: agent.authorityLevel === 3
+              then: []
+              else:
+                - op: branch
+                  condition: agent.authorityLevel === 2
+                  then: []
+                  else:
+                    - op: branch
+                      condition: agent.authorityLevel === 1
+                      then: []
+            - op: call
+              target: $getNextSequenceNumber
+              args:
+                - channelId
+              assignTo: nextSeq
+              awaited: true
+            - op: branch
+              condition: targetLevel !== null
+              then:
+                - op: call
+                  target: $db.query.agents.findMany
+                  args:
+                    - |-
+                      {
+                              where: eq(agents.isTemplate, false),
+                            }
+                  assignTo: allAgents
+                  awaited: true
+                - op: call
+                  target: $allAgents.find
+                  args:
+                    - a => a.authorityLevel === targetLevel && a.status !== "offline" && a.status !== "paused"
+                  assignTo: targetAgent
+                - op: branch
+                  condition: targetAgent
+                  then:
+                    - op: opaque
+                      reason: Variable initializer is not represented by the semantic operation grammar
+                      sourceSpan:
+                        start: 3640
+                        length: 222
+                    - op: opaque
+                      reason: Variable initializer is not represented by the semantic operation grammar
+                      sourceSpan:
+                        start: 3872
+                        length: 517
+                    - op: call
+                      target: $unknownCall
+                      args:
+                        - |-
+                          {
+                                    ...escMsg,
+                                    authorLevel: String(escMsg.authorLevel),
+                                  }
+                      awaited: true
+                    - op: call
+                      target: $broker.emit
+                      args:
+                        - "\"message:new\""
+                        - escMsg
+                        - "{ channelId }"
+                    - op: call
+                      target: $unknownCall
+                      args:
+                        - eq(agents.id, targetAgent.id)
+                      awaited: true
+                    - op: call
+                      target: $broker.emit
+                      args:
+                        - "\"agent:status\""
+                        - "{ agentId: targetAgent.id, status: \"working\" }"
+                    - op: call
+                      target: $broker.emit
+                      args:
+                        - "\"agent:thinking\""
+                        - "{ agentId: targetAgent.id, channelId }"
+                        - "{ channelId }"
+                    - op: call
+                      target: $setTimeout
+                      args:
+                        - |-
+                          async () => {
+                                    const replyContent = `I am @${targetAgent.name}, L${targetAgent.authorityLevel} Coordinator. I have taken over the error escalation from @${agent.name}. Examining error stack and initializing fallback pipelines.`;
+                                    const replySeq = await getNextSequenceNumber(channelId);
+                                    const replyMsg: ChannelMessage = {
+                                      id: `msg-reply-${Date.now()}`,
+                                      channelId,
+                                      authorId: targetAgent.id,
+                                      authorName: targetAgent.name,
+                                      authorLevel: targetAgent.authorityLevel as any,
+                                      authorType: "agent",
+                                      content: replyContent,
+                                      mentions: [],
+                                      isInternalMonologue: false,
+                                      sequenceNumber: replySeq,
+                                      timestamp: new Date(),
+                                    };
+
+                                    await db.insert(messages).values({
+                                      ...replyMsg,
+                                      authorLevel: String(replyMsg.authorLevel),
+                                    });
+                                    broker.emit("message:new", replyMsg, { channelId });
+
+                                    await db.update(agents).set({ status: "idle" }).where(eq(agents.id, targetAgent.id));
+                                    broker.emit("agent:status", { agentId: targetAgent.id, status: "idle" });
+                                  }
+                        - "1200"
+                    - op: return
+                      value: null
+            - op: opaque
+              reason: Variable initializer is not represented by the semantic operation grammar
+              sourceSpan:
+                start: 6164
+                length: 315
+            - op: opaque
+              reason: Variable initializer is not represented by the semantic operation grammar
+              sourceSpan:
+                start: 6485
+                length: 363
+            - op: call
+              target: $unknownCall
+              args:
+                - |-
+                  {
+                        ...userMsg,
+                        authorLevel: String(userMsg.authorLevel),
+                      }
+              awaited: true
+            - op: call
+              target: $broker.emit
+              args:
+                - "\"message:new\""
+                - userMsg
+                - "{ channelId }"
+            - op: call
+              target: $broker.emit
+              args:
+                - "\"budget:exceeded\""
+                - "{ profileId: agent.modelModuleId || \"default\", pausedAgents: [agent.id] }"
+                - "{ channelId }"
+          effects:
+            - kind: log
+              target: console.log
+            - kind: event
+              target: broker.emit
+              operation: emit
+            - kind: database
+              target: "db.update(agents).set({ status: \"paused\" }).where"
+              operation: write_or_read
+            - kind: database
+              target: |-
+                db.update(runtimeStates)
+                        .set({
+                          status: "paused",
+                          errorInfo: {
+                            code: errorType,
+                            message: errorMessage,
+                            timestamp: new Date().toISOString()
+                          }
+                        })
+                        .where
+              operation: write_or_read
+            - kind: database
+              target: db.query.agents.findMany
+              operation: write_or_read
+            - kind: database
+              target: db.insert(messages).values
+              operation: write_or_read
+            - kind: database
+              target: "db.update(agents).set({ status: \"working\" }).where"
+              operation: write_or_read
+  capabilities: [ async, await ]
+  effects:
+    - kind: database
+      target: db.insert(messages).values
+      operation: write_or_read
+    - kind: database
+      target: db.query.agents.findMany
+      operation: write_or_read
+    - kind: database
+      target: "db.update(agents).set({ status: \"paused\" }).where"
+      operation: write_or_read
+    - kind: database
+      target: "db.update(agents).set({ status: \"working\" }).where"
+      operation: write_or_read
+    - kind: database
+      target: |-
+        db.update(runtimeStates)
+                .set({
+                  status: "paused",
+                  errorInfo: {
+                    code: errorType,
+                    message: errorMessage,
+                    timestamp: new Date().toISOString()
+                  }
+                })
+                .where
+      operation: write_or_read
+    - kind: event
+      target: broker.emit
+      operation: emit
+    - kind: log
+      target: console.log
+  fidelity: partial
+  diagnostics:
+    - severity: warning
+      code: OPAQUE_OPERATION
+      path: source:3640
+      message: Variable initializer is not represented by the semantic operation grammar
+      sourceSpan:
+        start: 3640
+        length: 222
+    - severity: warning
+      code: OPAQUE_OPERATION
+      path: source:3872
+      message: Variable initializer is not represented by the semantic operation grammar
+      sourceSpan:
+        start: 3872
+        length: 517
+    - severity: warning
+      code: OPAQUE_OPERATION
+      path: source:6164
+      message: Variable initializer is not represented by the semantic operation grammar
+      sourceSpan:
+        start: 6164
+        length: 315
+    - severity: warning
+      code: OPAQUE_OPERATION
+      path: source:6485
+      message: Variable initializer is not represented by the semantic operation grammar
+      sourceSpan:
+        start: 6485
+        length: 363
+  constraints:
+    style:
+      indent: 2
+      quotes: double
+      semicolons: true
+provenance:
+  sourceHash: 1d65ac34f621b61df47cadb79d93483cbabc5e706657dffe440b4149d8f32cfd
+  parser: typescript-compiler-api
+  parserVersion: 5.9.3

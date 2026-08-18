@@ -1,0 +1,6 @@
+{
+  "name": "CrowdOS",
+  "description": "A single-user corporate AI agent orchestration workspace styled like Discord, featuring authority levels, hierarchical delegation, and modular cognitive assembly.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

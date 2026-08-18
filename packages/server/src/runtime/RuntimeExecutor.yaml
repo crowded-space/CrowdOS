@@ -1,0 +1,117 @@
+# ACAD Twin-YAML
+# Version: 1.1.0
+# Source: packages/server/src/runtime/RuntimeExecutor
+
+block:
+  id: "f11eabc3-534f-4014-9250-64ef04bb43fd"
+  label: "RuntimeExecutor"
+  position: { x: 3360, y: 780 }
+  size: { width: 240, height: 200 }
+  color: "#d35400"
+  collapsed: false
+  ports:
+    imports:
+      - AgentProfile
+      - EventBroker
+      - IRuntime
+      - RuntimeResult
+      - RuntimeType
+      - ContextAssembler
+      - RuntimeRouter
+      - ConversationalRuntime
+      - AgenticRuntime
+      - SwarmRuntime
+    exports:
+      - "RuntimeExecutor.execute"
+
+spec:
+  version: "1.1.0"
+  file:
+    path: packages/server/src/runtime/RuntimeExecutor
+    language: typescript
+  imports:
+    - from: "../types/agent.types"
+      symbols:
+        - AgentProfile
+    - from: "../EventBroker/eventBrokerGate"
+      symbols:
+        - EventBroker
+    - from: "./types"
+      symbols:
+        - IRuntime
+        - RuntimeResult
+        - RuntimeType
+    - from: "./kernel/ContextAssembler"
+      symbols:
+        - ContextAssembler
+    - from: "./RuntimeRouter"
+      symbols:
+        - RuntimeRouter
+    - from: "./runtimes/ConversationalRuntime"
+      symbols:
+        - ConversationalRuntime
+    - from: "./runtimes/AgenticRuntime"
+      symbols:
+        - AgenticRuntime
+    - from: "./runtimes/SwarmRuntime"
+      symbols:
+        - SwarmRuntime
+  types:
+    - name: ExecuteRequest
+      kind: struct
+      fields:
+        - name: agent
+          type: AgentProfile
+          required: true
+        - name: channelId
+          type: string
+          required: true
+        - name: workspaceId
+          type: string
+          required: true
+        - name: userInput
+          type: string
+          required: true
+        - name: broker
+          type: EventBroker
+          required: true
+        - name: channelTags
+          type: "string[]"
+          required: false
+        - name: explicitRuntime
+          type: RuntimeType
+          required: false
+        - name: librarianAgentId
+          type: string
+          required: false
+  exports:
+    - name: RuntimeExecutor.execute
+      kind: function
+      async: true
+      params:
+        - name: req
+          type: ExecuteRequest
+      returns: "Promise<RuntimeResult>"
+      doc: "Method RuntimeExecutor.execute"
+      intent:
+        - action: call
+          value: "router.route"
+        - action: if
+          condition: "!runtime"
+        - action: call
+          value: "console.warn"
+        - action: call
+          value: "assembler.assemble"
+        - action: return
+          value: "runtime.execute(packet, broker)"
+        - action: call
+          value: "runtime.execute"
+        - action: call
+          value: "String"
+        - action: return
+          value: "{         requestId: 'error',         agentId: agent.id,         channelId,         finalResponse: `[RuntimeExecutor] Execution failed: ${message}`,         runtimeEvents: [],         usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 },         status: 'failed',       }"
+  constraints:
+    style:
+      indent: 2
+      quotes: single
+      semicolons: false

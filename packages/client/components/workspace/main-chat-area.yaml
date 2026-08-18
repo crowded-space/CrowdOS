@@ -1,0 +1,156 @@
+# ACAD Twin-YAML
+# Version: 1.1.0
+# Source: packages/client/components/workspace/main-chat-area
+
+block:
+  id: "25e40048-ce91-46cc-a26b-b293339612ee"
+  label: "MainChatArea"
+  position: { x: 840, y: 1560 }
+  size: { width: 240, height: 200 }
+  color: "#3498db"
+  collapsed: false
+  ports:
+    imports:
+      - React
+      - useState
+      - useRef
+      - useEffect
+      - motion
+      - AnimatePresence
+      - Hash
+      - Users
+      - Search
+      - Bell
+      - Pin
+      - Mail
+      - HelpCircle
+      - Trash2
+      - Send
+      - PlusCircle
+      - Smile
+      - CircleX
+      - ChevronRight
+      - ChevronDown
+      - ChevronUp
+      - Sparkles
+      - Paperclip
+      - FileText
+      - ImageIcon
+      - X
+      - File
+      - Telescope
+      - Globe
+      - MoreHorizontal
+      - Clock
+      - Terminal
+      - FileCode2
+      - useCrowdOSStore
+      - MessageRouter
+      - MentionParser
+      - mockFileContent
+      - SimpleSyntaxHighlighter
+      - PresenceIndicator
+      - Attachment
+      - Agent
+    exports:
+      - MainChatArea
+
+spec:
+  version: "1.1.0"
+  file:
+    path: packages/client/components/workspace/main-chat-area
+    language: typescript
+  imports:
+    - from: "react"
+      symbols:
+        - React
+        - useState
+        - useRef
+        - useEffect
+    - from: "motion/react"
+      symbols:
+        - motion
+        - AnimatePresence
+    - from: "lucide-react"
+      symbols:
+        - Hash
+        - Users
+        - Search
+        - Bell
+        - Pin
+        - Mail
+        - HelpCircle
+        - Trash2
+        - Send
+        - PlusCircle
+        - Smile
+        - CircleX
+        - ChevronRight
+        - ChevronDown
+        - ChevronUp
+        - Sparkles
+        - Paperclip
+        - FileText
+        - ImageIcon
+        - X
+        - File
+        - Telescope
+        - Globe
+        - MoreHorizontal
+        - Clock
+        - Terminal
+        - FileCode2
+    - from: "@/stores/crowd-os-store"
+      symbols:
+        - useCrowdOSStore
+    - from: "./messages/message"
+      symbols:
+        - MessageRouter
+    - from: "./messages/mention-parser"
+      symbols:
+        - MentionParser
+    - from: "./file-explorer"
+      symbols:
+        - mockFileContent
+        - SimpleSyntaxHighlighter
+    - from: "./ui/presence-indicator"
+      symbols:
+        - PresenceIndicator
+    - from: "@/types/crowd-os"
+      symbols:
+        - Attachment
+        - Agent
+  types: []
+  exports:
+    - name: MainChatArea
+      kind: function
+      async: false
+      params: []
+      returns: void
+      doc: "Exported function MainChatArea."
+      intent:
+        - action: call
+          value: "useCrowdOSStore"
+        - action: call
+          value: "useState"
+        - action: call
+          value: "useState"
+        - action: call
+          value: "useState"
+        - action: call
+          value: "useState"
+        - action: call
+          value: "useState"
+        - action: call
+          value: "useState"
+        - action: call
+          value: "useRef"
+        - action: call
+          value: "useState"
+        - action: call
+          value: "useState"
+  constraints:
+    style:
+      indent: 2
+      quotes: double
+      semicolons: true

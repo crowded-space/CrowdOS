@@ -1,0 +1,66 @@
+# ACAD Twin-YAML
+# Version: 1.1.0
+# Source: packages/server/src/core/PromptFormatter
+
+block:
+  id: 10c4892f-58a2-53db-a05e-8501e2dee1df
+  label: PromptFormatter
+  position: { x: 0, y: 0 }
+  size: { width: 240, height: 200 }
+  color: "#50B27D"
+  collapsed: false
+  ports: { imports: [ type, MentionMetadata ], exports: [ formatMessageForAgent ] }
+spec:
+  version: 1.1.0
+  file:
+    path: packages/server/src/core/PromptFormatter
+    language: typescript
+  imports:
+    - module: ../types/mention.types.js
+      symbols: [ type, MentionMetadata ]
+  types:
+    - name: MessageInput
+      kind: struct
+      fields:
+        - name: authorName
+          type: string
+          required: true
+        - name: authorLevel
+          type:
+            type: union
+            options:
+              - string
+              - float
+          required: true
+        - name: content
+          type: string
+          required: true
+        - name: mentions
+          type:
+            type: array
+            items: Object
+          required: false
+        - name: isInternalMonologue
+          type: bool
+          required: false
+  exports:
+    - name: formatMessageForAgent
+      kind: function
+      async: false
+      params:
+        - name: message
+          type: MessageInput
+        - name: recipientAgentName
+          type: string
+      returns: string
+      doc: |-
+        Format a channel message into XML-like tagging for LLMs.
+        Handles escaping/injecting headers and attributes like level, mentions, and attention flags.
+      intent:
+        - action: return
+          value: "`<message from=\"${fromAttr}\" level=\"${levelAttr}\"${mentionAttr}${flagAttr}>\\n${message.content}\\n</message>`"
+  constraints:
+    style:
+      indent: 2
+      quotes: double
+      semicolons: true

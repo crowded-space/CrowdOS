@@ -1,0 +1,54 @@
+# ACAD Twin-YAML
+# Version: 1.1.0
+# Source: packages/client/vite.config
+
+block:
+  id: "b2e4983c-a4ee-49c4-8cff-c7539a160e5e"
+  label: "ViteConfig"
+  position: { x: 280, y: 1820 }
+  size: { width: 240, height: 200 }
+  color: "#7f8c8d"
+  collapsed: false
+  ports:
+    imports:
+      - tailwindcss
+      - react
+      - path
+      - defineConfig
+    exports:
+      - ViteConfigModule
+
+spec:
+  version: "1.1.0"
+  file:
+    path: packages/client/vite.config
+    language: typescript
+  imports:
+    - from: "@tailwindcss/vite"
+      symbols:
+        - tailwindcss
+    - from: "@vitejs/plugin-react-swc"
+      symbols:
+        - react
+    - from: "path"
+      symbols:
+        - path
+    - from: "vite"
+      symbols:
+        - defineConfig
+  types: []
+  exports:
+    - name: ViteConfigModule
+      kind: function
+      async: false
+      params: []
+      returns: void
+      doc: "Module definition for packages/client/vite.config.ts"
+      intent:
+        - action: return
+          value: "void"
+  constraints:
+    style:
+      indent: 2
+      quotes: single
+      semicolons: true

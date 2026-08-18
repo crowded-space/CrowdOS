@@ -1,0 +1,149 @@
+# ACAD Twin-YAML
+# Version: 1.1.0
+# Source: packages/server/src/types/provider.types
+
+block:
+  id: "36887043-a8cc-4ac7-92e0-4c3bfc64d3f1"
+  label: "ProviderTypes"
+  position: { x: 3640, y: 1300 }
+  size: { width: 240, height: 200 }
+  color: "#16a085"
+  collapsed: false
+  ports:
+    imports: []
+    exports:
+      - ProviderTypesModule
+
+spec:
+  version: "1.1.0"
+  file:
+    path: packages/server/src/types/provider.types
+    language: typescript
+  imports: []
+  types:
+    - name: ProviderEngine
+      kind: struct
+      fields:
+        - name: value
+          type: any
+          required: true
+    - name: GenerationModelProfile
+      kind: struct
+      fields:
+        - name: id
+          type: string
+          required: true
+        - name: label
+          type: string
+          required: true
+        - name: provider
+          type: ProviderEngine
+          required: true
+        - name: modelName
+          type: string
+          required: true
+        - name: apiKey
+          type: string
+          required: false
+        - name: endpointUrl
+          type: string
+          required: false
+        - name: temperature
+          type: number
+          required: true
+        - name: topP
+          type: number
+          required: true
+        - name: maxOutputTokens
+          type: number
+          required: true
+        - name: stopSequences
+          type: "string[]"
+          required: true
+        - name: maxRecentMessages
+          type: number
+          required: true
+        - name: enableCompression
+          type: boolean
+          required: true
+        - name: compressionThreshold
+          type: number
+          required: true
+        - name: createdAt
+          type: Date
+          required: true
+        - name: updatedAt
+          type: Date
+          required: true
+    - name: EmbeddingModelProfile
+      kind: struct
+      fields:
+        - name: id
+          type: string
+          required: true
+        - name: label
+          type: string
+          required: true
+        - name: provider
+          type: ProviderEngine
+          required: true
+        - name: modelName
+          type: string
+          required: true
+        - name: apiKey
+          type: string
+          required: false
+        - name: endpointUrl
+          type: string
+          required: false
+        - name: dimensions
+          type: number
+          required: true
+        - name: createdAt
+          type: Date
+          required: true
+        - name: updatedAt
+          type: Date
+          required: true
+    - name: IndexingModelProfile
+      kind: struct
+      fields:
+        - name: id
+          type: string
+          required: true
+        - name: label
+          type: string
+          required: true
+        - name: provider
+          type: ProviderEngine
+          required: true
+        - name: modelName
+          type: string
+          required: true
+        - name: apiKey
+          type: string
+          required: false
+        - name: endpointUrl
+          type: string
+          required: false
+        - name: createdAt
+          type: Date
+          required: true
+        - name: updatedAt
+          type: Date
+          required: true
+  exports:
+    - name: ProviderTypesModule
+      kind: function
+      async: false
+      params: []
+      returns: void
+      doc: "Module definition for packages/server/src/types/provider.types.ts"
+      intent:
+        - action: return
+          value: "void"
+  constraints:
+    style:
+      indent: 2
+      quotes: double
+      semicolons: true

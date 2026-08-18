@@ -1,0 +1,403 @@
+# ACAD Twin-YAML
+# Version: 1.1.0
+# Source: packages/server/src/Memories/agentMemoryStore
+
+block:
+  id: b66a6a5e-3d6e-51fa-9dbc-d8088d86e28e
+  label: AgentMemoryStore
+  position: { x: 0, y: 0 }
+  size: { width: 240, height: 200 }
+  color: "#4A90D9"
+  collapsed: false
+  ports: { imports: [ randomUUID, and, asc, desc, eq, gte, or, type, InferSelectModel, getDb, agents, agentMemoryNotes, memoryUpdateLog ], exports: [ resolveAgentId, generateNoteId, createMemoryNote, readMemoryNote, listMemoryPreviews, updateMemoryNote, archiveMemoryNote, suppressMemoryNote ] }
+spec:
+  version: 1.1.0
+  file:
+    path: packages/server/src/Memories/agentMemoryStore
+    language: typescript
+  imports:
+    - module: node:crypto
+      symbols: [ randomUUID ]
+    - module: drizzle-orm
+      symbols: [ and, asc, desc, eq, gte, or, type, InferSelectModel ]
+    - module: ../Shared/config/database.js
+      symbols: [ getDb ]
+    - module: ../db/schema.js
+      symbols: [ agents, agentMemoryNotes, memoryUpdateLog ]
+  types:
+    - name: MemoryNotePreview
+      kind: struct
+      fields:
+        - name: id
+          type: string
+          required: true
+        - name: agentId
+          type: string
+          required: true
+        - name: channelId
+          type:
+            type: union
+            options:
+              - string
+              - "null"
+          required: true
+        - name: noteType
+          type: Object
+          required: true
+        - name: noteTimestamp
+          type: Object
+          required: true
+        - name: importanceScore
+          type: float
+          required: true
+        - name: confidence
+          type: Object
+          required: true
+        - name: sourceType
+          type: Object
+          required: true
+        - name: emotionalValence
+          type: Object
+          required: true
+        - name: accessCount
+          type: float
+          required: true
+        - name: lastAccessed
+          type:
+            type: union
+            options:
+              - Object
+              - "null"
+          required: true
+        - name: links
+          type:
+            type: array
+            items: string
+          required: true
+        - name: contradictionFlags
+          type:
+            type: array
+            items: string
+          required: true
+        - name: lifecycleStatus
+          type: Object
+          required: true
+        - name: hook
+          type: string
+          required: true
+        - name: brief
+          type: string
+          required: true
+        - name: createdAt
+          type: Object
+          required: true
+        - name: updatedAt
+          type: Object
+          required: true
+    - name: CreateMemoryNoteInput
+      kind: struct
+      fields:
+        - name: agentId
+          type: string
+          required: true
+        - name: channelId
+          type: string
+          required: true
+        - name: noteType
+          type: Object
+          required: true
+        - name: noteTimestamp
+          type: Object
+          required: false
+        - name: importanceScore
+          type: float
+          required: false
+        - name: confidence
+          type: Object
+          required: false
+        - name: sourceType
+          type: Object
+          required: false
+        - name: emotionalValence
+          type: Object
+          required: false
+        - name: links
+          type:
+            type: array
+            items: string
+          required: false
+        - name: hook
+          type: string
+          required: true
+        - name: brief
+          type: string
+          required: true
+        - name: observed
+          type: string
+          required: false
+        - name: interpreted
+          type: string
+          required: false
+        - name: feltSense
+          type: string
+          required: false
+        - name: futureRelevance
+          type: string
+          required: false
+        - name: uncertainty
+          type: string
+          required: false
+        - name: detailed
+          type: string
+          required: false
+    - name: UpdateMemoryNotePatch
+      kind: struct
+      fields:
+        - name: reason
+          type: string
+          required: true
+        - name: importanceScore
+          type: float
+          required: false
+        - name: confidence
+          type: Object
+          required: false
+        - name: emotionalValence
+          type: Object
+          required: false
+        - name: links
+          type:
+            type: array
+            items: string
+          required: false
+        - name: contradictionFlags
+          type:
+            type: array
+            items: string
+          required: false
+        - name: hook
+          type: string
+          required: false
+        - name: brief
+          type: string
+          required: false
+        - name: observed
+          type: string
+          required: false
+        - name: interpreted
+          type: string
+          required: false
+        - name: feltSense
+          type: string
+          required: false
+        - name: futureRelevance
+          type: string
+          required: false
+        - name: uncertainty
+          type: string
+          required: false
+        - name: detailed
+          type: string
+          required: false
+    - name: MemoryListFilter
+      kind: struct
+      fields:
+        - name: noteType
+          type: Object
+          required: false
+        - name: channelId
+          type: string
+          required: false
+        - name: includeArchived
+          type: bool
+          required: false
+        - name: includeSuppressed
+          type: bool
+          required: false
+        - name: minImportance
+          type: float
+          required: false
+        - name: limit
+          type: float
+          required: false
+  exports:
+    - name: resolveAgentId
+      kind: function
+      async: true
+      params:
+        - name: agentId
+          type: string
+      returns: string
+      doc: Resolve a human-readable agent name or slug to its DB UUID.
+      intent:
+        - action: call
+          function: $getDb
+          args: []
+          assign_to: db
+        - action: return
+          value: $agentId
+    - name: generateNoteId
+      kind: function
+      async: true
+      params:
+        - name: agentId
+          type: string
+      returns: string
+      doc: "Generate a unique note ID in the Continuum format: YYYY-MM-DD-NNN"
+      intent:
+        - action: call
+          function: $getDb
+          args: []
+          assign_to: db
+        - action: return
+          value: "`${datePrefix}-${String(todaysCount + 1).padStart(3, \"0\")}`"
+    - name: createMemoryNote
+      kind: function
+      async: true
+      params:
+        - name: input
+          type: CreateMemoryNoteInput
+      returns: Object
+      doc: ""
+      intent:
+        - action: call
+          function: $getDb
+          args: []
+          assign_to: db
+        - action: call
+          function: $resolveAgentId
+          args:
+            - $input.agentId
+          assign_to: resolvedAgentId
+        - action: call
+          function: $generateNoteId
+          args:
+            - $resolvedAgentId
+          assign_to: id
+        - action: return
+          value: "{ ok: true, value: toPreview(inserted) }"
+    - name: readMemoryNote
+      kind: function
+      async: true
+      params:
+        - name: agentId
+          type: string
+        - name: noteId
+          type: string
+        - name: options
+          type: Object
+      returns: Object
+      doc: ""
+      intent:
+        - action: call
+          function: $getDb
+          args: []
+          assign_to: db
+        - action: call
+          function: $resolveAgentId
+          args:
+            - $agentId
+          assign_to: resolvedAgentId
+        - action: return
+          value: "{ ok: true, value: toFull(note) }"
+    - name: listMemoryPreviews
+      kind: function
+      async: true
+      params:
+        - name: agentId
+          type: string
+        - name: filter
+          type: MemoryListFilter
+      returns: Object
+      doc: ""
+      intent:
+        - action: call
+          function: $getDb
+          args: []
+          assign_to: db
+        - action: call
+          function: $resolveAgentId
+          args:
+            - $agentId
+          assign_to: resolvedAgentId
+        - action: return
+          value: "{ ok: true, value: notes.map(toPreview) }"
+    - name: updateMemoryNote
+      kind: function
+      async: true
+      params:
+        - name: agentId
+          type: string
+        - name: noteId
+          type: string
+        - name: patch
+          type: UpdateMemoryNotePatch
+      returns: Object
+      doc: ""
+      intent:
+        - action: call
+          function: $getDb
+          args: []
+          assign_to: db
+        - action: call
+          function: $resolveAgentId
+          args:
+            - $agentId
+          assign_to: resolvedAgentId
+        - action: return
+          value: "{ ok: true, value: toPreview(updated) }"
+    - name: archiveMemoryNote
+      kind: function
+      async: true
+      params:
+        - name: agentId
+          type: string
+        - name: noteId
+          type: string
+        - name: reason
+          type: string
+      returns: Object
+      doc: ""
+      intent:
+        - action: call
+          function: $getDb
+          args: []
+          assign_to: db
+        - action: call
+          function: $resolveAgentId
+          args:
+            - $agentId
+          assign_to: resolvedAgentId
+        - action: return
+          value: "{ ok: true, value: toPreview(updated) }"
+    - name: suppressMemoryNote
+      kind: function
+      async: true
+      params:
+        - name: agentId
+          type: string
+        - name: noteId
+          type: string
+        - name: reason
+          type: string
+        - name: suppressUntil
+          type: Object
+      returns: Object
+      doc: ""
+      intent:
+        - action: call
+          function: $getDb
+          args: []
+          assign_to: db
+        - action: call
+          function: $resolveAgentId
+          args:
+            - $agentId
+          assign_to: resolvedAgentId
+        - action: return
+          value: "{ ok: true, value: toPreview(updated) }"
+  constraints:
+    style:
+      indent: 2
+      quotes: double
+      semicolons: true

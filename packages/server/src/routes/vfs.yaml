@@ -1,0 +1,90 @@
+# ACAD Twin-YAML
+# Version: 1.1.0
+# Source: packages/server/src/routes/vfs
+
+block:
+  id: "edc77ca2-be46-403b-9f99-b7865eb3ae5d"
+  label: "Vfs"
+  position: { x: 2240, y: 520 }
+  size: { width: 240, height: 200 }
+  color: "#8e44ad"
+  collapsed: false
+  ports:
+    imports:
+      - FastifyInstance
+      - z
+      - LocalVFS
+      - path
+      - process
+      - getDb
+      - workspaces
+      - eq
+    exports:
+      - vfsRoutes
+
+spec:
+  version: "1.1.0"
+  file:
+    path: packages/server/src/routes/vfs
+    language: typescript
+  imports:
+    - from: "fastify"
+      symbols:
+        - FastifyInstance
+    - from: "zod"
+      symbols:
+        - z
+    - from: "../vfs/local-vfs"
+      symbols:
+        - LocalVFS
+    - from: "node:path"
+      symbols:
+        - path
+    - from: "node:process"
+      symbols:
+        - process
+    - from: "../config/database"
+      symbols:
+        - getDb
+    - from: "../db/schema"
+      symbols:
+        - workspaces
+    - from: "drizzle-orm"
+      symbols:
+        - eq
+  types: []
+  exports:
+    - name: vfsRoutes
+      kind: function
+      async: true
+      params:
+        - name: app
+          type: FastifyInstance
+      returns: void
+      doc: "Exported function vfsRoutes."
+      intent:
+        - action: call
+          value: "app.get"
+        - action: call
+          value: "getDynamicVFS"
+        - action: if
+          condition: "!vfs"
+        - action: return
+          value: "reply.status(404).send({ error: \"Not Found\", message: \"Workspace not found\" })"
+        - action: call
+          value: "reply.status(404).send"
+        - action: call
+          value: "reply.status"
+        - action: call
+          value: "vfs.list"
+        - action: return
+          value: "nodes"
+        - action: if
+          condition: "error.code === 'ENOENT'"
+        - action: return
+          value: "[]"
+  constraints:
+    style:
+      indent: 2
+      quotes: double
+      semicolons: true

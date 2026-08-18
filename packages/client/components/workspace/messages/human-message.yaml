@@ -1,0 +1,72 @@
+# ACAD Twin-YAML
+# Version: 1.1.0
+# Source: packages/client/components/workspace/messages/human-message
+
+block:
+  id: "b697b9dd-48dd-4089-87a9-507d7974eee9"
+  label: "HumanMessage"
+  position: { x: 1960, y: 1560 }
+  size: { width: 240, height: 200 }
+  color: "#3498db"
+  collapsed: false
+  ports:
+    imports:
+      - MentionParser
+      - AttachmentsView
+      - Attachment
+    exports:
+      - HumanMessage
+
+spec:
+  version: "1.1.0"
+  file:
+    path: packages/client/components/workspace/messages/human-message
+    language: typescript
+  imports:
+    - from: "./mention-parser"
+      symbols:
+        - MentionParser
+    - from: "./attachments-view"
+      symbols:
+        - AttachmentsView
+    - from: "@/types/crowd-os"
+      symbols:
+        - Attachment
+  types:
+    - name: HumanMessageProps
+      kind: struct
+      fields:
+        - name: authorName
+          type: string
+          required: true
+        - name: content
+          type: string
+          required: true
+        - name: timestamp
+          type: string
+          required: true
+        - name: attachments
+          type: "Attachment[]"
+          required: false
+        - name: mentions
+          type: "string[]"
+          required: false
+  exports:
+    - name: HumanMessage
+      kind: function
+      async: false
+      params:
+        - name: { authorName, content, timestamp, attachments, mentions }
+          type: HumanMessageProps
+      returns: void
+      doc: "Exported function HumanMessage."
+      intent:
+        - action: call
+          value: "new Date(timestamp).toLocaleTimeString"
+        - action: return
+          value: "(     <div        id={`human-message-${authorName}`}       className=\"group flex gap-4 p-4 border-l-4 border-amber-500 bg-amber-500/5 rounded-r-lg hover:bg-amber-500/[0.08] transition\"     >       <div className=\"flex-1 space-y-1\">         <div className=\"flex items-baseline gap-2\">           <span className=\"font-semibold text-amber-200 tracking-tight text-sm\">             {authorName}           </span>           <span className=\"text-[10px] font-mono uppercase bg-amber-500/15 text-amber-300 px-1 rounded\">             Human Operator           </span>           <span className=\"text-[10px] text-zinc-500 font-mono\">             {timeStr}           </span>         </div>         <div className=\"text-sm text-zinc-200 leading-relaxed font-sans mt-1\">           <MentionParser text={content} />         </div>                  {/* Render Attachments */}         <AttachmentsView attachments={attachments} />       </div>     </div>   )"
+  constraints:
+    style:
+      indent: 2
+      quotes: double
+      semicolons: true

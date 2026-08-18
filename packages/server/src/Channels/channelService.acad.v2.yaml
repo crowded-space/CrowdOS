@@ -1,0 +1,463 @@
+# ACAD Twin-YAML
+# Version: 2.0.0
+# Source: packages/server/src/Channels/channelService
+
+block:
+  id: cdcfd106-88c2-52da-b5de-d4b4e73f3e76
+  label: ChannelService
+  position: { x: 0, y: 0 }
+  size: { width: 280, height: 220 }
+  color: "#4A90D9"
+  collapsed: false
+  ports: { imports: [ categories, channels, getDb, eq, randomUUID ], exports: [ categoryExists, createChannel, deleteChannel, getChannel, listChannels, updateChannel ] }
+spec:
+  version: 2.0.0
+  file:
+    path: packages/server/src/Channels/channelService
+    language: typescript
+  target:
+    language: typescript
+    moduleSystem: esmodule
+    compiler: typescript
+  imports:
+    - module: ../db/schema.js
+      imported: categories
+      local: categories
+      kind: value
+    - module: ../db/schema.js
+      imported: channels
+      local: channels
+      kind: value
+    - module: ../Shared/config/database.js
+      imported: getDb
+      local: getDb
+      kind: value
+    - module: ./channelValidators.js
+      imported: CreateChannelBody
+      local: CreateChannelBody
+      kind: type
+    - module: ./channelValidators.js
+      imported: UpdateChannelBody
+      local: UpdateChannelBody
+      kind: type
+    - module: drizzle-orm
+      imported: eq
+      local: eq
+      kind: value
+    - module: node:crypto
+      imported: randomUUID
+      local: randomUUID
+      kind: value
+  types: []
+  exports:
+    - name: categoryExists
+      kind: function
+      async: true
+      generator: false
+      params:
+        - name: categoryId
+          type: string
+          optional: false
+          rest: false
+      returns: bool
+      throws: []
+      operations:
+        - op: call
+          target: $getDb
+          args: []
+          assignTo: db
+        - op: call
+          target: $db.query.categories.findFirst
+          args:
+            - |-
+              {
+                  where: eq(categories.id, categoryId),
+                }
+          assignTo: category
+          awaited: true
+        - op: call
+          target: $Boolean
+          args:
+            - category
+        - op: return
+          value: Boolean(category)
+      effects:
+        - kind: database
+          target: db.query.categories.findFirst
+          operation: write_or_read
+    - name: createChannel
+      kind: function
+      async: true
+      generator: false
+      params:
+        - name: body
+          type: CreateChannelBody
+          optional: false
+          rest: false
+      returns: any
+      throws: []
+      operations:
+        - op: call
+          target: $getDb
+          args: []
+          assignTo: db
+        - op: branch
+          condition: body.categoryId && !(await categoryExists(body.categoryId))
+          then:
+            - op: return
+              value: "{ error: \"category\", categoryId: body.categoryId } as const"
+        - op: call
+          target: $randomUUID
+          args: []
+          assignTo: id
+        - op: call
+          target: $unknownCall
+          args: []
+          awaited: true
+        - op: return
+          value: "{ channel: res } as const"
+      effects:
+        - kind: database
+          target: db.query.categories.findFirst
+          operation: write_or_read
+        - kind: database
+          target: db.query.channels.findMany
+          operation: write_or_read
+        - kind: database
+          target: |-
+            db
+                .insert(channels)
+                .values({
+                  id,
+                  categoryId: body.categoryId ?? null,
+                  name: body.name,
+                  type: body.type,
+                  createdBy: body.createdBy,
+                  position: body.position,
+                })
+                .returning
+          operation: write_or_read
+    - name: deleteChannel
+      kind: function
+      async: true
+      generator: false
+      params:
+        - name: id
+          type: string
+          optional: false
+          rest: false
+      returns: any
+      throws: []
+      operations:
+        - op: call
+          target: $getDb
+          args: []
+          assignTo: db
+        - op: call
+          target: $getChannel
+          args:
+            - id
+          assignTo: existing
+          awaited: true
+        - op: branch
+          condition: "!existing"
+          then:
+            - op: return
+              value: "{ notFound: true } as const"
+        - op: branch
+          condition: existing.categoryId === null && existing.name.toLowerCase() === "general"
+          then:
+            - op: return
+              value: "{ conflictGeneral: true } as const"
+        - op: call
+          target: $unknownCall
+          args: []
+          assignTo: deleted
+          awaited: true
+        - op: branch
+          condition: deleted.length === 0
+          then:
+            - op: return
+              value: "{ notFound: true } as const"
+        - op: return
+          value: "{ deleted: true } as const"
+      effects:
+        - kind: database
+          target: db.query.categories.findFirst
+          operation: write_or_read
+        - kind: database
+          target: db.query.channels.findMany
+          operation: write_or_read
+        - kind: database
+          target: |-
+            db
+                .insert(channels)
+                .values({
+                  id,
+                  categoryId: body.categoryId ?? null,
+                  name: body.name,
+                  type: body.type,
+                  createdBy: body.createdBy,
+                  position: body.position,
+                })
+                .returning
+          operation: write_or_read
+        - kind: database
+          target: db.query.channels.findFirst
+          operation: write_or_read
+        - kind: construction
+          target: Date
+        - kind: database
+          target: |-
+            db
+                .update(channels)
+                .set(updateData)
+                .where(eq(channels.id, id))
+                .returning
+          operation: write_or_read
+        - kind: database
+          target: |-
+            db
+                .delete(channels)
+                .where(eq(channels.id, id))
+                .returning
+          operation: write_or_read
+    - name: getChannel
+      kind: function
+      async: true
+      generator: false
+      params:
+        - name: id
+          type: string
+          optional: false
+          rest: false
+      returns: any
+      throws: []
+      operations:
+        - op: call
+          target: $getDb
+          args: []
+          assignTo: db
+        - op: call
+          target: $db.query.channels.findFirst
+          args:
+            - |-
+              {
+                  where: eq(channels.id, id),
+                }
+        - op: return
+          value: |-
+            db.query.channels.findFirst({
+                where: eq(channels.id, id),
+              })
+      effects:
+        - kind: database
+          target: db.query.categories.findFirst
+          operation: write_or_read
+        - kind: database
+          target: db.query.channels.findMany
+          operation: write_or_read
+        - kind: database
+          target: |-
+            db
+                .insert(channels)
+                .values({
+                  id,
+                  categoryId: body.categoryId ?? null,
+                  name: body.name,
+                  type: body.type,
+                  createdBy: body.createdBy,
+                  position: body.position,
+                })
+                .returning
+          operation: write_or_read
+        - kind: database
+          target: db.query.channels.findFirst
+          operation: write_or_read
+    - name: listChannels
+      kind: function
+      async: true
+      generator: false
+      params: []
+      returns: any
+      throws: []
+      operations:
+        - op: call
+          target: $getDb
+          args: []
+          assignTo: db
+        - op: call
+          target: $db.query.channels.findMany
+          args:
+            - |-
+              {
+                  orderBy: (table, { asc }) => [asc(table.position)],
+                }
+        - op: return
+          value: |-
+            db.query.channels.findMany({
+                orderBy: (table, { asc }) => [asc(table.position)],
+              })
+      effects:
+        - kind: database
+          target: db.query.categories.findFirst
+          operation: write_or_read
+        - kind: database
+          target: db.query.channels.findMany
+          operation: write_or_read
+    - name: updateChannel
+      kind: function
+      async: true
+      generator: false
+      params:
+        - name: id
+          type: string
+          optional: false
+          rest: false
+        - name: body
+          type: UpdateChannelBody
+          optional: false
+          rest: false
+      returns: any
+      throws: []
+      operations:
+        - op: call
+          target: $getDb
+          args: []
+          assignTo: db
+        - op: call
+          target: $getChannel
+          args:
+            - id
+          assignTo: existing
+          awaited: true
+        - op: branch
+          condition: "!existing"
+          then:
+            - op: return
+              value: "{ notFound: true } as const"
+        - op: branch
+          condition: body.categoryId && !(await categoryExists(body.categoryId))
+          then:
+            - op: return
+              value: "{ error: \"category\", categoryId: body.categoryId } as const"
+        - op: opaque
+          reason: Variable initializer is not represented by the semantic operation grammar
+          sourceSpan:
+            start: 1705
+            length: 61
+        - op: branch
+          condition: body.categoryId !== undefined
+          then: []
+        - op: branch
+          condition: body.name !== undefined
+          then: []
+        - op: branch
+          condition: body.position !== undefined
+          then: []
+        - op: branch
+          condition: body.type !== undefined
+          then:
+            - op: call
+              target: $Date
+              args: []
+        - op: call
+          target: $unknownCall
+          args: []
+          awaited: true
+        - op: return
+          value: "{ channel: updated } as const"
+      effects:
+        - kind: database
+          target: db.query.categories.findFirst
+          operation: write_or_read
+        - kind: database
+          target: db.query.channels.findMany
+          operation: write_or_read
+        - kind: database
+          target: |-
+            db
+                .insert(channels)
+                .values({
+                  id,
+                  categoryId: body.categoryId ?? null,
+                  name: body.name,
+                  type: body.type,
+                  createdBy: body.createdBy,
+                  position: body.position,
+                })
+                .returning
+          operation: write_or_read
+        - kind: database
+          target: db.query.channels.findFirst
+          operation: write_or_read
+        - kind: construction
+          target: Date
+        - kind: database
+          target: |-
+            db
+                .update(channels)
+                .set(updateData)
+                .where(eq(channels.id, id))
+                .returning
+          operation: write_or_read
+  capabilities: [ async, await ]
+  effects:
+    - kind: construction
+      target: Date
+    - kind: database
+      target: |-
+        db
+            .delete(channels)
+            .where(eq(channels.id, id))
+            .returning
+      operation: write_or_read
+    - kind: database
+      target: |-
+        db
+            .insert(channels)
+            .values({
+              id,
+              categoryId: body.categoryId ?? null,
+              name: body.name,
+              type: body.type,
+              createdBy: body.createdBy,
+              position: body.position,
+            })
+            .returning
+      operation: write_or_read
+    - kind: database
+      target: |-
+        db
+            .update(channels)
+            .set(updateData)
+            .where(eq(channels.id, id))
+            .returning
+      operation: write_or_read
+    - kind: database
+      target: db.query.categories.findFirst
+      operation: write_or_read
+    - kind: database
+      target: db.query.channels.findFirst
+      operation: write_or_read
+    - kind: database
+      target: db.query.channels.findMany
+      operation: write_or_read
+  fidelity: partial
+  diagnostics:
+    - severity: warning
+      code: OPAQUE_OPERATION
+      path: source:1705
+      message: Variable initializer is not represented by the semantic operation grammar
+      sourceSpan:
+        start: 1705
+        length: 61
+  constraints:
+    style:
+      indent: 2
+      quotes: double
+      semicolons: true
+provenance:
+  sourceHash: 4f1706e17cdf48c90a3231a7c669c7066e7ca4d4340c4e8a17a6b80e030e34e9
+  parser: typescript-compiler-api
+  parserVersion: 5.9.3

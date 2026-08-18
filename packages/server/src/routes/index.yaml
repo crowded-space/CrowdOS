@@ -1,0 +1,96 @@
+# ACAD Twin-YAML
+# Version: 1.1.0
+# Source: packages/server/src/routes/index
+
+block:
+  id: "881a4b6a-4ddd-48c5-bebc-1b3238f97858"
+  label: "Index"
+  position: { x: 1120, y: 520 }
+  size: { width: 240, height: 200 }
+  color: "#8e44ad"
+  collapsed: false
+  ports:
+    imports:
+      - FastifyInstance
+      - agentRoutes
+      - healthRoutes
+      - moduleRoutes
+      - providerRoutes
+      - workspaceRoutes
+      - categoryRoutes
+      - channelRoutes
+      - messageRoutes
+      - vfsRoutes
+    exports:
+      - registerRoutes
+
+spec:
+  version: "1.1.0"
+  file:
+    path: packages/server/src/routes/index
+    language: typescript
+  imports:
+    - from: "fastify"
+      symbols:
+        - FastifyInstance
+    - from: "./agents"
+      symbols:
+        - agentRoutes
+    - from: "./health"
+      symbols:
+        - healthRoutes
+    - from: "./modules"
+      symbols:
+        - moduleRoutes
+    - from: "./providers"
+      symbols:
+        - providerRoutes
+    - from: "./workspace"
+      symbols:
+        - workspaceRoutes
+    - from: "./categories"
+      symbols:
+        - categoryRoutes
+    - from: "./channels"
+      symbols:
+        - channelRoutes
+    - from: "./messages"
+      symbols:
+        - messageRoutes
+    - from: "./vfs"
+      symbols:
+        - vfsRoutes
+  types: []
+  exports:
+    - name: registerRoutes
+      kind: function
+      async: true
+      params:
+        - name: app
+          type: FastifyInstance
+      returns: void
+      doc: "Exported function registerRoutes."
+      intent:
+        - action: call
+          value: "app.register"
+        - action: call
+          value: "app.register"
+        - action: call
+          value: "app.register"
+        - action: call
+          value: "app.register"
+        - action: call
+          value: "app.register"
+        - action: call
+          value: "app.register"
+        - action: call
+          value: "app.register"
+        - action: call
+          value: "app.register"
+        - action: call
+          value: "app.register"
+  constraints:
+    style:
+      indent: 2
+      quotes: double
+      semicolons: true

@@ -1,0 +1,72 @@
+# ACAD Twin-YAML
+# Version: 1.1.0
+# Source: packages/server/src/runtime/providers/OllamaAdapter
+
+block:
+  id: "8872fe1c-499c-46f5-9f66-827da1cde615"
+  label: "OllamaAdapter"
+  position: { x: 2520, y: 780 }
+  size: { width: 240, height: 200 }
+  color: "#d35400"
+  collapsed: false
+  ports:
+    imports:
+      - IProviderAdapter
+      - ModelModuleConfig
+      - LLMRequest
+      - LLMResponse
+    exports:
+      - "OllamaAdapter.call"
+
+spec:
+  version: "1.1.0"
+  file:
+    path: packages/server/src/runtime/providers/OllamaAdapter
+    language: typescript
+  imports:
+    - from: "../types"
+      symbols:
+        - IProviderAdapter
+        - ModelModuleConfig
+        - LLMRequest
+        - LLMResponse
+  types: []
+  exports:
+    - name: OllamaAdapter.call
+      kind: function
+      async: true
+      params:
+        - name: config
+          type: ModelModuleConfig
+        - name: request
+          type: LLMRequest
+        - name: onChunk
+          type: "(chunk: { content: string; thoughts?: string; isThoughts?: boolean }) => void"
+      returns: "Promise<LLMResponse>"
+      doc: "Method OllamaAdapter.call"
+      intent:
+        - action: if
+          condition: "endpointUrl.endsWith('/')"
+        - action: call
+          value: "endpointUrl.endsWith"
+        - action: call
+          value: "endpointUrl.slice"
+        - action: if
+          condition: "request.systemPrompt"
+        - action: call
+          value: "messages.push"
+        - action: if
+          condition: "request.history"
+        - action: if
+          condition: "msg.role === 'user' || msg.role === 'assistant'"
+        - action: call
+          value: "messages.push"
+        - action: call
+          value: "messages.push"
+        - action: if
+          condition: "apiKey"
+  constraints:
+    style:
+      indent: 2
+      quotes: single
+      semicolons: false

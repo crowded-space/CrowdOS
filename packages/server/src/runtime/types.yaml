@@ -1,0 +1,337 @@
+# ACAD Twin-YAML
+# Version: 1.1.0
+# Source: packages/server/src/runtime/types
+
+block:
+  id: "8bc26dec-fb44-47bd-91d5-773d8d9ce095"
+  label: "Types"
+  position: { x: 5040, y: 780 }
+  size: { width: 240, height: 200 }
+  color: "#d35400"
+  collapsed: false
+  ports:
+    imports:
+      - TokenUsage
+      - EventBroker
+    exports:
+      - TypesModule
+
+spec:
+  version: "1.1.0"
+  file:
+    path: packages/server/src/runtime/types
+    language: typescript
+  imports:
+    - from: "../types/tool.types"
+      symbols:
+        - TokenUsage
+    - from: "../EventBroker/eventBrokerGate"
+      symbols:
+        - EventBroker
+  types:
+    - name: HistoryMessage
+      kind: struct
+      fields:
+        - name: role
+          type: "'user' | 'assistant' | 'system'"
+          required: true
+        - name: content
+          type: string
+          required: true
+        - name: authorName
+          type: string
+          required: false
+        - name: isInternalMonologue
+          type: boolean
+          required: false
+        - name: timestamp
+          type: Date
+          required: true
+    - name: RuntimePolicy
+      kind: struct
+      fields:
+        - name: maxTokenBudget
+          type: number
+          required: true
+        - name: maxIterations
+          type: number
+          required: true
+        - name: allowToolCalls
+          type: boolean
+          required: true
+        - name: allowSpawn
+          type: boolean
+          required: true
+        - name: allowDelegation
+          type: boolean
+          required: true
+        - name: loopDetection
+          type: boolean
+          required: true
+        - name: streamOutput
+          type: boolean
+          required: true
+    - name: ExecutionMetadata
+      kind: struct
+      fields:
+        - name: runtimeType
+          type: RuntimeType
+          required: true
+        - name: provider
+          type: string
+          required: true
+        - name: modelName
+          type: string
+          required: true
+        - name: modelModuleId
+          type: string
+          required: true
+        - name: startedAt
+          type: Date
+          required: true
+    - name: ContextPacket
+      kind: struct
+      fields:
+        - name: requestId
+          type: string
+          required: true
+        - name: agentId
+          type: string
+          required: true
+        - name: agentName
+          type: string
+          required: true
+        - name: authorityLevel
+          type: number
+          required: true
+        - name: channelId
+          type: string
+          required: true
+        - name: workspaceId
+          type: string
+          required: true
+        - name: userInput
+          type: string
+          required: true
+        - name: systemPrompt
+          type: string
+          required: true
+        - name: history
+          type: "HistoryMessage[]"
+          required: true
+        - name: memoryPreviewBlock
+          type: string
+          required: false
+        - name: policies
+          type: RuntimePolicy
+          required: true
+        - name: metadata
+          type: ExecutionMetadata
+          required: true
+    - name: RuntimeResult
+      kind: struct
+      fields:
+        - name: requestId
+          type: string
+          required: true
+        - name: agentId
+          type: string
+          required: true
+        - name: channelId
+          type: string
+          required: true
+        - name: finalResponse
+          type: string
+          required: true
+        - name: internalMonologue
+          type: string
+          required: false
+        - name: toolCalls
+          type: "ToolCallRecord[]"
+          required: false
+        - name: memoryCandidates
+          type: "MemoryCandidate[]"
+          required: false
+        - name: runtimeEvents
+          type: "RuntimeEvent[]"
+          required: true
+        - name: usage
+          type: TokenUsage
+          required: true
+        - name: status
+          type: "'completed' | 'failed' | 'loop_detected' | 'budget_exceeded'"
+          required: true
+    - name: ToolCallRecord
+      kind: struct
+      fields:
+        - name: toolName
+          type: string
+          required: true
+        - name: input
+          type: "Record<string, unknown>"
+          required: true
+        - name: output
+          type: string
+          required: true
+        - name: success
+          type: boolean
+          required: true
+        - name: durationMs
+          type: number
+          required: true
+    - name: MemoryCandidate
+      kind: struct
+      fields:
+        - name: content
+          type: string
+          required: true
+        - name: relevanceScore
+          type: number
+          required: true
+        - name: shouldPersist
+          type: boolean
+          required: true
+    - name: RuntimeEvent
+      kind: struct
+      fields:
+        - name: type
+          type: RuntimeEventType
+          required: true
+        - name: payload
+          type: "Record<string, unknown>"
+          required: true
+        - name: timestamp
+          type: Date
+          required: true
+    - name: RuntimeEventType
+      kind: struct
+      fields:
+        - name: value
+          type: any
+          required: true
+    - name: LLMRequest
+      kind: struct
+      fields:
+        - name: systemPrompt
+          type: string
+          required: true
+        - name: userPrompt
+          type: string
+          required: true
+        - name: history
+          type: "HistoryMessage[]"
+          required: false
+        - name: temperature
+          type: number
+          required: false
+        - name: maxTokens
+          type: number
+          required: false
+        - name: tools
+          type: "LLMToolDefinition[]"
+          required: false
+    - name: LLMResponse
+      kind: struct
+      fields:
+        - name: content
+          type: string
+          required: true
+        - name: thoughts
+          type: string
+          required: false
+        - name: toolCalls
+          type: "RawToolCall[]"
+          required: false
+        - name: usage
+          type: TokenUsage
+          required: true
+        - name: finishReason
+          type: "'stop' | 'tool_use' | 'max_tokens' | 'error'"
+          required: true
+    - name: RawToolCall
+      kind: struct
+      fields:
+        - name: id
+          type: string
+          required: true
+        - name: name
+          type: string
+          required: true
+        - name: input
+          type: "Record<string, unknown>"
+          required: true
+    - name: LLMToolDefinition
+      kind: struct
+      fields:
+        - name: name
+          type: string
+          required: true
+        - name: description
+          type: string
+          required: true
+        - name: inputSchema
+          type: "Record<string, unknown>"
+          required: true
+    - name: ModelModuleConfig
+      kind: struct
+      fields:
+        - name: provider
+          type: string
+          required: true
+        - name: modelName
+          type: string
+          required: true
+        - name: apiKey
+          type: string
+          required: false
+        - name: endpointUrl
+          type: string
+          required: false
+        - name: temperature
+          type: number
+          required: false
+        - name: maxOutputTokens
+          type: number
+          required: false
+        - name: topP
+          type: number
+          required: false
+    - name: RuntimeType
+      kind: struct
+      fields:
+        - name: value
+          type: any
+          required: true
+    - name: IRuntime
+      kind: struct
+      fields:
+        - name: type
+          type: RuntimeType
+          required: true
+    - name: IProviderAdapter
+      kind: struct
+      fields:
+        - name: provider
+          type: string
+          required: true
+        - name: supportsStreaming
+          type: boolean
+          required: true
+        - name: supportsTools
+          type: boolean
+          required: true
+  exports:
+    - name: TypesModule
+      kind: function
+      async: false
+      params: []
+      returns: void
+      doc: "Module definition for packages/server/src/runtime/types.ts"
+      intent:
+        - action: return
+          value: "void"
+  constraints:
+    style:
+      indent: 2
+      quotes: single
+      semicolons: false

@@ -1,0 +1,1306 @@
+# ACAD Twin-YAML
+# Version: 2.0.0
+# Source: packages/server/src/Agents/agentSpawnManager
+
+block:
+  id: 337f0c49-c627-5d1d-91d7-c32b87526d79
+  label: AgentSpawnManager
+  position: { x: 0, y: 0 }
+  size: { width: 280, height: 220 }
+  color: "#4A90D9"
+  collapsed: false
+  ports: { imports: [ agents, categories, channels, messages, runtimeStates, spawnRequests, taskFiles, getDb, getNextSequenceNumber, and, eq, randomUUID, fs, path ], exports: [ AgentSpawnManager ] }
+spec:
+  version: 2.0.0
+  file:
+    path: packages/server/src/Agents/agentSpawnManager
+    language: typescript
+  target:
+    language: typescript
+    moduleSystem: esmodule
+    compiler: typescript
+  imports:
+    - module: ../db/schema.js
+      imported: agents
+      local: agents
+      kind: value
+    - module: ../db/schema.js
+      imported: categories
+      local: categories
+      kind: value
+    - module: ../db/schema.js
+      imported: channels
+      local: channels
+      kind: value
+    - module: ../db/schema.js
+      imported: messages
+      local: messages
+      kind: value
+    - module: ../db/schema.js
+      imported: runtimeStates
+      local: runtimeStates
+      kind: value
+    - module: ../db/schema.js
+      imported: spawnRequests
+      local: spawnRequests
+      kind: value
+    - module: ../db/schema.js
+      imported: taskFiles
+      local: taskFiles
+      kind: value
+    - module: ../EventBroker/eventBrokerGate.js
+      imported: EventBroker
+      local: EventBroker
+      kind: type
+    - module: ../Messages/messageGate.js
+      imported: ChannelMessage
+      local: ChannelMessage
+      kind: type
+    - module: ../Shared/config/database.js
+      imported: getDb
+      local: getDb
+      kind: value
+    - module: ../Shared/core/sequenceNumber.js
+      imported: getNextSequenceNumber
+      local: getNextSequenceNumber
+      kind: value
+    - module: ../types/task.types.js
+      imported: SpawnFailurePolicy
+      local: SpawnFailurePolicy
+      kind: type
+    - module: ../types/task.types.js
+      imported: SubtaskDefinition
+      local: SubtaskDefinition
+      kind: type
+    - module: ../types/task.types.js
+      imported: TaskPriority
+      local: TaskPriority
+      kind: type
+    - module: ./agentTypes.js
+      imported: AgentProfile
+      local: AgentProfile
+      kind: type
+    - module: drizzle-orm
+      imported: and
+      local: and
+      kind: value
+    - module: drizzle-orm
+      imported: eq
+      local: eq
+      kind: value
+    - module: node:crypto
+      imported: randomUUID
+      local: randomUUID
+      kind: value
+    - module: node:fs/promises
+      imported: default
+      local: fs
+      kind: default
+    - module: node:path
+      imported: default
+      local: path
+      kind: default
+  types:
+    - name: AggregationReport
+      kind: struct
+      fields:
+        - name: spawnRequestId
+          type: string
+          required: true
+        - name: status
+          type:
+            type: union
+            options:
+              - string
+              - string
+          required: true
+        - name: items
+          type:
+            type: array
+            items: AggregationReportItem
+          required: true
+        - name: timestamp
+          type: Date
+          required: true
+    - name: AggregationReportItem
+      kind: struct
+      fields:
+        - name: subtaskId
+          type: string
+          required: true
+        - name: title
+          type: string
+          required: true
+        - name: status
+          type:
+            type: union
+            options:
+              - string
+              - string
+              - string
+              - string
+          required: true
+        - name: workerOutput
+          type: string
+          required: true
+        - name: supervisorEvaluation
+          type: string
+          required: true
+        - name: retryCount
+          type: float
+          required: true
+        - name: verdict
+          type:
+            type: union
+            options:
+              - string
+              - string
+          required: true
+  exports:
+    - name: AgentSpawnManager
+      kind: class
+      methods:
+        - name: dispatchAgent
+          kind: method
+          async: true
+          generator: false
+          params:
+            - name: broker
+              type: EventBroker
+              optional: false
+              rest: false
+            - name: requestedByAgentId
+              type: string
+              optional: false
+              rest: false
+            - name: originChannelId
+              type: string
+              optional: false
+              rest: false
+            - name: params
+              type: Object
+              optional: false
+              rest: false
+          returns: AggregationReport
+          throws: []
+          operations:
+            - op: call
+              target: $getDb
+              args: []
+              assignTo: db
+            - op: opaque
+              reason: Variable initializer is not represented by the semantic operation grammar
+              sourceSpan:
+                start: 1693
+                length: 73
+            - op: call
+              target: $console.log
+              args:
+                - "`[AgentSpawnManager] Starting dispatch ${spawnRequestId} with ${params.subtasks.length} subtasks...`"
+            - op: call
+              target: $db.query.agents.findFirst
+              args:
+                - |-
+                  {
+                        where: eq(agents.id, params.workerTemplateId),
+                      }
+              awaited: true
+            - op: call
+              target: $this.ensureFallbackTemplate
+              args:
+                - params.workerTemplateId
+                - "\"worker\""
+              awaited: true
+            - op: call
+              target: $db.query.agents.findFirst
+              args:
+                - |-
+                  {
+                        where: eq(agents.id, params.supervisorTemplateId),
+                      }
+              awaited: true
+            - op: call
+              target: $this.ensureFallbackTemplate
+              args:
+                - params.supervisorTemplateId
+                - "\"supervisor\""
+              awaited: true
+            - op: call
+              target: $unknownCall
+              args:
+                - |-
+                  {
+                        id: spawnRequestId,
+                        requestedBy: requestedByAgentId,
+                        channelId: originChannelId,
+                        workerTemplateId: params.workerTemplateId,
+                        supervisorTemplateId: params.supervisorTemplateId,
+                        failurePolicy: params.failurePolicy,
+                        maxRetries: params.maxRetries,
+                        subtasks: params.subtasks,
+                        status: "in_progress",
+                        createdAt: new Date(),
+                      }
+              awaited: true
+            - op: call
+              target: $db.query.channels.findFirst
+              args:
+                - |-
+                  {
+                        where: eq(channels.id, originChannelId),
+                      }
+              assignTo: originCh
+              awaited: true
+            - op: opaque
+              reason: Variable initializer is not represented by the semantic operation grammar
+              sourceSpan:
+                start: 3065
+                length: 48
+            - op: opaque
+              reason: Variable initializer is not represented by the semantic operation grammar
+              sourceSpan:
+                start: 3119
+                length: 48
+            - op: opaque
+              reason: Variable initializer is not represented by the semantic operation grammar
+              sourceSpan:
+                start: 3262
+                length: 33
+            - op: loop
+              kind: for
+              condition: i < subtasks.length
+              body:
+                - op: call
+                  target: $subtasks.slice
+                  args:
+                    - i
+                    - i + batchSize
+                  assignTo: batch
+                - op: call
+                  target: $console.log
+                  args:
+                    - "`[AgentSpawnManager] Processing batch ${Math.floor(i / batchSize) + 1}...`"
+                - op: call
+                  target: $batch.map
+                  args:
+                    - |-
+                      async (subtask) => {
+                              return this.executeL3Pair(
+                                broker,
+                                spawnRequestId,
+                                subtask,
+                                workerTemplate,
+                                supervisorTemplate,
+                                categoryId,
+                                params.failurePolicy,
+                                params.maxRetries
+                              );
+                            }
+                  assignTo: batchPromises
+                - op: parallel
+                  mode: all
+                  body: []
+                - op: call
+                  target: $reportItems.push
+                  args:
+                    - ...batchResults
+            - op: call
+              target: $reportItems.every
+              args:
+                - (item) => item.status === "completed"
+            - op: call
+              target: $unknownCall
+              args:
+                - eq(spawnRequests.id, spawnRequestId)
+              awaited: true
+            - op: opaque
+              reason: Variable initializer is not represented by the semantic operation grammar
+              sourceSpan:
+                start: 4281
+                length: 153
+            - op: return
+              value: finalReport
+          effects:
+            - kind: log
+              target: console.log
+            - kind: database
+              target: db.query.agents.findFirst
+              operation: write_or_read
+            - kind: database
+              target: db.insert(spawnRequests).values
+              operation: write_or_read
+            - kind: database
+              target: db.query.channels.findFirst
+              operation: write_or_read
+            - kind: database
+              target: "db.update(spawnRequests).set({ status: overallStatus }).where"
+              operation: write_or_read
+        - name: ensureFallbackTemplate
+          kind: method
+          async: true
+          generator: false
+          params:
+            - name: id
+              type: string
+              optional: false
+              rest: false
+            - name: type
+              type:
+                type: union
+                options:
+                  - string
+                  - string
+              optional: false
+              rest: false
+          returns: any
+          throws: []
+          operations:
+            - op: call
+              target: $getDb
+              args: []
+              assignTo: db
+            - op: call
+              target: $db.query.agents.findFirst
+              args:
+                - "{ where: eq(agents.id, id) }"
+              assignTo: existing
+              awaited: true
+            - op: branch
+              condition: existing
+              then:
+                - op: return
+                  value: existing
+            - op: call
+              target: $db.query.modelModules.findFirst
+              args: []
+              assignTo: model
+              awaited: true
+            - op: call
+              target: $db.query.instructionModules.findFirst
+              args: []
+              assignTo: inst
+              awaited: true
+            - op: call
+              target: $db.query.toolkitModules.findFirst
+              args: []
+              assignTo: toolkit
+              awaited: true
+            - op: opaque
+              reason: Variable initializer is not represented by the semantic operation grammar
+              sourceSpan:
+                start: 5081
+                length: 642
+            - op: call
+              target: $unknownCall
+              args:
+                - fallbackAgent
+              awaited: true
+            - op: call
+              target: $console.log
+              args:
+                - "`[AgentSpawnManager] Auto-seeded fallback template: ${id} (${type})`"
+            - op: return
+              value: fallbackAgent
+          effects:
+            - kind: log
+              target: console.log
+            - kind: database
+              target: db.query.agents.findFirst
+              operation: write_or_read
+            - kind: database
+              target: db.insert(spawnRequests).values
+              operation: write_or_read
+            - kind: database
+              target: db.query.channels.findFirst
+              operation: write_or_read
+            - kind: database
+              target: "db.update(spawnRequests).set({ status: overallStatus }).where"
+              operation: write_or_read
+            - kind: database
+              target: db.query.modelModules.findFirst
+              operation: write_or_read
+            - kind: database
+              target: db.query.instructionModules.findFirst
+              operation: write_or_read
+            - kind: database
+              target: db.query.toolkitModules.findFirst
+              operation: write_or_read
+            - kind: database
+              target: db.insert(agents).values
+              operation: write_or_read
+        - name: executeL3Pair
+          kind: method
+          async: true
+          generator: false
+          params:
+            - name: broker
+              type: EventBroker
+              optional: false
+              rest: false
+            - name: spawnRequestId
+              type: string
+              optional: false
+              rest: false
+            - name: subtask
+              type: SubtaskDefinition
+              optional: false
+              rest: false
+            - name: workerTemplate
+              type: any
+              optional: false
+              rest: false
+            - name: supervisorTemplate
+              type: any
+              optional: false
+              rest: false
+            - name: categoryId
+              type:
+                type: union
+                options:
+                  - string
+                  - any
+              optional: false
+              rest: false
+            - name: failurePolicy
+              type: SpawnFailurePolicy
+              optional: false
+              rest: false
+            - name: maxRetries
+              type: float
+              optional: false
+              rest: false
+          returns: AggregationReportItem
+          throws: []
+          operations:
+            - op: call
+              target: $getDb
+              args: []
+              assignTo: db
+            - op: opaque
+              reason: Variable initializer is not represented by the semantic operation grammar
+              sourceSpan:
+                start: 6369
+                length: 60
+            - op: opaque
+              reason: Variable initializer is not represented by the semantic operation grammar
+              sourceSpan:
+                start: 6434
+                length: 45
+            - op: call
+              target: $unknownCall
+              args:
+                - |-
+                  {
+                        id: pairChannelId,
+                        categoryId,
+                        name: pairChannelName,
+                        type: "standard",
+                        createdBy: "system",
+                        position: 99,
+                        createdAt: new Date(),
+                      }
+              awaited: true
+            - op: call
+              target: $broker.emit
+              args:
+                - "\"workspace:sync\""
+                - "{}"
+                - "{ channelId: pairChannelId }"
+            - op: opaque
+              reason: Variable initializer is not represented by the semantic operation grammar
+              sourceSpan:
+                start: 6932
+                length: 74
+            - op: opaque
+              reason: Variable initializer is not represented by the semantic operation grammar
+              sourceSpan:
+                start: 7011
+                length: 68
+            - op: opaque
+              reason: Variable initializer is not represented by the semantic operation grammar
+              sourceSpan:
+                start: 7085
+                length: 99
+            - op: opaque
+              reason: Variable initializer is not represented by the semantic operation grammar
+              sourceSpan:
+                start: 7189
+                length: 104
+            - op: call
+              target: $unknownCall
+              args:
+                - |-
+                  {
+                        id: workerId,
+                        name: uniqueWorkerName,
+                        title: `${workerTemplate.title} Instance`,
+                        species: workerTemplate.species,
+                        authorityLevel: 3,
+                        l3Subtype: "worker",
+                        modelModuleId: workerTemplate.modelModuleId,
+                        instructionModuleId: workerTemplate.instructionModuleId,
+                        toolkitModuleId: workerTemplate.toolkitModuleId,
+                        memorySharingPolicy: "none",
+                        isOmniscient: false,
+                        status: "idle",
+                        isTemplate: false,
+                        permissions: { spawnAgents: false, patchRuntime: false, accessAllChannels: false },
+                        createdAt: new Date(),
+                        updatedAt: new Date(),
+                      }
+              awaited: true
+            - op: call
+              target: $unknownCall
+              args:
+                - |-
+                  {
+                        id: spvId,
+                        name: uniqueSpvName,
+                        title: `${supervisorTemplate.title} Instance`,
+                        species: supervisorTemplate.species,
+                        authorityLevel: 3,
+                        l3Subtype: "supervisor",
+                        modelModuleId: supervisorTemplate.modelModuleId,
+                        instructionModuleId: supervisorTemplate.instructionModuleId,
+                        toolkitModuleId: supervisorTemplate.toolkitModuleId,
+                        memorySharingPolicy: "none",
+                        isOmniscient: false,
+                        status: "idle",
+                        isTemplate: false,
+                        permissions: { spawnAgents: false, patchRuntime: false, accessAllChannels: false },
+                        createdAt: new Date(),
+                        updatedAt: new Date(),
+                      }
+              awaited: true
+            - op: call
+              target: $unknownCall
+              args:
+                - |-
+                  {
+                        sessionId: `sess-${workerId}`,
+                        agentId: workerId,
+                        status: "idle",
+                        activeChannelId: pairChannelId,
+                        createdAt: new Date(),
+                      }
+              awaited: true
+            - op: call
+              target: $unknownCall
+              args:
+                - |-
+                  {
+                        sessionId: `sess-${spvId}`,
+                        agentId: spvId,
+                        status: "idle",
+                        activeChannelId: pairChannelId,
+                        createdAt: new Date(),
+                      }
+              awaited: true
+            - op: call
+              target: $broker.emit
+              args:
+                - "\"agent:spawned\""
+                - |-
+                  {
+                        pairs: [workerId, spvId],
+                        channelId: pairChannelId,
+                        batchNum: Math.floor(Date.now() / 1000) % 100,
+                      }
+                - "{ channelId: pairChannelId }"
+            - op: opaque
+              reason: Variable initializer is not represented by the semantic operation grammar
+              sourceSpan:
+                start: 9374
+                length: 66
+            - op: call
+              target: $unknownCall
+              args:
+                - |-
+                  {
+                        id: taskFileId,
+                        spawnRequestId,
+                        subtaskId: subtask.id,
+                        title: subtask.title,
+                        content: subtask.instructions,
+                        workerAgentId: workerId,
+                        supervisorAgentId: spvId,
+                        status: "pending",
+                        createdAt: new Date(),
+                      }
+              awaited: true
+            - op: opaque
+              reason: Variable initializer is not represented by the semantic operation grammar
+              sourceSpan:
+                start: 9938
+                length: 224
+            - op: call
+              target: $getNextSequenceNumber
+              args:
+                - pairChannelId
+              assignTo: startSeq
+              awaited: true
+            - op: call
+              target: $unknownCall
+              args:
+                - |-
+                  {
+                        id: `msg-${Date.now()}-welcome-${subtask.id}`,
+                        channelId: pairChannelId,
+                        authorId: "system",
+                        authorName: "System Coordinator",
+                        authorLevel: "stakeholder",
+                        authorType: "system",
+                        content: welcomeMsgContent,
+                        mentions: [],
+                        isInternalMonologue: false,
+                        sequenceNumber: startSeq,
+                        timestamp: new Date(),
+                      }
+              awaited: true
+            - op: call
+              target: $broker.emit
+              args:
+                - "\"message:new\""
+                - |-
+                  {
+                        id: `msg-${Date.now()}-welcome-${subtask.id}`,
+                        channelId: pairChannelId,
+                        authorId: "system",
+                        authorName: "System Coordinator",
+                        authorLevel: "stakeholder",
+                        authorType: "system" as const,
+                        content: welcomeMsgContent,
+                        mentions: [],
+                        isInternalMonologue: false,
+                        sequenceNumber: startSeq,
+                        timestamp: new Date(),
+                      }
+                - "{ channelId: pairChannelId }"
+            - op: loop
+              kind: while
+              condition: retryCount <= maxRetries
+              body:
+                - op: branch
+                  condition: retryCount > 0
+                  then:
+                    - op: opaque
+                      reason: Variable initializer is not represented by the semantic operation grammar
+                      sourceSpan:
+                        start: 11221
+                        length: 129
+                    - op: call
+                      target: $getNextSequenceNumber
+                      args:
+                        - pairChannelId
+                      assignTo: retrySeq
+                      awaited: true
+                    - op: call
+                      target: $unknownCall
+                      args:
+                        - |-
+                          {
+                                    id: `msg-${Date.now()}-retry-${retryCount}-${subtask.id}`,
+                                    channelId: pairChannelId,
+                                    authorId: "system",
+                                    authorName: "System Coordinator",
+                                    authorLevel: "stakeholder",
+                                    authorType: "system",
+                                    content: retryMsgContent,
+                                    mentions: [],
+                                    isInternalMonologue: false,
+                                    sequenceNumber: retrySeq,
+                                    timestamp: new Date(),
+                                  }
+                      awaited: true
+                    - op: call
+                      target: $broker.emit
+                      args:
+                        - "\"message:new\""
+                        - |-
+                          {
+                                    id: `msg-${Date.now()}-retry-${retryCount}-${subtask.id}`,
+                                    channelId: pairChannelId,
+                                    authorId: "system",
+                                    authorName: "System Coordinator",
+                                    authorLevel: "stakeholder",
+                                    authorType: "system" as const,
+                                    content: retryMsgContent,
+                                    mentions: [],
+                                    isInternalMonologue: false,
+                                    sequenceNumber: retrySeq,
+                                    timestamp: new Date(),
+                                  }
+                        - "{ channelId: pairChannelId }"
+                - op: call
+                  target: $unknownCall
+                  args:
+                    - eq(taskFiles.id, taskFileId)
+                  awaited: true
+                - op: call
+                  target: $unknownCall
+                  args:
+                    - eq(agents.id, workerId)
+                  awaited: true
+                - op: call
+                  target: $broker.emit
+                  args:
+                    - "\"agent:status\""
+                    - "{ agentId: workerId, status: \"working\" }"
+                - op: call
+                  target: $broker.emit
+                  args:
+                    - "\"agent:thinking\""
+                    - "{ agentId: workerId, channelId: pairChannelId }"
+                    - "{ channelId: pairChannelId }"
+                - op: call
+                  target: $Promise
+                  args:
+                    - (resolve) => setTimeout(resolve, 800)
+                  awaited: true
+                - op: opaque
+                  reason: Variable initializer is not represented by the semantic operation grammar
+                  sourceSpan:
+                    start: 12954
+                    length: 304
+                - op: try
+                  body:
+                    - op: opaque
+                      reason: Variable initializer is not represented by the semantic operation grammar
+                      sourceSpan:
+                        start: 13482
+                        length: 57
+                    - op: call
+                      target: $path.resolve
+                      args:
+                        - WORKSPACE_DIR
+                        - relativeFilePath
+                      assignTo: absolutePath
+                    - op: call
+                      target: $fs.writeFile
+                      args:
+                        - absolutePath
+                        - generatedCode
+                        - "\"utf8\""
+                      awaited: true
+                    - op: call
+                      target: $console.log
+                      args:
+                        - "`[AgentSpawnManager] Wrote worker task output to ${relativeFilePath}`"
+                  catches:
+                    - error: fErr
+                      body:
+                        - op: call
+                          target: $console.error
+                          args:
+                            - "\"[AgentSpawnManager] Failed to write task output file:\""
+                            - fErr
+                - op: call
+                  target: $broker.emit
+                  args:
+                    - "\"message:stream\""
+                    - "{ channelId: pairChannelId, agentId: workerId, chunk: workerOutput }"
+                    - "{ channelId: pairChannelId }"
+                - op: call
+                  target: $getNextSequenceNumber
+                  args:
+                    - pairChannelId
+                  assignTo: wSeq
+                  awaited: true
+                - op: opaque
+                  reason: Variable initializer is not represented by the semantic operation grammar
+                  sourceSpan:
+                    start: 14130
+                    length: 419
+                - op: call
+                  target: $unknownCall
+                  args:
+                    - |-
+                      {
+                              ...workerMsg,
+                              authorLevel: String(workerMsg.authorLevel),
+                            }
+                  awaited: true
+                - op: call
+                  target: $broker.emit
+                  args:
+                    - "\"message:new\""
+                    - workerMsg
+                    - "{ channelId: pairChannelId }"
+                - op: call
+                  target: $unknownCall
+                  args:
+                    - eq(agents.id, workerId)
+                  awaited: true
+                - op: call
+                  target: $broker.emit
+                  args:
+                    - "\"agent:status\""
+                    - "{ agentId: workerId, status: \"idle\" }"
+                - op: call
+                  target: $unknownCall
+                  args:
+                    - eq(agents.id, spvId)
+                  awaited: true
+                - op: call
+                  target: $broker.emit
+                  args:
+                    - "\"agent:status\""
+                    - "{ agentId: spvId, status: \"working\" }"
+                - op: call
+                  target: $broker.emit
+                  args:
+                    - "\"agent:thinking\""
+                    - "{ agentId: spvId, channelId: pairChannelId }"
+                    - "{ channelId: pairChannelId }"
+                - op: call
+                  target: $Promise
+                  args:
+                    - (resolve) => setTimeout(resolve, 800)
+                  awaited: true
+                - op: call
+                  target: $unknownCall
+                  args:
+                    - "\"fail\""
+                - op: call
+                  target: $unknownCall
+                  args:
+                    - "\"error\""
+                - op: branch
+                  condition: shouldFail
+                  then: []
+                  else: []
+                - op: call
+                  target: $broker.emit
+                  args:
+                    - "\"message:stream\""
+                    - "{ channelId: pairChannelId, agentId: spvId, chunk: supervisorEvaluation }"
+                    - "{ channelId: pairChannelId }"
+                - op: call
+                  target: $getNextSequenceNumber
+                  args:
+                    - pairChannelId
+                  assignTo: sSeq
+                  awaited: true
+                - op: opaque
+                  reason: Variable initializer is not represented by the semantic operation grammar
+                  sourceSpan:
+                    start: 16429
+                    length: 415
+                - op: call
+                  target: $unknownCall
+                  args:
+                    - |-
+                      {
+                              ...spvMsg,
+                              authorLevel: String(spvMsg.authorLevel),
+                            }
+                  awaited: true
+                - op: call
+                  target: $broker.emit
+                  args:
+                    - "\"message:new\""
+                    - spvMsg
+                    - "{ channelId: pairChannelId }"
+                - op: call
+                  target: $unknownCall
+                  args:
+                    - eq(agents.id, spvId)
+                  awaited: true
+                - op: call
+                  target: $broker.emit
+                  args:
+                    - "\"agent:status\""
+                    - "{ agentId: spvId, status: \"idle\" }"
+                - op: branch
+                  condition: finalVerdict === "success"
+                  then:
+                    - op: opaque
+                      reason: Control-flow construct is not yet represented
+                      sourceSpan:
+                        start: 17241
+                        length: 6
+                - op: branch
+                  condition: failurePolicy === "escalate"
+                  then:
+                    - op: call
+                      target: $console.log
+                      args:
+                        - "`[AgentSpawnManager] Failure policy is escalate. Terminating retry loop for ${subtask.id}.`"
+                    - op: opaque
+                      reason: Control-flow construct is not yet represented
+                      sourceSpan:
+                        start: 17421
+                        length: 6
+            - op: opaque
+              reason: Variable initializer is not represented by the semantic operation grammar
+              sourceSpan:
+                start: 17468
+                length: 74
+            - op: call
+              target: $broker.emit
+              args:
+                - "\"agent:despawned\""
+                - "{ agentId: workerId }"
+                - "{ channelId: pairChannelId }"
+            - op: call
+              target: $broker.emit
+              args:
+                - "\"agent:despawned\""
+                - "{ agentId: spvId }"
+                - "{ channelId: pairChannelId }"
+            - op: call
+              target: $console.log
+              args:
+                - "`[AgentSpawnManager] Initiating cleanup for pair ${subtask.id}...`"
+            - op: call
+              target: $Promise
+              args:
+                - (resolve) => setTimeout(resolve, 1000)
+              awaited: true
+            - op: call
+              target: $unknownCall
+              args:
+                - eq(runtimeStates.agentId, workerId)
+              awaited: true
+            - op: call
+              target: $unknownCall
+              args:
+                - eq(runtimeStates.agentId, spvId)
+              awaited: true
+            - op: call
+              target: $unknownCall
+              args:
+                - eq(taskFiles.id, taskFileId)
+              awaited: true
+            - op: call
+              target: $unknownCall
+              args:
+                - eq(agents.id, workerId)
+              awaited: true
+            - op: call
+              target: $unknownCall
+              args:
+                - eq(agents.id, spvId)
+              awaited: true
+            - op: call
+              target: $unknownCall
+              args:
+                - eq(channels.id, pairChannelId)
+              awaited: true
+            - op: call
+              target: $broker.emit
+              args:
+                - "\"workspace:sync\""
+                - "{}"
+                - "{ channelId: pairChannelId }"
+            - op: return
+              value: |-
+                {
+                      subtaskId: subtask.id,
+                      title: subtask.title,
+                      status: subtaskStatus,
+                      workerOutput,
+                      supervisorEvaluation,
+                      retryCount,
+                      verdict: finalVerdict,
+                    }
+          effects:
+            - kind: log
+              target: console.log
+            - kind: database
+              target: db.query.agents.findFirst
+              operation: write_or_read
+            - kind: database
+              target: db.insert(spawnRequests).values
+              operation: write_or_read
+            - kind: database
+              target: db.query.channels.findFirst
+              operation: write_or_read
+            - kind: database
+              target: "db.update(spawnRequests).set({ status: overallStatus }).where"
+              operation: write_or_read
+            - kind: database
+              target: db.query.modelModules.findFirst
+              operation: write_or_read
+            - kind: database
+              target: db.query.instructionModules.findFirst
+              operation: write_or_read
+            - kind: database
+              target: db.query.toolkitModules.findFirst
+              operation: write_or_read
+            - kind: database
+              target: db.insert(agents).values
+              operation: write_or_read
+            - kind: database
+              target: db.insert(channels).values
+              operation: write_or_read
+            - kind: event
+              target: broker.emit
+              operation: emit
+            - kind: database
+              target: db.insert(runtimeStates).values
+              operation: write_or_read
+            - kind: database
+              target: db.insert(taskFiles).values
+              operation: write_or_read
+            - kind: database
+              target: db.insert(messages).values
+              operation: write_or_read
+            - kind: database
+              target: "db.update(taskFiles).set({ status: \"in_progress\" }).where"
+              operation: write_or_read
+            - kind: database
+              target: "db.update(agents).set({ status: \"working\" }).where"
+              operation: write_or_read
+            - kind: construction
+              target: Promise
+            - kind: log
+              target: console.error
+            - kind: database
+              target: "db.update(agents).set({ status: \"idle\" }).where"
+              operation: write_or_read
+            - kind: database
+              target: db.delete(runtimeStates).where
+              operation: write_or_read
+            - kind: database
+              target: db.delete(taskFiles).where
+              operation: write_or_read
+            - kind: database
+              target: db.delete(agents).where
+              operation: write_or_read
+            - kind: database
+              target: db.delete(channels).where
+              operation: write_or_read
+  capabilities: [ async, await, cleanup, iteration, parallel ]
+  effects:
+    - kind: construction
+      target: Promise
+    - kind: database
+      target: db.delete(agents).where
+      operation: write_or_read
+    - kind: database
+      target: db.delete(channels).where
+      operation: write_or_read
+    - kind: database
+      target: db.delete(runtimeStates).where
+      operation: write_or_read
+    - kind: database
+      target: db.delete(taskFiles).where
+      operation: write_or_read
+    - kind: database
+      target: db.insert(agents).values
+      operation: write_or_read
+    - kind: database
+      target: db.insert(channels).values
+      operation: write_or_read
+    - kind: database
+      target: db.insert(messages).values
+      operation: write_or_read
+    - kind: database
+      target: db.insert(runtimeStates).values
+      operation: write_or_read
+    - kind: database
+      target: db.insert(spawnRequests).values
+      operation: write_or_read
+    - kind: database
+      target: db.insert(taskFiles).values
+      operation: write_or_read
+    - kind: database
+      target: db.query.agents.findFirst
+      operation: write_or_read
+    - kind: database
+      target: db.query.channels.findFirst
+      operation: write_or_read
+    - kind: database
+      target: db.query.instructionModules.findFirst
+      operation: write_or_read
+    - kind: database
+      target: db.query.modelModules.findFirst
+      operation: write_or_read
+    - kind: database
+      target: db.query.toolkitModules.findFirst
+      operation: write_or_read
+    - kind: database
+      target: "db.update(agents).set({ status: \"idle\" }).where"
+      operation: write_or_read
+    - kind: database
+      target: "db.update(agents).set({ status: \"working\" }).where"
+      operation: write_or_read
+    - kind: database
+      target: "db.update(spawnRequests).set({ status: overallStatus }).where"
+      operation: write_or_read
+    - kind: database
+      target: "db.update(taskFiles).set({ status: \"in_progress\" }).where"
+      operation: write_or_read
+    - kind: event
+      target: broker.emit
+      operation: emit
+    - kind: log
+      target: console.error
+    - kind: log
+      target: console.log
+  fidelity: partial
+  diagnostics:
+    - severity: warning
+      code: OPAQUE_OPERATION
+      path: source:11221
+      message: Variable initializer is not represented by the semantic operation grammar
+      sourceSpan:
+        start: 11221
+        length: 129
+    - severity: warning
+      code: OPAQUE_OPERATION
+      path: source:12954
+      message: Variable initializer is not represented by the semantic operation grammar
+      sourceSpan:
+        start: 12954
+        length: 304
+    - severity: warning
+      code: OPAQUE_OPERATION
+      path: source:13482
+      message: Variable initializer is not represented by the semantic operation grammar
+      sourceSpan:
+        start: 13482
+        length: 57
+    - severity: warning
+      code: OPAQUE_OPERATION
+      path: source:14130
+      message: Variable initializer is not represented by the semantic operation grammar
+      sourceSpan:
+        start: 14130
+        length: 419
+    - severity: warning
+      code: OPAQUE_OPERATION
+      path: source:16429
+      message: Variable initializer is not represented by the semantic operation grammar
+      sourceSpan:
+        start: 16429
+        length: 415
+    - severity: warning
+      code: OPAQUE_OPERATION
+      path: source:1693
+      message: Variable initializer is not represented by the semantic operation grammar
+      sourceSpan:
+        start: 1693
+        length: 73
+    - severity: warning
+      code: OPAQUE_OPERATION
+      path: source:17241
+      message: Control-flow construct is not yet represented
+      sourceSpan:
+        start: 17241
+        length: 6
+    - severity: warning
+      code: OPAQUE_OPERATION
+      path: source:17421
+      message: Control-flow construct is not yet represented
+      sourceSpan:
+        start: 17421
+        length: 6
+    - severity: warning
+      code: OPAQUE_OPERATION
+      path: source:17468
+      message: Variable initializer is not represented by the semantic operation grammar
+      sourceSpan:
+        start: 17468
+        length: 74
+    - severity: warning
+      code: OPAQUE_OPERATION
+      path: source:3065
+      message: Variable initializer is not represented by the semantic operation grammar
+      sourceSpan:
+        start: 3065
+        length: 48
+    - severity: warning
+      code: OPAQUE_OPERATION
+      path: source:3119
+      message: Variable initializer is not represented by the semantic operation grammar
+      sourceSpan:
+        start: 3119
+        length: 48
+    - severity: warning
+      code: OPAQUE_OPERATION
+      path: source:3262
+      message: Variable initializer is not represented by the semantic operation grammar
+      sourceSpan:
+        start: 3262
+        length: 33
+    - severity: warning
+      code: OPAQUE_OPERATION
+      path: source:4281
+      message: Variable initializer is not represented by the semantic operation grammar
+      sourceSpan:
+        start: 4281
+        length: 153
+    - severity: warning
+      code: OPAQUE_OPERATION
+      path: source:5081
+      message: Variable initializer is not represented by the semantic operation grammar
+      sourceSpan:
+        start: 5081
+        length: 642
+    - severity: warning
+      code: OPAQUE_OPERATION
+      path: source:6369
+      message: Variable initializer is not represented by the semantic operation grammar
+      sourceSpan:
+        start: 6369
+        length: 60
+    - severity: warning
+      code: OPAQUE_OPERATION
+      path: source:6434
+      message: Variable initializer is not represented by the semantic operation grammar
+      sourceSpan:
+        start: 6434
+        length: 45
+    - severity: warning
+      code: OPAQUE_OPERATION
+      path: source:6932
+      message: Variable initializer is not represented by the semantic operation grammar
+      sourceSpan:
+        start: 6932
+        length: 74
+    - severity: warning
+      code: OPAQUE_OPERATION
+      path: source:7011
+      message: Variable initializer is not represented by the semantic operation grammar
+      sourceSpan:
+        start: 7011
+        length: 68
+    - severity: warning
+      code: OPAQUE_OPERATION
+      path: source:7085
+      message: Variable initializer is not represented by the semantic operation grammar
+      sourceSpan:
+        start: 7085
+        length: 99
+    - severity: warning
+      code: OPAQUE_OPERATION
+      path: source:7189
+      message: Variable initializer is not represented by the semantic operation grammar
+      sourceSpan:
+        start: 7189
+        length: 104
+    - severity: warning
+      code: OPAQUE_OPERATION
+      path: source:9374
+      message: Variable initializer is not represented by the semantic operation grammar
+      sourceSpan:
+        start: 9374
+        length: 66
+    - severity: warning
+      code: OPAQUE_OPERATION
+      path: source:9938
+      message: Variable initializer is not represented by the semantic operation grammar
+      sourceSpan:
+        start: 9938
+        length: 224
+  constraints:
+    style:
+      indent: 2
+      quotes: double
+      semicolons: true
+provenance:
+  sourceHash: f73ea0b968d74288b62a4ed90a1cf5755625c796ac354b30d7aad5a38fb627f6
+  parser: typescript-compiler-api
+  parserVersion: 5.9.3

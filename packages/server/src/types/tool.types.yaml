@@ -1,0 +1,102 @@
+# ACAD Twin-YAML
+# Version: 1.1.0
+# Source: packages/server/src/types/tool.types
+
+block:
+  id: "91b57e00-62b9-48fd-ab5d-d613cf46f798"
+  label: "ToolTypes"
+  position: { x: 4480, y: 1300 }
+  size: { width: 240, height: 200 }
+  color: "#16a085"
+  collapsed: false
+  ports:
+    imports:
+      - ProviderEngine
+    exports:
+      - ToolTypesModule
+
+spec:
+  version: "1.1.0"
+  file:
+    path: packages/server/src/types/tool.types
+    language: typescript
+  imports:
+    - from: "./provider.types"
+      symbols:
+        - ProviderEngine
+  types:
+    - name: ToolDangerLevel
+      kind: struct
+      fields:
+        - name: value
+          type: any
+          required: true
+    - name: ToolDefinition
+      kind: struct
+      fields:
+        - name: id
+          type: string
+          required: true
+        - name: name
+          type: string
+          required: true
+        - name: description
+          type: string
+          required: true
+        - name: handlerId
+          type: string
+          required: true
+        - name: jsonSchema
+          type: "Record<string, unknown>"
+          required: true
+        - name: dangerLevel
+          type: ToolDangerLevel
+          required: true
+        - name: authLevelRequired
+          type: "0 | 1 | 2 | 3"
+          required: true
+    - name: ToolCall
+      kind: struct
+      fields:
+        - name: id
+          type: string
+          required: true
+        - name: toolId
+          type: string
+          required: true
+        - name: name
+          type: string
+          required: true
+        - name: arguments
+          type: "Record<string, unknown>"
+          required: true
+    - name: TokenUsage
+      kind: struct
+      fields:
+        - name: promptTokens
+          type: number
+          required: true
+        - name: completionTokens
+          type: number
+          required: true
+        - name: totalTokens
+          type: number
+          required: true
+        - name: provider
+          type: ProviderEngine
+          required: false
+  exports:
+    - name: ToolTypesModule
+      kind: function
+      async: false
+      params: []
+      returns: void
+      doc: "Module definition for packages/server/src/types/tool.types.ts"
+      intent:
+        - action: return
+          value: "void"
+  constraints:
+    style:
+      indent: 2
+      quotes: double
+      semicolons: true

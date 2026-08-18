@@ -1,0 +1,50 @@
+# ACAD Twin-YAML
+# Version: 1.1.0
+# Source: packages/client/components/workspace/ui/status-badge
+
+block:
+  id: "0f26cfc2-cef2-4ea3-b3ad-4fa570c340dd"
+  label: "StatusBadge"
+  position: { x: 5320, y: 1560 }
+  size: { width: 240, height: 200 }
+  color: "#3498db"
+  collapsed: false
+  ports:
+    imports:
+      - AgentStatus
+    exports:
+      - StatusBadge
+
+spec:
+  version: "1.1.0"
+  file:
+    path: packages/client/components/workspace/ui/status-badge
+    language: typescript
+  imports:
+    - from: "@/types/crowd-os"
+      symbols:
+        - AgentStatus
+  types:
+    - name: StatusBadgeProps
+      kind: struct
+      fields:
+        - name: status
+          type: AgentStatus
+          required: true
+  exports:
+    - name: StatusBadge
+      kind: function
+      async: false
+      params:
+        - name: { status }
+          type: StatusBadgeProps
+      returns: void
+      doc: "Exported function StatusBadge."
+      intent:
+        - action: return
+          value: "(     <span        id={`status-badge-${status}`}       className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full border text-xs font-mono tracking-tight font-medium ${current.bg} ${current.text}`}     >       <span className={`w-1.5 h-1.5 rounded-full ${current.dot}`} />       <span className=\"capitalize\">{status}</span>     </span>   )"
+  constraints:
+    style:
+      indent: 2
+      quotes: single
+      semicolons: true

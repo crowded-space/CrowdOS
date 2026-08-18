@@ -1,0 +1,78 @@
+# ACAD Twin-YAML
+# Version: 1.1.0
+# Source: packages/client/components/workspace/messages/mention-parser
+
+block:
+  id: "eb626d50-04ec-4046-835f-e14dbc2d41b4"
+  label: "MentionParser"
+  position: { x: 2240, y: 1560 }
+  size: { width: 240, height: 200 }
+  color: "#3498db"
+  collapsed: false
+  ports:
+    imports:
+      - React
+      - useMemo
+      - useCrowdOSStore
+      - stripToolCalls
+    exports:
+      - MentionParser
+
+spec:
+  version: "1.1.0"
+  file:
+    path: packages/client/components/workspace/messages/mention-parser
+    language: typescript
+  imports:
+    - from: "react"
+      symbols:
+        - React
+        - useMemo
+    - from: "@/stores/crowd-os-store"
+      symbols:
+        - useCrowdOSStore
+    - from: "@community-agent/shared"
+      symbols:
+        - stripToolCalls
+  types:
+    - name: MentionParserProps
+      kind: struct
+      fields:
+        - name: text
+          type: string
+          required: true
+  exports:
+    - name: MentionParser
+      kind: function
+      async: false
+      params:
+        - name: { text }
+          type: MentionParserProps
+      returns: void
+      doc: "Exported function MentionParser."
+      intent:
+        - action: call
+          value: "useCrowdOSStore"
+        - action: call
+          value: "useMemo"
+        - action: call
+          value: "stripToolCalls"
+        - action: call
+          value: "useMemo"
+        - action: call
+          value: "agents.map"
+        - action: call
+          value: "useMemo"
+        - action: call
+          value: "buildMentionRegex"
+        - action: call
+          value: "useMemo"
+        - action: call
+          value: "CODE_BLOCK_REGEX.exec"
+        - action: call
+          value: "cleanText.slice"
+  constraints:
+    style:
+      indent: 2
+      quotes: single
+      semicolons: true

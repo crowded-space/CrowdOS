@@ -1,0 +1,29 @@
+# ACAD Twin-YAML
+# Version: 1.1.0
+# Source: packages/server/src/core/LoopArbiter
+
+block:
+  id: b60ca466-dcf8-58f2-adb2-6a9cc7344dd6
+  label: LoopArbiter
+  position: { x: 0, y: 0 }
+  size: { width: 240, height: 200 }
+  color: "#D75D7B"
+  collapsed: false
+  ports: { imports: [ EscalationChain, AgentProfile, type, EventBroker ], exports: [] }
+spec:
+  version: 1.1.0
+  file:
+    path: packages/server/src/core/LoopArbiter
+    language: typescript
+  imports:
+    - module: ../Agents/agentGate.js
+      symbols: [ EscalationChain, AgentProfile ]
+    - module: ../EventBroker/eventBrokerGate.js
+      symbols: [ type, EventBroker ]
+  types: []
+  exports: []
+  constraints:
+    style:
+      indent: 2
+      quotes: double
+      semicolons: true

@@ -1,0 +1,44 @@
+# ACAD Twin-YAML
+# Version: 1.1.0
+# Source: packages/server/src/runtime/index
+
+block:
+  id: "f6a9ec84-0919-4015-9268-c35320615855"
+  label: "Index"
+  position: { x: 0, y: 780 }
+  size: { width: 240, height: 200 }
+  color: "#d35400"
+  collapsed: false
+  ports:
+    imports:
+      - registerProviders
+    exports:
+      - initRuntime
+
+spec:
+  version: "1.1.0"
+  file:
+    path: packages/server/src/runtime/index
+    language: typescript
+  imports:
+    - from: "./providers/index"
+      symbols:
+        - registerProviders
+  types: []
+  exports:
+    - name: initRuntime
+      kind: function
+      async: false
+      params: []
+      returns: void
+      doc: "Exported function initRuntime."
+      intent:
+        - action: call
+          value: "registerProviders"
+        - action: call
+          value: "console.log"
+  constraints:
+    style:
+      indent: 2
+      quotes: single
+      semicolons: false

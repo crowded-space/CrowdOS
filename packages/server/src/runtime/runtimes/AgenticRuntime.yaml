@@ -1,0 +1,118 @@
+# ACAD Twin-YAML
+# Version: 1.1.0
+# Source: packages/server/src/runtime/runtimes/AgenticRuntime
+
+block:
+  id: "5a0f6fbc-694c-4511-999e-e815614cfb20"
+  label: "AgenticRuntime"
+  position: { x: 3920, y: 780 }
+  size: { width: 240, height: 200 }
+  color: "#d35400"
+  collapsed: false
+  ports:
+    imports:
+      - randomUUID
+      - ContextPacket
+      - RuntimeResult
+      - RuntimeEvent
+      - ToolCallRecord
+      - HistoryMessage
+      - EventBroker
+      - BaseRuntime
+      - ToolExecutor
+    exports:
+      - "AgenticRuntime.execute"
+      - "AgenticRuntime.parseToolCalls"
+
+spec:
+  version: "1.1.0"
+  file:
+    path: packages/server/src/runtime/runtimes/AgenticRuntime
+    language: typescript
+  imports:
+    - from: "node:crypto"
+      symbols:
+        - randomUUID
+    - from: "../types"
+      symbols:
+        - ContextPacket
+        - RuntimeResult
+        - RuntimeEvent
+        - ToolCallRecord
+        - HistoryMessage
+    - from: "../../EventBroker/eventBrokerGate"
+      symbols:
+        - EventBroker
+    - from: "./BaseRuntime"
+      symbols:
+        - BaseRuntime
+    - from: "../../tools/toolsGate"
+      symbols:
+        - ToolExecutor
+  types: []
+  exports:
+    - name: AgenticRuntime.execute
+      kind: function
+      async: true
+      params:
+        - name: packet
+          type: ContextPacket
+        - name: broker
+          type: EventBroker
+      returns: "Promise<RuntimeResult>"
+      doc: "Method AgenticRuntime.execute"
+      intent:
+        - action: call
+          value: "this.kernel.setAgentStatus"
+        - action: call
+          value: "this.kernel.emitThinking"
+        - action: call
+          value: "this.kernel.callLLM"
+        - action: if
+          condition: "llmResponse.thoughts"
+        - action: call
+          value: "this.kernel.persistMessage"
+        - action: call
+          value: "llmResponse.thoughts.trim"
+        - action: call
+          value: "cleanThoughts.split"
+        - action: call
+          value: "firstSentence.slice"
+        - action: call
+          value: "sentences.slice(0, 3).join"
+        - action: call
+          value: "sentences.slice"
+    - name: AgenticRuntime.parseToolCalls
+      kind: function
+      async: false
+      params:
+        - name: text
+          type: string
+      returns: "Array<{ name: string; arguments: Record<string, any> }>"
+      doc: "Universal parser for <call_tool name=\"...\">...</call_tool> XML-like tags."
+      intent:
+        - action: call
+          value: "regex.exec"
+        - action: call
+          value: "match[1].trim"
+        - action: call
+          value: "match[2].trim"
+        - action: call
+          value: "JSON.parse"
+        - action: call
+          value: "rawArgs.replace(/```json|```/g, '').trim"
+        - action: call
+          value: "rawArgs.replace"
+        - action: call
+          value: "JSON.parse"
+        - action: call
+          value: "console.warn"
+        - action: call
+          value: "toolCalls.push"
+        - action: return
+          value: "toolCalls"
+  constraints:
+    style:
+      indent: 2
+      quotes: single
+      semicolons: false

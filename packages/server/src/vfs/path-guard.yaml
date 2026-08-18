@@ -1,0 +1,146 @@
+# ACAD Twin-YAML
+# Version: 1.1.0
+# Source: packages/server/src/vfs/path-guard
+
+block:
+  id: "40f75622-a6cb-464e-9169-3d35cacaf29a"
+  label: "PathGuard"
+  position: { x: 5600, y: 1300 }
+  size: { width: 240, height: 200 }
+  color: "#16a085"
+  collapsed: false
+  ports:
+    imports:
+      - posix
+    exports:
+      - normalizePath
+      - isPathSafe
+      - resolveWorkspacePath
+      - extractName
+      - guessMimeType
+
+spec:
+  version: "1.1.0"
+  file:
+    path: packages/server/src/vfs/path-guard
+    language: typescript
+  imports:
+    - from: "node:path"
+      symbols:
+        - posix
+  types: []
+  exports:
+    - name: normalizePath
+      kind: function
+      async: false
+      params:
+        - name: inputPath
+          type: string
+      returns: string
+      doc: "Normalize a workspace-relative path to POSIX format. Strips leading slashes and resolves `.` / `..` segments."
+      intent:
+        - action: call
+          value: "inputPath.replace"
+        - action: call
+          value: "posix.normalize"
+        - action: call
+          value: "normalized.replace"
+        - action: call
+          value: "normalized.replace"
+        - action: return
+          value: "normalized || \".\""
+    - name: isPathSafe
+      kind: function
+      async: false
+      params:
+        - name: inputPath
+          type: string
+      returns: boolean
+      doc: "Check if a path is safe (no traversal outside workspace root). Returns false if the path escapes the workspace boundary."
+      intent:
+        - action: call
+          value: "normalizePath"
+        - action: if
+          condition: "normalized.startsWith(\"..\") || normalized.includes(\"/../\")"
+        - action: call
+          value: "normalized.startsWith"
+        - action: call
+          value: "normalized.includes"
+        - action: return
+          value: "false"
+        - action: if
+          condition: "inputPath.includes(\"\\0\")"
+        - action: call
+          value: "inputPath.includes"
+        - action: return
+          value: "false"
+        - action: if
+          condition: "/^[a-zA-Z]:/.test(inputPath) || inputPath.startsWith(\"/\")"
+        - action: call
+          value: "/^[a-zA-Z]:/.test"
+    - name: resolveWorkspacePath
+      kind: function
+      async: false
+      params:
+        - name: workspaceRoot
+          type: string
+        - name: relativePath
+          type: string
+      returns: string
+      doc: "Resolve a workspace-relative path to an absolute filesystem path. Throws if the resolved path escapes the workspace root."
+      intent:
+        - action: if
+          condition: "!isPathSafe(relativePath)"
+        - action: call
+          value: "isPathSafe"
+        - action: throw
+          value: "new Error(`Unsafe path detected: ${relativePath}`)"
+        - action: call
+          value: "normalizePath"
+        - action: call
+          value: "posix.join"
+        - action: call
+          value: "workspaceRoot.replace"
+        - action: call
+          value: "workspaceRoot.replace(/\\\\/g, \"/\").replace"
+        - action: call
+          value: "workspaceRoot.replace"
+        - action: if
+          condition: "!resolved.startsWith(normalizedRoot)"
+        - action: call
+          value: "resolved.startsWith"
+    - name: extractName
+      kind: function
+      async: false
+      params:
+        - name: filePath
+          type: string
+      returns: string
+      doc: "Extract the file/directory name from a path."
+      intent:
+        - action: return
+          value: "posix.basename(normalizePath(filePath))"
+        - action: call
+          value: "posix.basename"
+        - action: call
+          value: "normalizePath"
+    - name: guessMimeType
+      kind: function
+      async: false
+      params:
+        - name: filePath
+          type: string
+      returns: "string | null"
+      doc: "Guess MIME type from file extension (basic mapping)."
+      intent:
+        - action: call
+          value: "posix.extname(filePath).toLowerCase"
+        - action: call
+          value: "posix.extname"
+        - action: return
+          value: "mimeMap[ext] ?? null"
+  constraints:
+    style:
+      indent: 2
+      quotes: double
+      semicolons: true

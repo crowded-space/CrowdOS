@@ -1,0 +1,52 @@
+# ACAD Twin-YAML
+# Version: 1.1.0
+# Source: packages/client/src/main
+
+block:
+  id: "21376eb2-df09-432c-8702-a8c93dc1170c"
+  label: "Main"
+  position: { x: 280, y: 1820 }
+  size: { width: 240, height: 200 }
+  color: "#e74c3c"
+  collapsed: false
+  ports:
+    imports:
+      - StrictMode
+      - createRoot
+      - App
+    exports:
+      - MainModule
+
+spec:
+  version: "1.1.0"
+  file:
+    path: packages/client/src/main
+    language: typescript
+  imports:
+    - from: "react"
+      symbols:
+        - StrictMode
+    - from: "react-dom/client"
+      symbols:
+        - createRoot
+    - from: "./App"
+      symbols:
+        - App
+    - from: "./index.css"
+      symbols:
+  types: []
+  exports:
+    - name: MainModule
+      kind: function
+      async: false
+      params: []
+      returns: void
+      doc: "Module definition for packages/client/src/main.tsx"
+      intent:
+        - action: return
+          value: "void"
+  constraints:
+    style:
+      indent: 2
+      quotes: single
+      semicolons: true

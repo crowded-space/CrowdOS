@@ -1,0 +1,140 @@
+# ACAD Twin-YAML
+# Version: 1.1.0
+# Source: packages/server/src/Memories/memoryRetrieval
+
+block:
+  id: 8886f898-dd60-57dc-b735-337e7540dda8
+  label: MemoryRetrieval
+  position: { x: 0, y: 0 }
+  size: { width: 240, height: 200 }
+  color: "#D75D7B"
+  collapsed: false
+  ports: { imports: [ and, desc, eq, gte, getDb, agentMemoryNotes, listMemoryPreviews ], exports: [ retrieveMemoryCandidates, buildMemoryPreviewBlock ] }
+spec:
+  version: 1.1.0
+  file:
+    path: packages/server/src/Memories/memoryRetrieval
+    language: typescript
+  imports:
+    - module: drizzle-orm
+      symbols: [ and, desc, eq, gte ]
+    - module: ../Shared/config/database.js
+      symbols: [ getDb ]
+    - module: ../db/schema.js
+      symbols: [ agentMemoryNotes ]
+    - module: ./agentMemoryStore.js
+      symbols: [ listMemoryPreviews ]
+  types:
+    - name: MemoryCandidate
+      kind: struct
+      fields:
+        - name: noteId
+          type: string
+          required: true
+        - name: hook
+          type: string
+          required: true
+        - name: brief
+          type: string
+          required: true
+        - name: noteType
+          type: string
+          required: true
+        - name: noteTimestamp
+          type: Object
+          required: true
+        - name: importanceScore
+          type: float
+          required: true
+        - name: confidence
+          type: string
+          required: true
+        - name: contradictionFlags
+          type:
+            type: array
+            items: string
+          required: true
+        - name: score
+          type: float
+          required: true
+        - name: laneScores
+          type: Object
+          required: true
+        - name: sourceLanes
+          type:
+            type: array
+            items: string
+          required: true
+    - name: RetrievalInput
+      kind: struct
+      fields:
+        - name: agentId
+          type: string
+          required: true
+        - name: channelId
+          type: string
+          required: true
+        - name: userMessageText
+          type: string
+          required: true
+        - name: recentEpisodic
+          type: bool
+          required: true
+        - name: highImportance
+          type: bool
+          required: true
+        - name: mentions
+          type: bool
+          required: true
+        - name: unresolvedTensions
+          type: bool
+          required: true
+        - name: recencyBump
+          type: bool
+          required: true
+        - name: topK
+          type: float
+          required: true
+  exports:
+    - name: retrieveMemoryCandidates
+      kind: function
+      async: true
+      params:
+        - name: input
+          type: RetrievalInput
+      returns:
+        type: array
+        items: MemoryCandidate
+      doc: |-
+        Retrieve memory candidates by running multiple lanes in parallel, then
+        merging and deduplicating results. Forked from Continuum's multi-lane
+        retrieval design. Semantic embedding lanes are stubbed and can be wired to
+        pgvector later.
+      intent:
+        - action: call
+          function: $getDb
+          args: []
+          assign_to: db
+        - action: return
+          value: Array.from(candidates.values())
+    - name: buildMemoryPreviewBlock
+      kind: function
+      async: false
+      params:
+        - name: candidates
+          type:
+            type: array
+            items: MemoryCandidate
+      returns: string
+      doc: |-
+        Format memory candidates into a compact XML-like preview block suitable for
+        injection into an agent's prompt context. Format mirrors Continuum's memory
+        preview spec: [score] "Hook" — "Brief" {note_id, type, lanes, importance, has_tension}
+      intent:
+        - action: return
+          value: "`<memory_previews>\\n${lines.join(\"\\n\")}\\n</memory_previews>`"
+  constraints:
+    style:
+      indent: 2
+      quotes: double
+      semicolons: true

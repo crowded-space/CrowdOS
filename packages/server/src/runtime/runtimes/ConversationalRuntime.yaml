@@ -1,0 +1,74 @@
+# ACAD Twin-YAML
+# Version: 1.1.0
+# Source: packages/server/src/runtime/runtimes/ConversationalRuntime
+
+block:
+  id: "7c2349fb-b034-4c64-b3d9-613ba41d09ab"
+  label: "ConversationalRuntime"
+  position: { x: 4480, y: 780 }
+  size: { width: 240, height: 200 }
+  color: "#d35400"
+  collapsed: false
+  ports:
+    imports:
+      - ContextPacket
+      - RuntimeResult
+      - EventBroker
+      - BaseRuntime
+    exports:
+      - "ConversationalRuntime.execute"
+
+spec:
+  version: "1.1.0"
+  file:
+    path: packages/server/src/runtime/runtimes/ConversationalRuntime
+    language: typescript
+  imports:
+    - from: "../types"
+      symbols:
+        - ContextPacket
+        - RuntimeResult
+    - from: "../../EventBroker/eventBrokerGate"
+      symbols:
+        - EventBroker
+    - from: "./BaseRuntime"
+      symbols:
+        - BaseRuntime
+  types: []
+  exports:
+    - name: ConversationalRuntime.execute
+      kind: function
+      async: true
+      params:
+        - name: packet
+          type: ContextPacket
+        - name: broker
+          type: EventBroker
+      returns: "Promise<RuntimeResult>"
+      doc: "Method ConversationalRuntime.execute"
+      intent:
+        - action: call
+          value: "this.kernel.setAgentStatus"
+        - action: call
+          value: "runtimeEvents.push"
+        - action: call
+          value: "this.kernel.buildEvent"
+        - action: call
+          value: "this.kernel.emitThinking"
+        - action: call
+          value: "runtimeEvents.push"
+        - action: call
+          value: "this.kernel.buildEvent"
+        - action: call
+          value: "this.kernel.callLLM"
+        - action: if
+          condition: "llmResponse.thoughts"
+        - action: call
+          value: "this.kernel.persistMessage"
+        - action: call
+          value: "llmResponse.thoughts.trim"
+  constraints:
+    style:
+      indent: 2
+      quotes: single
+      semicolons: false

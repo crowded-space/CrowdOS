@@ -1,0 +1,55 @@
+# ACAD Twin-YAML
+# Version: 1.1.0
+# Source: packages/client/components/workspace/messages/system-message
+
+block:
+  id: "835559bf-4533-454d-8f28-ae95d820c553"
+  label: "SystemMessage"
+  position: { x: 2800, y: 1560 }
+  size: { width: 240, height: 200 }
+  color: "#3498db"
+  collapsed: false
+  ports:
+    imports:
+      - Terminal
+    exports:
+      - SystemMessage
+
+spec:
+  version: "1.1.0"
+  file:
+    path: packages/client/components/workspace/messages/system-message
+    language: typescript
+  imports:
+    - from: "lucide-react"
+      symbols:
+        - Terminal
+  types:
+    - name: SystemMessageProps
+      kind: struct
+      fields:
+        - name: content
+          type: string
+          required: true
+        - name: timestamp
+          type: string
+          required: true
+  exports:
+    - name: SystemMessage
+      kind: function
+      async: false
+      params:
+        - name: { content, timestamp }
+          type: SystemMessageProps
+      returns: void
+      doc: "Exported function SystemMessage."
+      intent:
+        - action: call
+          value: "new Date(timestamp).toLocaleTimeString"
+        - action: return
+          value: "(     <div        id=\"system-message\"       className=\"flex items-center justify-center gap-2 py-2 px-4 bg-zinc-950/45 border border-zinc-900/80 rounded-md max-w-2xl mx-auto my-1 select-none\"     >       <Terminal size={12} className=\"text-zinc-500 shrink-0\" />       <span className=\"text-xs font-mono text-zinc-400 text-center leading-normal\">         {content}       </span>       <span className=\"text-[9px] font-mono text-zinc-650 ml-auto pl-2\">         {timeStr}       </span>     </div>   )"
+  constraints:
+    style:
+      indent: 2
+      quotes: double
+      semicolons: true

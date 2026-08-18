@@ -1,0 +1,16 @@
+{
+  "id": "crowdos",
+  "name": "crowdos",
+  "createdAt": "2026-05-24T14:48:12.689Z",
+  "permissions": {
+    "network": false,
+    "shell": false,
+    "maxAgents": 8
+  },
+  "constraints": {
+    "networkAccess": false,
+    "shellExecution": true,
+    "memoryLimitMb": 512,
+    "cpuLimit": 1
+  }
+}

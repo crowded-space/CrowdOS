@@ -1,0 +1,46 @@
+# ACAD Twin-YAML
+# Version: 1.1.0
+# Source: packages/client/vitest.config
+
+block:
+  id: "82c5bad4-fd86-4320-881e-c01e577402e0"
+  label: "VitestConfig"
+  position: { x: 560, y: 1820 }
+  size: { width: 240, height: 200 }
+  color: "#7f8c8d"
+  collapsed: false
+  ports:
+    imports:
+      - defineConfig
+      - path
+    exports:
+      - VitestConfigModule
+
+spec:
+  version: "1.1.0"
+  file:
+    path: packages/client/vitest.config
+    language: typescript
+  imports:
+    - from: "vitest/config"
+      symbols:
+        - defineConfig
+    - from: "path"
+      symbols:
+        - path
+  types: []
+  exports:
+    - name: VitestConfigModule
+      kind: function
+      async: false
+      params: []
+      returns: void
+      doc: "Module definition for packages/client/vitest.config.ts"
+      intent:
+        - action: return
+          value: "void"
+  constraints:
+    style:
+      indent: 2
+      quotes: single
+      semicolons: true

@@ -1,0 +1,102 @@
+# ACAD Twin-YAML
+# Version: 1.1.0
+# Source: packages/server/src/tools/safety/Guard
+
+block:
+  id: "87b62653-917d-4f0b-8f49-01c7ccdd74ee"
+  label: "Guard"
+  position: { x: 1120, y: 1300 }
+  size: { width: 240, height: 200 }
+  color: "#16a085"
+  collapsed: false
+  ports:
+    imports:
+      - path
+    exports:
+      - "Guard.validatePath"
+      - "Guard.validateCommand"
+      - "Guard.isCommandWhitelisted"
+
+spec:
+  version: "1.1.0"
+  file:
+    path: packages/server/src/tools/safety/Guard
+    language: typescript
+  imports:
+    - from: "node:path"
+      symbols:
+        - path
+  types: []
+  exports:
+    - name: Guard.validatePath
+      kind: function
+      async: false
+      params:
+        - name: targetPath
+          type: string
+      returns: string
+      doc: "Validates if a path stays safely inside the workspace directory"
+      intent:
+        - action: call
+          value: "path.resolve"
+        - action: if
+          condition: "!absolutePath.toLowerCase().startsWith(WORKSPACE_DIR.toLowerCase())"
+        - action: call
+          value: "absolutePath.toLowerCase().startsWith"
+        - action: call
+          value: "absolutePath.toLowerCase"
+        - action: call
+          value: "WORKSPACE_DIR.toLowerCase"
+        - action: throw
+          value: "new Error(`Access Denied: Path \"${targetPath}\" breaks out of workspace directory.`)"
+        - action: call
+          value: "path.basename(absolutePath).toLowerCase"
+        - action: call
+          value: "path.basename"
+        - action: if
+          condition: "blacklistedFiles.some(bf => filename === bf || absolutePath.toLowerCase().includes(`/${bf}/`))"
+        - action: call
+          value: "blacklistedFiles.some"
+    - name: Guard.validateCommand
+      kind: function
+      async: false
+      params:
+        - name: command
+          type: string
+      returns: void
+      doc: "Validates if a bash command is safe to execute"
+      intent:
+        - action: call
+          value: "command.toLowerCase"
+        - action: if
+          condition: "blacklist.some(term => cmdLower.includes(term))"
+        - action: call
+          value: "blacklist.some"
+        - action: call
+          value: "cmdLower.includes"
+        - action: throw
+          value: "new Error(`Safety Alert: Command contains dangerous blocked instruction.`)"
+    - name: Guard.isCommandWhitelisted
+      kind: function
+      async: false
+      params:
+        - name: command
+          type: string
+      returns: boolean
+      doc: "Validates if command is in safe whitelist"
+      intent:
+        - action: call
+          value: "command.toLowerCase().trim"
+        - action: call
+          value: "command.toLowerCase"
+        - action: return
+          value: "whitelist.some(term => cmdLower.startsWith(term))"
+        - action: call
+          value: "whitelist.some"
+        - action: call
+          value: "cmdLower.startsWith"
+  constraints:
+    style:
+      indent: 2
+      quotes: double
+      semicolons: true

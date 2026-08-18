@@ -1,0 +1,74 @@
+# ACAD Twin-YAML
+# Version: 1.1.0
+# Source: packages/server/src/db/seed
+
+block:
+  id: "b6be8628-ac06-41cb-8323-d15ee3b16ed9"
+  label: "Seed"
+  position: { x: 1120, y: 260 }
+  size: { width: 240, height: 200 }
+  color: "#27ae60"
+  collapsed: false
+  ports:
+    imports:
+      - randomUUID
+      - and
+      - eq
+      - isNull
+      - closeDatabaseConnection
+      - ensurePgVectorExtension
+      - getDb
+      - agents
+      - channels
+      - modelModules
+      - instructionModules
+      - toolkitModules
+      - workspaceSettings
+      - categories
+    exports:
+      - SeedModule
+
+spec:
+  version: "1.1.0"
+  file:
+    path: packages/server/src/db/seed
+    language: typescript
+  imports:
+    - from: "node:crypto"
+      symbols:
+        - randomUUID
+    - from: "drizzle-orm"
+      symbols:
+        - and
+        - eq
+        - isNull
+    - from: "../config/database"
+      symbols:
+        - closeDatabaseConnection
+        - ensurePgVectorExtension
+        - getDb
+    - from: "./schema"
+      symbols:
+        - agents
+        - channels
+        - modelModules
+        - instructionModules
+        - toolkitModules
+        - workspaceSettings
+        - categories
+  types: []
+  exports:
+    - name: SeedModule
+      kind: function
+      async: false
+      params: []
+      returns: void
+      doc: "Module definition for packages/server/src/db/seed.ts"
+      intent:
+        - action: return
+          value: "void"
+  constraints:
+    style:
+      indent: 2
+      quotes: double
+      semicolons: true

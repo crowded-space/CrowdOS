@@ -1,0 +1,46 @@
+# ACAD Twin-YAML
+# Version: 1.1.0
+# Source: packages/server/src/routes/health
+
+block:
+  id: "27bb13d9-ce3e-4264-abab-bb2c3e02c561"
+  label: "Health"
+  position: { x: 840, y: 520 }
+  size: { width: 240, height: 200 }
+  color: "#8e44ad"
+  collapsed: false
+  ports:
+    imports:
+      - FastifyInstance
+    exports:
+      - healthRoutes
+
+spec:
+  version: "1.1.0"
+  file:
+    path: packages/server/src/routes/health
+    language: typescript
+  imports:
+    - from: "fastify"
+      symbols:
+        - FastifyInstance
+  types: []
+  exports:
+    - name: healthRoutes
+      kind: function
+      async: true
+      params:
+        - name: app
+          type: FastifyInstance
+      returns: void
+      doc: "Exported function healthRoutes."
+      intent:
+        - action: call
+          value: "app.get"
+        - action: return
+          value: "{       status: \"ok\",       service: \"community-agent-server\",     }"
+  constraints:
+    style:
+      indent: 2
+      quotes: double
+      semicolons: true

@@ -1,0 +1,92 @@
+# ACAD Twin-YAML
+# Version: 1.1.0
+# Source: packages/server/src/routes/channels
+
+block:
+  id: "4c78e107-c5cd-4848-872e-1851e4ebd92d"
+  label: "Channels"
+  position: { x: 560, y: 520 }
+  size: { width: 240, height: 200 }
+  color: "#8e44ad"
+  collapsed: false
+  ports:
+    imports:
+      - FastifyInstance
+      - FastifyReply
+      - FastifyRequest
+      - z
+      - eq
+      - randomUUID
+      - getDb
+      - categories
+      - channels
+      - globalBroker
+    exports:
+      - channelRoutes
+
+spec:
+  version: "1.1.0"
+  file:
+    path: packages/server/src/routes/channels
+    language: typescript
+  imports:
+    - from: "fastify"
+      symbols:
+        - FastifyInstance
+        - FastifyReply
+        - FastifyRequest
+    - from: "zod"
+      symbols:
+        - z
+    - from: "drizzle-orm"
+      symbols:
+        - eq
+    - from: "node:crypto"
+      symbols:
+        - randomUUID
+    - from: "../config/database"
+      symbols:
+        - getDb
+    - from: "../db/schema"
+      symbols:
+        - categories
+        - channels
+    - from: "../sockets/registerSocketServer"
+      symbols:
+        - globalBroker
+  types: []
+  exports:
+    - name: channelRoutes
+      kind: function
+      async: true
+      params:
+        - name: app
+          type: FastifyInstance
+      returns: void
+      doc: "Exported function channelRoutes."
+      intent:
+        - action: call
+          value: "app.get"
+        - action: call
+          value: "getDb"
+        - action: call
+          value: "db.query.channels.findMany"
+        - action: call
+          value: "asc"
+        - action: return
+          value: "list"
+        - action: call
+          value: "app.post"
+        - action: call
+          value: "getDb"
+        - action: if
+          condition: "request.body.categoryId && !(await categoryExists(request.body.categoryId))"
+        - action: call
+          value: "categoryExists"
+        - action: return
+          value: "reply.status(400).send({           error: \"Bad Request\",           message: `Category not found: ${request.body.categoryId}`,         })"
+  constraints:
+    style:
+      indent: 2
+      quotes: double
+      semicolons: true

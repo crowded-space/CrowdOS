@@ -1,0 +1,781 @@
+# ACAD Twin-YAML
+# Version: 2.0.0
+# Source: packages/server/src/Agents/agentService
+
+block:
+  id: 34d0c0f2-28f5-51e6-be1d-32d8b8b0df62
+  label: AgentService
+  position: { x: 0, y: 0 }
+  size: { width: 280, height: 220 }
+  color: "#4A90D9"
+  collapsed: false
+  ports: { imports: [ agents, capabilitiesModules, constraintsModules, instructionModules, modelModules, runtimeStates, toolkitModules, getDb, and, eq, randomUUID ], exports: [ agentRegistry, AgentRegistry ] }
+spec:
+  version: 2.0.0
+  file:
+    path: packages/server/src/Agents/agentService
+    language: typescript
+  target:
+    language: typescript
+    moduleSystem: esmodule
+    compiler: typescript
+  imports:
+    - module: ../db/schema.js
+      imported: agents
+      local: agents
+      kind: value
+    - module: ../db/schema.js
+      imported: capabilitiesModules
+      local: capabilitiesModules
+      kind: value
+    - module: ../db/schema.js
+      imported: constraintsModules
+      local: constraintsModules
+      kind: value
+    - module: ../db/schema.js
+      imported: instructionModules
+      local: instructionModules
+      kind: value
+    - module: ../db/schema.js
+      imported: modelModules
+      local: modelModules
+      kind: value
+    - module: ../db/schema.js
+      imported: runtimeStates
+      local: runtimeStates
+      kind: value
+    - module: ../db/schema.js
+      imported: toolkitModules
+      local: toolkitModules
+      kind: value
+    - module: ../Shared/config/database.js
+      imported: getDb
+      local: getDb
+      kind: value
+    - module: ./agentTypes.js
+      imported: AgentAuthorityPermissions
+      local: AgentAuthorityPermissions
+      kind: type
+    - module: ./agentTypes.js
+      imported: AgentProfile
+      local: AgentProfile
+      kind: type
+    - module: ./agentTypes.js
+      imported: AgentRegistryFilters
+      local: AgentRegistryFilters
+      kind: type
+    - module: ./agentTypes.js
+      imported: AuthorityLevel
+      local: AuthorityLevel
+      kind: type
+    - module: ./agentTypes.js
+      imported: CreateAgentProfileInput
+      local: CreateAgentProfileInput
+      kind: type
+    - module: ./agentTypes.js
+      imported: UpdateAgentProfileInput
+      local: UpdateAgentProfileInput
+      kind: type
+    - module: drizzle-orm
+      imported: and
+      local: and
+      kind: value
+    - module: drizzle-orm
+      imported: eq
+      local: eq
+      kind: value
+    - module: node:crypto
+      imported: randomUUID
+      local: randomUUID
+      kind: value
+  types: []
+  exports:
+    - name: agentRegistry
+      kind: constant
+      type: any
+    - name: AgentRegistry
+      kind: class
+      methods:
+        - name: list
+          kind: method
+          async: true
+          generator: false
+          params:
+            - name: filters
+              type: AgentRegistryFilters
+              optional: true
+              rest: false
+          returns:
+            type: array
+            items: AgentProfile
+          throws: []
+          operations:
+            - op: call
+              target: $getDb
+              args: []
+              assignTo: db
+            - op: opaque
+              reason: Variable initializer is not represented by the semantic operation grammar
+              sourceSpan:
+                start: 1725
+                length: 24
+            - op: branch
+              condition: filters.authorityLevel !== undefined
+              then:
+                - op: call
+                  target: $whereClauses.push
+                  args:
+                    - eq(agents.authorityLevel, filters.authorityLevel)
+            - op: branch
+              condition: filters.status !== undefined
+              then:
+                - op: call
+                  target: $whereClauses.push
+                  args:
+                    - eq(agents.status, filters.status)
+            - op: branch
+              condition: filters.isTemplate !== undefined
+              then:
+                - op: call
+                  target: $whereClauses.push
+                  args:
+                    - eq(agents.isTemplate, filters.isTemplate)
+            - op: call
+              target: $db.query.agents.findMany
+              args:
+                - |-
+                  {
+                        where: whereClauses.length > 0 ? and(...whereClauses) : undefined,
+                        orderBy: (table, { asc }) => [asc(table.authorityLevel), asc(table.name)],
+                      }
+              assignTo: records
+              awaited: true
+            - op: call
+              target: $records.map
+              args:
+                - mapAgentProfile
+            - op: return
+              value: records.map(mapAgentProfile)
+          effects:
+            - kind: database
+              target: db.query.agents.findMany
+              operation: write_or_read
+        - name: getById
+          kind: method
+          async: true
+          generator: false
+          params:
+            - name: id
+              type: string
+              optional: false
+              rest: false
+          returns:
+            type: union
+            options:
+              - AgentProfile
+              - any
+          throws: []
+          operations:
+            - op: call
+              target: $getDb
+              args: []
+              assignTo: db
+            - op: call
+              target: $db.query.agents.findFirst
+              args:
+                - |-
+                  {
+                        where: eq(agents.id, id),
+                      }
+              assignTo: record
+              awaited: true
+            - op: call
+              target: $mapAgentProfile
+              args:
+                - record
+            - op: return
+              value: "record ? mapAgentProfile(record) : null"
+          effects:
+            - kind: database
+              target: db.query.agents.findMany
+              operation: write_or_read
+            - kind: database
+              target: db.query.agents.findFirst
+              operation: write_or_read
+        - name: create
+          kind: method
+          async: true
+          generator: false
+          params:
+            - name: input
+              type: CreateAgentProfileInput
+              optional: false
+              rest: false
+          returns: AgentProfile
+          throws:
+            - Error
+          operations:
+            - op: call
+              target: $this.ensureValidReferences
+              args:
+                - input
+              awaited: true
+            - op: call
+              target: $Date
+              args: []
+              assignTo: now
+            - op: call
+              target: $randomUUID
+              args: []
+              assignTo: agentId
+            - op: call
+              target: $getDb
+              args: []
+              assignTo: db
+            - op: call
+              target: $unknownCall
+              args:
+                - |-
+                  {
+                        id: agentId,
+                        name: input.name,
+                        title: input.title,
+                        species: input.species ?? null,
+                        avatar: input.avatar ?? null,
+                        authorityLevel: input.authorityLevel,
+                        l3Subtype: input.l3Subtype ?? null,
+                        modelModuleId: input.modelModuleId,
+                        instructionModuleId: input.instructionModuleId,
+                        toolkitModuleId: input.toolkitModuleId ?? null,
+                        constraintsModuleId: input.constraintsModuleId ?? null,
+                        capabilitiesModuleId: input.capabilitiesModuleId ?? null,
+                        memorySharingPolicy: input.memorySharingPolicy,
+                        isOmniscient: input.isOmniscient ?? false,
+                        fallbackAgentId: input.fallbackAgentId ?? null,
+                        categoryPermissions: input.categoryPermissions ?? [],
+                        permissions: normalizePermissions(input.permissions),
+                        status: input.status ?? "offline",
+                        isTemplate: input.isTemplate ?? false,
+                        createdAt: now,
+                        updatedAt: now,
+                      }
+              awaited: true
+            - op: call
+              target: $unknownCall
+              args:
+                - |-
+                  {
+                        sessionId: `session-${agentId}`,
+                        agentId,
+                        status: input.status === "offline" ? "offline" : "idle",
+                        lastHeartbeat: now,
+                        createdAt: now,
+                      }
+              awaited: true
+            - op: call
+              target: $this.getById
+              args:
+                - agentId
+              assignTo: created
+              awaited: true
+            - op: branch
+              condition: "!created"
+              then:
+                - op: throw
+                  error: Error
+                  message: "\"Failed to create agent profile.\""
+            - op: return
+              value: created
+          effects:
+            - kind: database
+              target: db.query.agents.findMany
+              operation: write_or_read
+            - kind: database
+              target: db.query.agents.findFirst
+              operation: write_or_read
+            - kind: construction
+              target: Date
+            - kind: database
+              target: db.insert(agents).values
+              operation: write_or_read
+            - kind: database
+              target: db.insert(runtimeStates).values
+              operation: write_or_read
+        - name: update
+          kind: method
+          async: true
+          generator: false
+          params:
+            - name: id
+              type: string
+              optional: false
+              rest: false
+            - name: input
+              type: UpdateAgentProfileInput
+              optional: false
+              rest: false
+          returns:
+            type: union
+            options:
+              - AgentProfile
+              - any
+          throws: []
+          operations:
+            - op: call
+              target: $this.getById
+              args:
+                - id
+              assignTo: existing
+              awaited: true
+            - op: branch
+              condition: "!existing"
+              then:
+                - op: return
+                  value: "null"
+            - op: opaque
+              reason: Variable initializer is not represented by the semantic operation grammar
+              sourceSpan:
+                start: 4332
+                length: 1590
+            - op: call
+              target: $this.ensureValidReferences
+              args:
+                - merged
+                - id
+              awaited: true
+            - op: call
+              target: $getDb
+              args: []
+              assignTo: db
+            - op: call
+              target: $unknownCall
+              args:
+                - eq(agents.id, id)
+              awaited: true
+            - op: call
+              target: $unknownCall
+              args:
+                - eq(runtimeStates.agentId, id)
+              awaited: true
+            - op: call
+              target: $this.getById
+              args:
+                - id
+            - op: return
+              value: this.getById(id)
+          effects:
+            - kind: database
+              target: db.query.agents.findMany
+              operation: write_or_read
+            - kind: database
+              target: db.query.agents.findFirst
+              operation: write_or_read
+            - kind: construction
+              target: Date
+            - kind: database
+              target: db.insert(agents).values
+              operation: write_or_read
+            - kind: database
+              target: db.insert(runtimeStates).values
+              operation: write_or_read
+            - kind: database
+              target: |-
+                db
+                      .update(agents)
+                      .set({
+                        name: merged.name,
+                        title: merged.title,
+                        species: merged.species ?? null,
+                        avatar: merged.avatar ?? null,
+                        authorityLevel: merged.authorityLevel,
+                        l3Subtype: merged.l3Subtype ?? null,
+                        modelModuleId: merged.modelModuleId,
+                        instructionModuleId: merged.instructionModuleId,
+                        toolkitModuleId: merged.toolkitModuleId ?? null,
+                        constraintsModuleId: merged.constraintsModuleId ?? null,
+                        capabilitiesModuleId: merged.capabilitiesModuleId ?? null,
+                        memorySharingPolicy: merged.memorySharingPolicy,
+                        isOmniscient: merged.isOmniscient ?? false,
+                        fallbackAgentId: merged.fallbackAgentId ?? null,
+                        categoryPermissions: merged.categoryPermissions ?? [],
+                        permissions: merged.permissions ? normalizePermissions(merged.permissions) : existing.permissions,
+                        status: merged.status ?? existing.status,
+                        isTemplate: merged.isTemplate ?? false,
+                        updatedAt: new Date(),
+                      })
+                      .where
+              operation: write_or_read
+            - kind: database
+              target: |-
+                db
+                      .update(runtimeStates)
+                      .set({
+                        status: merged.status === "offline" ? "offline" : "idle",
+                        lastHeartbeat: new Date(),
+                      })
+                      .where
+              operation: write_or_read
+        - name: delete
+          kind: method
+          async: true
+          generator: false
+          params:
+            - name: id
+              type: string
+              optional: false
+              rest: false
+          returns: bool
+          throws: []
+          operations:
+            - op: call
+              target: $getDb
+              args: []
+              assignTo: db
+            - op: call
+              target: $unknownCall
+              args:
+                - "{ id: agents.id }"
+              assignTo: result
+              awaited: true
+            - op: return
+              value: result.length > 0
+          effects:
+            - kind: database
+              target: db.query.agents.findMany
+              operation: write_or_read
+            - kind: database
+              target: db.query.agents.findFirst
+              operation: write_or_read
+            - kind: construction
+              target: Date
+            - kind: database
+              target: db.insert(agents).values
+              operation: write_or_read
+            - kind: database
+              target: db.insert(runtimeStates).values
+              operation: write_or_read
+            - kind: database
+              target: |-
+                db
+                      .update(agents)
+                      .set({
+                        name: merged.name,
+                        title: merged.title,
+                        species: merged.species ?? null,
+                        avatar: merged.avatar ?? null,
+                        authorityLevel: merged.authorityLevel,
+                        l3Subtype: merged.l3Subtype ?? null,
+                        modelModuleId: merged.modelModuleId,
+                        instructionModuleId: merged.instructionModuleId,
+                        toolkitModuleId: merged.toolkitModuleId ?? null,
+                        constraintsModuleId: merged.constraintsModuleId ?? null,
+                        capabilitiesModuleId: merged.capabilitiesModuleId ?? null,
+                        memorySharingPolicy: merged.memorySharingPolicy,
+                        isOmniscient: merged.isOmniscient ?? false,
+                        fallbackAgentId: merged.fallbackAgentId ?? null,
+                        categoryPermissions: merged.categoryPermissions ?? [],
+                        permissions: merged.permissions ? normalizePermissions(merged.permissions) : existing.permissions,
+                        status: merged.status ?? existing.status,
+                        isTemplate: merged.isTemplate ?? false,
+                        updatedAt: new Date(),
+                      })
+                      .where
+              operation: write_or_read
+            - kind: database
+              target: |-
+                db
+                      .update(runtimeStates)
+                      .set({
+                        status: merged.status === "offline" ? "offline" : "idle",
+                        lastHeartbeat: new Date(),
+                      })
+                      .where
+              operation: write_or_read
+            - kind: database
+              target: db.delete(agents).where(eq(agents.id, id)).returning
+              operation: write_or_read
+        - name: ensureValidReferences
+          kind: method
+          async: true
+          generator: false
+          params:
+            - name: input
+              type: CreateAgentProfileInput
+              optional: false
+              rest: false
+            - name: currentAgentId
+              type: string
+              optional: true
+              rest: false
+          returns: void
+          throws:
+            - Error
+          operations:
+            - op: call
+              target: $getDb
+              args: []
+              assignTo: db
+            - op: branch
+              condition: input.l3Subtype && input.authorityLevel !== 3
+              then:
+                - op: throw
+                  error: Error
+                  message: "\"Only authority level 3 agents may define an l3Subtype.\""
+            - op: branch
+              condition: input.fallbackAgentId && input.fallbackAgentId === currentAgentId
+              then:
+                - op: throw
+                  error: Error
+                  message: "\"An agent cannot fallback to itself.\""
+            - op: parallel
+              mode: all
+              body:
+                - op: call
+                  target: $db.query.modelModules.findFirst
+                  args:
+                    - "{ where: eq(modelModules.id, input.modelModuleId) }"
+                - op: call
+                  target: $db.query.instructionModules.findFirst
+                  args:
+                    - "{ where: eq(instructionModules.id, input.instructionModuleId) }"
+                - op: call
+                  target: $db.query.toolkitModules.findFirst
+                  args:
+                    - "{ where: eq(toolkitModules.id, input.toolkitModuleId) }"
+                - op: call
+                  target: $Promise.resolve
+                  args:
+                    - "null"
+                - op: call
+                  target: $db.query.constraintsModules.findFirst
+                  args:
+                    - "{ where: eq(constraintsModules.id, input.constraintsModuleId) }"
+                - op: call
+                  target: $Promise.resolve
+                  args:
+                    - "null"
+                - op: call
+                  target: $db.query.capabilitiesModules.findFirst
+                  args:
+                    - "{ where: eq(capabilitiesModules.id, input.capabilitiesModuleId) }"
+                - op: call
+                  target: $Promise.resolve
+                  args:
+                    - "null"
+                - op: call
+                  target: $db.query.agents.findFirst
+                  args:
+                    - "{ where: eq(agents.id, input.fallbackAgentId) }"
+                - op: call
+                  target: $Promise.resolve
+                  args:
+                    - "null"
+            - op: branch
+              condition: "!modelModule"
+              then:
+                - op: throw
+                  error: Error
+                  message: "`ModelModule not found: ${input.modelModuleId}`"
+            - op: branch
+              condition: "!instructionModule"
+              then:
+                - op: throw
+                  error: Error
+                  message: "`InstructionModule not found: ${input.instructionModuleId}`"
+            - op: branch
+              condition: input.toolkitModuleId && !toolkitModule
+              then:
+                - op: throw
+                  error: Error
+                  message: "`ToolkitModule not found: ${input.toolkitModuleId}`"
+            - op: branch
+              condition: input.constraintsModuleId && !constraintsModule
+              then:
+                - op: throw
+                  error: Error
+                  message: "`ConstraintsModule not found: ${input.constraintsModuleId}`"
+            - op: branch
+              condition: input.capabilitiesModuleId && !capabilitiesModule
+              then:
+                - op: throw
+                  error: Error
+                  message: "`CapabilitiesModule not found: ${input.capabilitiesModuleId}`"
+            - op: branch
+              condition: input.fallbackAgentId && !fallbackAgent
+              then:
+                - op: throw
+                  error: Error
+                  message: "`Fallback agent not found: ${input.fallbackAgentId}`"
+          effects:
+            - kind: database
+              target: db.query.agents.findMany
+              operation: write_or_read
+            - kind: database
+              target: db.query.agents.findFirst
+              operation: write_or_read
+            - kind: construction
+              target: Date
+            - kind: database
+              target: db.insert(agents).values
+              operation: write_or_read
+            - kind: database
+              target: db.insert(runtimeStates).values
+              operation: write_or_read
+            - kind: database
+              target: |-
+                db
+                      .update(agents)
+                      .set({
+                        name: merged.name,
+                        title: merged.title,
+                        species: merged.species ?? null,
+                        avatar: merged.avatar ?? null,
+                        authorityLevel: merged.authorityLevel,
+                        l3Subtype: merged.l3Subtype ?? null,
+                        modelModuleId: merged.modelModuleId,
+                        instructionModuleId: merged.instructionModuleId,
+                        toolkitModuleId: merged.toolkitModuleId ?? null,
+                        constraintsModuleId: merged.constraintsModuleId ?? null,
+                        capabilitiesModuleId: merged.capabilitiesModuleId ?? null,
+                        memorySharingPolicy: merged.memorySharingPolicy,
+                        isOmniscient: merged.isOmniscient ?? false,
+                        fallbackAgentId: merged.fallbackAgentId ?? null,
+                        categoryPermissions: merged.categoryPermissions ?? [],
+                        permissions: merged.permissions ? normalizePermissions(merged.permissions) : existing.permissions,
+                        status: merged.status ?? existing.status,
+                        isTemplate: merged.isTemplate ?? false,
+                        updatedAt: new Date(),
+                      })
+                      .where
+              operation: write_or_read
+            - kind: database
+              target: |-
+                db
+                      .update(runtimeStates)
+                      .set({
+                        status: merged.status === "offline" ? "offline" : "idle",
+                        lastHeartbeat: new Date(),
+                      })
+                      .where
+              operation: write_or_read
+            - kind: database
+              target: db.delete(agents).where(eq(agents.id, id)).returning
+              operation: write_or_read
+            - kind: database
+              target: db.query.modelModules.findFirst
+              operation: write_or_read
+            - kind: database
+              target: db.query.instructionModules.findFirst
+              operation: write_or_read
+            - kind: database
+              target: db.query.toolkitModules.findFirst
+              operation: write_or_read
+            - kind: database
+              target: db.query.constraintsModules.findFirst
+              operation: write_or_read
+            - kind: database
+              target: db.query.capabilitiesModules.findFirst
+              operation: write_or_read
+  capabilities: [ async, await, parallel ]
+  effects:
+    - kind: construction
+      target: Date
+    - kind: database
+      target: |-
+        db
+              .update(agents)
+              .set({
+                name: merged.name,
+                title: merged.title,
+                species: merged.species ?? null,
+                avatar: merged.avatar ?? null,
+                authorityLevel: merged.authorityLevel,
+                l3Subtype: merged.l3Subtype ?? null,
+                modelModuleId: merged.modelModuleId,
+                instructionModuleId: merged.instructionModuleId,
+                toolkitModuleId: merged.toolkitModuleId ?? null,
+                constraintsModuleId: merged.constraintsModuleId ?? null,
+                capabilitiesModuleId: merged.capabilitiesModuleId ?? null,
+                memorySharingPolicy: merged.memorySharingPolicy,
+                isOmniscient: merged.isOmniscient ?? false,
+                fallbackAgentId: merged.fallbackAgentId ?? null,
+                categoryPermissions: merged.categoryPermissions ?? [],
+                permissions: merged.permissions ? normalizePermissions(merged.permissions) : existing.permissions,
+                status: merged.status ?? existing.status,
+                isTemplate: merged.isTemplate ?? false,
+                updatedAt: new Date(),
+              })
+              .where
+      operation: write_or_read
+    - kind: database
+      target: |-
+        db
+              .update(runtimeStates)
+              .set({
+                status: merged.status === "offline" ? "offline" : "idle",
+                lastHeartbeat: new Date(),
+              })
+              .where
+      operation: write_or_read
+    - kind: database
+      target: db.delete(agents).where(eq(agents.id, id)).returning
+      operation: write_or_read
+    - kind: database
+      target: db.insert(agents).values
+      operation: write_or_read
+    - kind: database
+      target: db.insert(runtimeStates).values
+      operation: write_or_read
+    - kind: database
+      target: db.query.agents.findFirst
+      operation: write_or_read
+    - kind: database
+      target: db.query.agents.findMany
+      operation: write_or_read
+    - kind: database
+      target: db.query.capabilitiesModules.findFirst
+      operation: write_or_read
+    - kind: database
+      target: db.query.constraintsModules.findFirst
+      operation: write_or_read
+    - kind: database
+      target: db.query.instructionModules.findFirst
+      operation: write_or_read
+    - kind: database
+      target: db.query.modelModules.findFirst
+      operation: write_or_read
+    - kind: database
+      target: db.query.toolkitModules.findFirst
+      operation: write_or_read
+  fidelity: partial
+  diagnostics:
+    - severity: warning
+      code: OPAQUE_OPERATION
+      path: source:1725
+      message: Variable initializer is not represented by the semantic operation grammar
+      sourceSpan:
+        start: 1725
+        length: 24
+    - severity: warning
+      code: OPAQUE_OPERATION
+      path: source:4332
+      message: Variable initializer is not represented by the semantic operation grammar
+      sourceSpan:
+        start: 4332
+        length: 1590
+    - severity: warning
+      code: OPAQUE_CONSTANT_INITIALIZER
+      path: source:9816
+      message: Constant initializer is preserved as a type but not as executable behavior
+      sourceSpan:
+        start: 9816
+        length: 35
+  constraints:
+    style:
+      indent: 2
+      quotes: double
+      semicolons: true
+provenance:
+  sourceHash: 8b4d355a104c11b70e2aac39c49585bb9a39c9e6d4df3af35fa57f34e17f9e58
+  parser: typescript-compiler-api
+  parserVersion: 5.9.3

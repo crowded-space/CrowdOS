@@ -1,0 +1,161 @@
+# ACAD Twin-YAML
+# Version: 1.1.0
+# Source: packages/server/src/types/task.types
+
+block:
+  id: "d77d44eb-e274-4b49-bd59-c521c41f7b0b"
+  label: "TaskTypes"
+  position: { x: 4200, y: 1300 }
+  size: { width: 240, height: 200 }
+  color: "#16a085"
+  collapsed: false
+  ports:
+    imports: []
+    exports:
+      - TaskTypesModule
+
+spec:
+  version: "1.1.0"
+  file:
+    path: packages/server/src/types/task.types
+    language: typescript
+  imports: []
+  types:
+    - name: SpawnFailurePolicy
+      kind: struct
+      fields:
+        - name: value
+          type: any
+          required: true
+    - name: SpawnStatus
+      kind: struct
+      fields:
+        - name: value
+          type: any
+          required: true
+    - name: TaskPriority
+      kind: struct
+      fields:
+        - name: value
+          type: any
+          required: true
+    - name: SubtaskDefinition
+      kind: struct
+      fields:
+        - name: id
+          type: string
+          required: true
+        - name: title
+          type: string
+          required: true
+        - name: instructions
+          type: string
+          required: true
+        - name: priority
+          type: TaskPriority
+          required: true
+    - name: SpawnRequest
+      kind: struct
+      fields:
+        - name: id
+          type: string
+          required: true
+        - name: requestedBy
+          type: string
+          required: true
+        - name: channelId
+          type: string
+          required: true
+        - name: workerTemplateId
+          type: string
+          required: true
+        - name: supervisorTemplateId
+          type: string
+          required: true
+        - name: subtasks
+          type: "SubtaskDefinition[]"
+          required: true
+        - name: failurePolicy
+          type: SpawnFailurePolicy
+          required: true
+        - name: maxRetries
+          type: number
+          required: true
+        - name: status
+          type: SpawnStatus
+          required: true
+        - name: createdAt
+          type: Date
+          required: true
+    - name: TaskFile
+      kind: struct
+      fields:
+        - name: id
+          type: string
+          required: true
+        - name: spawnRequestId
+          type: string
+          required: true
+        - name: subtaskId
+          type: string
+          required: true
+        - name: title
+          type: string
+          required: true
+        - name: content
+          type: string
+          required: true
+        - name: workerAgentId
+          type: string
+          required: true
+        - name: supervisorAgentId
+          type: string
+          required: true
+        - name: status
+          type: SpawnStatus
+          required: true
+        - name: createdAt
+          type: Date
+          required: true
+    - name: ScheduledTask
+      kind: struct
+      fields:
+        - name: id
+          type: string
+          required: true
+        - name: cronExpression
+          type: string
+          required: true
+        - name: channelId
+          type: string
+          required: true
+        - name: targetAgentId
+          type: string
+          required: true
+        - name: taskPayload
+          type: "Record<string, unknown>"
+          required: true
+        - name: isActive
+          type: boolean
+          required: true
+        - name: nextRun
+          type: Date
+          required: false
+        - name: createdAt
+          type: Date
+          required: true
+  exports:
+    - name: TaskTypesModule
+      kind: function
+      async: false
+      params: []
+      returns: void
+      doc: "Module definition for packages/server/src/types/task.types.ts"
+      intent:
+        - action: return
+          value: "void"
+  constraints:
+    style:
+      indent: 2
+      quotes: double
+      semicolons: true

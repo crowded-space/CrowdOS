@@ -1,0 +1,66 @@
+# ACAD Twin-YAML
+# Version: 1.1.0
+# Source: packages/server/src/db/check
+
+block:
+  id: "b47a9fd3-96f7-4542-ba48-1e7a730b28b4"
+  label: "Check"
+  position: { x: 280, y: 260 }
+  size: { width: 240, height: 200 }
+  color: "#27ae60"
+  collapsed: false
+  ports:
+    imports:
+      - randomUUID
+      - eq
+      - closeDatabaseConnection
+      - ensurePgVectorExtension
+      - getDb
+      - agents
+      - channels
+      - instructionModules
+      - modelModules
+      - messages
+    exports:
+      - CheckModule
+
+spec:
+  version: "1.1.0"
+  file:
+    path: packages/server/src/db/check
+    language: typescript
+  imports:
+    - from: "node:crypto"
+      symbols:
+        - randomUUID
+    - from: "drizzle-orm"
+      symbols:
+        - eq
+    - from: "../config/database"
+      symbols:
+        - closeDatabaseConnection
+        - ensurePgVectorExtension
+        - getDb
+    - from: "./schema"
+      symbols:
+        - agents
+        - channels
+        - instructionModules
+        - modelModules
+        - messages
+  types: []
+  exports:
+    - name: CheckModule
+      kind: function
+      async: false
+      params: []
+      returns: void
+      doc: "Module definition for packages/server/src/db/check.ts"
+      intent:
+        - action: return
+          value: "void"
+  constraints:
+    style:
+      indent: 2
+      quotes: double
+      semicolons: true

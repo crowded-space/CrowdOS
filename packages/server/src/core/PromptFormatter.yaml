@@ -1,0 +1,82 @@
+# ACAD Twin-YAML
+# Version: 1.1.0
+# Source: packages/server/src/core/PromptFormatter
+
+block:
+  id: "e03203e3-3507-4dcb-8f4f-0117fe7bab36"
+  label: "PromptFormatter"
+  position: { x: 3920, y: 0 }
+  size: { width: 240, height: 200 }
+  color: "#2980b9"
+  collapsed: false
+  ports:
+    imports:
+      - MentionMetadata
+    exports:
+      - formatMessageForAgent
+
+spec:
+  version: "1.1.0"
+  file:
+    path: packages/server/src/core/PromptFormatter
+    language: typescript
+  imports:
+    - from: "../types/mention.types"
+      symbols:
+        - MentionMetadata
+  types:
+    - name: MessageInput
+      kind: struct
+      fields:
+        - name: authorName
+          type: string
+          required: true
+        - name: authorLevel
+          type: "string | number"
+          required: true
+        - name: content
+          type: string
+          required: true
+        - name: mentions
+          type: "MentionMetadata[]"
+          required: false
+        - name: isInternalMonologue
+          type: boolean
+          required: false
+  exports:
+    - name: formatMessageForAgent
+      kind: function
+      async: false
+      params:
+        - name: message
+          type: MessageInput
+        - name: recipientAgentName
+          type: string
+      returns: string
+      doc: "Format a channel message into XML-like tagging for LLMs. Handles escaping/injecting headers and attributes like level, mentions, and attention flags."
+      intent:
+        - action: call
+          value: "escapeXmlAttr"
+        - action: call
+          value: "escapeXmlAttr"
+        - action: call
+          value: "String"
+        - action: if
+          condition: "recipientAgentName && message.mentions"
+        - action: call
+          value: "message.mentions.find"
+        - action: call
+          value: "m.targetName.toLowerCase"
+        - action: call
+          value: "recipientAgentName.toLowerCase"
+        - action: call
+          value: "m.targetName.toLowerCase"
+        - action: call
+          value: "recipientAgentName.toLowerCase"
+        - action: if
+          condition: "targetMention"
+  constraints:
+    style:
+      indent: 2
+      quotes: double
+      semicolons: true

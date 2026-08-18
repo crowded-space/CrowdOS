@@ -1,0 +1,72 @@
+# ACAD Twin-YAML
+# Version: 1.1.0
+# Source: packages/server/src/runtime/providers/CustomAdapter
+
+block:
+  id: "43131399-dc73-43eb-afc6-4f48a4af53f9"
+  label: "CustomAdapter"
+  position: { x: 1680, y: 780 }
+  size: { width: 240, height: 200 }
+  color: "#d35400"
+  collapsed: false
+  ports:
+    imports:
+      - IProviderAdapter
+      - ModelModuleConfig
+      - LLMRequest
+      - LLMResponse
+    exports:
+      - "CustomAdapter.call"
+
+spec:
+  version: "1.1.0"
+  file:
+    path: packages/server/src/runtime/providers/CustomAdapter
+    language: typescript
+  imports:
+    - from: "../types"
+      symbols:
+        - IProviderAdapter
+        - ModelModuleConfig
+        - LLMRequest
+        - LLMResponse
+  types: []
+  exports:
+    - name: CustomAdapter.call
+      kind: function
+      async: true
+      params:
+        - name: config
+          type: ModelModuleConfig
+        - name: request
+          type: LLMRequest
+        - name: onChunk
+          type: "(chunk: { content: string; thoughts?: string; isThoughts?: boolean }) => void"
+      returns: "Promise<LLMResponse>"
+      doc: "Method CustomAdapter.call"
+      intent:
+        - action: if
+          condition: "endpointUrl.endsWith('/')"
+        - action: call
+          value: "endpointUrl.endsWith"
+        - action: call
+          value: "endpointUrl.slice"
+        - action: if
+          condition: "request.systemPrompt"
+        - action: call
+          value: "messages.push"
+        - action: if
+          condition: "request.history"
+        - action: if
+          condition: "msg.role === 'user' || msg.role === 'assistant'"
+        - action: call
+          value: "messages.push"
+        - action: call
+          value: "messages.push"
+        - action: if
+          condition: "apiKey"
+  constraints:
+    style:
+      indent: 2
+      quotes: single
+      semicolons: false

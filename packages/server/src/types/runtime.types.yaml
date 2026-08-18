@@ -1,0 +1,125 @@
+# ACAD Twin-YAML
+# Version: 1.1.0
+# Source: packages/server/src/types/runtime.types
+
+block:
+  id: "08a30cca-3a66-4933-82a4-bf125071bfda"
+  label: "RuntimeTypes"
+  position: { x: 3920, y: 1300 }
+  size: { width: 240, height: 200 }
+  color: "#16a085"
+  collapsed: false
+  ports:
+    imports: []
+    exports:
+      - RuntimeTypesModule
+
+spec:
+  version: "1.1.0"
+  file:
+    path: packages/server/src/types/runtime.types
+    language: typescript
+  imports: []
+  types:
+    - name: RuntimeOverrideType
+      kind: struct
+      fields:
+        - name: value
+          type: any
+          required: true
+    - name: InstructionPatch
+      kind: struct
+      fields:
+        - name: append
+          type: "string[]"
+          required: false
+        - name: replace
+          type: "string[]"
+          required: false
+    - name: PermissionPatch
+      kind: struct
+      fields:
+        - name: grantTools
+          type: "string[]"
+          required: false
+        - name: revokeTools
+          type: "string[]"
+          required: false
+    - name: RuntimeOverride
+      kind: struct
+      fields:
+        - name: id
+          type: string
+          required: true
+        - name: targetAgentId
+          type: string
+          required: true
+        - name: overrideType
+          type: RuntimeOverrideType
+          required: true
+        - name: instructionPatch
+          type: InstructionPatch
+          required: false
+        - name: permissionPatch
+          type: PermissionPatch
+          required: false
+        - name: createdBy
+          type: string
+          required: true
+        - name: expiresAt
+          type: Date
+          required: false
+        - name: createdAt
+          type: Date
+          required: true
+    - name: RuntimeStatus
+      kind: struct
+      fields:
+        - name: value
+          type: any
+          required: true
+    - name: RuntimeState
+      kind: struct
+      fields:
+        - name: sessionId
+          type: string
+          required: true
+        - name: agentId
+          type: string
+          required: true
+        - name: status
+          type: RuntimeStatus
+          required: true
+        - name: activeTask
+          type: string
+          required: false
+        - name: activeChannelId
+          type: string
+          required: false
+        - name: startedAt
+          type: Date
+          required: false
+        - name: overridesApplied
+          type: "string[]"
+          required: true
+        - name: lastHeartbeat
+          type: Date
+          required: false
+        - name: createdAt
+          type: Date
+          required: true
+  exports:
+    - name: RuntimeTypesModule
+      kind: function
+      async: false
+      params: []
+      returns: void
+      doc: "Module definition for packages/server/src/types/runtime.types.ts"
+      intent:
+        - action: return
+          value: "void"
+  constraints:
+    style:
+      indent: 2
+      quotes: double
+      semicolons: true

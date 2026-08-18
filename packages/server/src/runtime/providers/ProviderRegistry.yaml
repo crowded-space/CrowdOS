@@ -1,0 +1,60 @@
+# ACAD Twin-YAML
+# Version: 1.1.0
+# Source: packages/server/src/runtime/providers/ProviderRegistry
+
+block:
+  id: "1abcee6d-1053-4adc-92a1-1081459c346d"
+  label: "ProviderRegistry"
+  position: { x: 3080, y: 780 }
+  size: { width: 240, height: 200 }
+  color: "#d35400"
+  collapsed: false
+  ports:
+    imports:
+      - IProviderAdapter
+    exports:
+      - ProviderRegistry
+
+spec:
+  version: "1.1.0"
+  file:
+    path: packages/server/src/runtime/providers/ProviderRegistry
+    language: typescript
+  imports:
+    - from: "../types"
+      symbols:
+        - IProviderAdapter
+  types: []
+  exports:
+    - name: ProviderRegistry
+      kind: function
+      async: false
+      params: []
+      returns: any
+      doc: "Exported ProviderRegistry."
+      intent:
+        - action: call
+          value: "registry.set"
+        - action: call
+          value: "registry.get"
+        - action: if
+          condition: "!adapter"
+        - action: throw
+          value: "new Error(         `[ProviderRegistry] No adapter registered for provider: \"${provider}\". Registered: ${[...registry.keys()].join(', ')}`       )"
+        - action: call
+          value: "[...registry.keys()].join"
+        - action: call
+          value: "registry.keys"
+        - action: return
+          value: "adapter"
+        - action: return
+          value: "registry.has(provider)"
+        - action: call
+          value: "registry.has"
+        - action: return
+          value: "[...registry.keys()]"
+  constraints:
+    style:
+      indent: 2
+      quotes: single
+      semicolons: false

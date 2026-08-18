@@ -1,0 +1,68 @@
+# ACAD Twin-YAML
+# Version: 1.1.0
+# Source: packages/server/src/types/mention.types
+
+block:
+  id: "86e1eee7-13c1-4b91-94bd-7128f344a715"
+  label: "MentionTypes"
+  position: { x: 2800, y: 1300 }
+  size: { width: 240, height: 200 }
+  color: "#16a085"
+  collapsed: false
+  ports:
+    imports: []
+    exports:
+      - MentionTypesModule
+
+spec:
+  version: "1.1.0"
+  file:
+    path: packages/server/src/types/mention.types
+    language: typescript
+  imports: []
+  types:
+    - name: MentionType
+      kind: struct
+      fields:
+        - name: value
+          type: any
+          required: true
+    - name: MentionFlag
+      kind: struct
+      fields:
+        - name: value
+          type: any
+          required: true
+    - name: MentionMetadata
+      kind: struct
+      fields:
+        - name: type
+          type: MentionType
+          required: true
+        - name: targetId
+          type: string
+          required: true
+        - name: targetName
+          type: string
+          required: true
+        - name: position
+          type: number
+          required: true
+        - name: flag
+          type: MentionFlag
+          required: true
+  exports:
+    - name: MentionTypesModule
+      kind: function
+      async: false
+      params: []
+      returns: void
+      doc: "Module definition for packages/server/src/types/mention.types.ts"
+      intent:
+        - action: return
+          value: "void"
+  constraints:
+    style:
+      indent: 2
+      quotes: double
+      semicolons: true

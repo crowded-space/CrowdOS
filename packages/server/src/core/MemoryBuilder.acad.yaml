@@ -1,0 +1,99 @@
+# ACAD Twin-YAML
+# Version: 1.1.0
+# Source: packages/server/src/core/MemoryBuilder
+
+block:
+  id: bf18be15-af8f-5ae9-b56c-0567b8a68a45
+  label: MemoryBuilder
+  position: { x: 0, y: 0 }
+  size: { width: 240, height: 200 }
+  color: "#50B27D"
+  collapsed: false
+  ports: { imports: [ randomUUID, and, asc, desc, eq, gt, inArray, isNull, or, getDb, agents, channels, modelModules, instructionModules, toolkitModules, tools, runtimeOverrides, messages, taskFiles, compressedSummaries, formatMessageForAgent ], exports: [] }
+spec:
+  version: 1.1.0
+  file:
+    path: packages/server/src/core/MemoryBuilder
+    language: typescript
+  imports:
+    - module: node:crypto
+      symbols: [ randomUUID ]
+    - module: drizzle-orm
+      symbols: [ and, asc, desc, eq, gt, inArray, isNull, or ]
+    - module: ../Shared/config/database.js
+      symbols: [ getDb ]
+    - module: ../db/schema.js
+      symbols: [ agents, channels, modelModules, instructionModules, toolkitModules, tools, runtimeOverrides, messages, taskFiles, compressedSummaries ]
+    - module: ./PromptFormatter.js
+      symbols: [ formatMessageForAgent ]
+  types:
+    - name: BuildPromptInput
+      kind: struct
+      fields:
+        - name: agentId
+          type: string
+          required: true
+        - name: channelId
+          type: string
+          required: true
+        - name: currentMessage
+          type: string
+          required: false
+        - name: spawnRequestId
+          type: string
+          required: false
+        - name: summarizer
+          type:
+            type: array
+            items: Object
+          required: false
+        - name: previousSummary
+          type: Object
+          required: false
+        - name: tokenCounter
+          type: Object
+          required: false
+    - name: PromptAssemblyResult
+      kind: struct
+      fields:
+        - name: systemPrompt
+          type: string
+          required: true
+        - name: userPrompt
+          type: string
+          required: true
+        - name: modelParameters
+          type: Object
+          required: true
+        - name: temperature
+          type: float
+          required: true
+        - name: topP
+          type: float
+          required: true
+        - name: maxOutputTokens
+          type: float
+          required: true
+        - name: stopSequences
+          type:
+            type: array
+            items: string
+          required: true
+        - name: estimatedTokens
+          type: Object
+          required: true
+        - name: systemPromptTokens
+          type: float
+          required: true
+        - name: userPromptTokens
+          type: float
+          required: true
+        - name: totalTokens
+          type: float
+          required: true
+  exports: []
+  constraints:
+    style:
+      indent: 2
+      quotes: double
+      semicolons: true

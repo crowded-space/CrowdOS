@@ -1,0 +1,163 @@
+# ACAD Twin-YAML
+# Version: 2.0.0
+# Source: packages/server/src/Agents/agentGate
+
+block:
+  id: f73fc146-b261-5322-b6d8-2dc47d90c056
+  label: AgentGate
+  position: { x: 0, y: 0 }
+  size: { width: 280, height: 220 }
+  color: "#4A90D9"
+  collapsed: false
+  ports: { imports: [ AgentError, EscalationChain, agentRegistry, AgentRegistry, AgentSpawnManager, agentParamsSchema, createAgentSchema, listAgentsQuerySchema, updateAgentSchema ], exports: [ agentGate ] }
+spec:
+  version: 2.0.0
+  file:
+    path: packages/server/src/Agents/agentGate
+    language: typescript
+  target:
+    language: typescript
+    moduleSystem: esmodule
+    compiler: typescript
+  imports:
+    - module: ./agentErrors
+      imported: AgentError
+      local: AgentError
+      kind: value
+    - module: ./agentErrors
+      imported: EscalationChain
+      local: EscalationChain
+      kind: value
+    - module: ./agentService
+      imported: agentRegistry
+      local: agentRegistry
+      kind: value
+    - module: ./agentService
+      imported: AgentRegistry
+      local: AgentRegistry
+      kind: value
+    - module: ./agentSpawnManager
+      imported: AgentSpawnManager
+      local: AgentSpawnManager
+      kind: value
+    - module: ./agentTypes
+      imported: AgentAuthorityPermissions
+      local: AgentAuthorityPermissions
+      kind: type
+    - module: ./agentTypes
+      imported: AgentProfile
+      local: AgentProfile
+      kind: type
+    - module: ./agentTypes
+      imported: AgentRegistryFilters
+      local: AgentRegistryFilters
+      kind: type
+    - module: ./agentTypes
+      imported: AgentStatus
+      local: AgentStatus
+      kind: type
+    - module: ./agentTypes
+      imported: AuthorityLevel
+      local: AuthorityLevel
+      kind: type
+    - module: ./agentTypes
+      imported: CreateAgentProfileInput
+      local: CreateAgentProfileInput
+      kind: type
+    - module: ./agentTypes
+      imported: L3Subtype
+      local: L3Subtype
+      kind: type
+    - module: ./agentTypes
+      imported: MemorySharingPolicy
+      local: MemorySharingPolicy
+      kind: type
+    - module: ./agentTypes
+      imported: UpdateAgentProfileInput
+      local: UpdateAgentProfileInput
+      kind: type
+    - module: ./agentValidators
+      imported: AgentParams
+      local: AgentParams
+      kind: type
+    - module: ./agentValidators
+      imported: agentParamsSchema
+      local: agentParamsSchema
+      kind: value
+    - module: ./agentValidators
+      imported: CreateAgentBody
+      local: CreateAgentBody
+      kind: type
+    - module: ./agentValidators
+      imported: createAgentSchema
+      local: createAgentSchema
+      kind: value
+    - module: ./agentValidators
+      imported: ListAgentsQuery
+      local: ListAgentsQuery
+      kind: type
+    - module: ./agentValidators
+      imported: listAgentsQuerySchema
+      local: listAgentsQuerySchema
+      kind: value
+    - module: ./agentValidators
+      imported: UpdateAgentBody
+      local: UpdateAgentBody
+      kind: type
+    - module: ./agentValidators
+      imported: updateAgentSchema
+      local: updateAgentSchema
+      kind: value
+  types: []
+  exports:
+    - name: agentGate
+      kind: constant
+      type: any
+  capabilities: []
+  effects: []
+  fidelity: unsupported
+  diagnostics:
+    - severity: error
+      code: UNSUPPORTED_RE_EXPORT
+      path: source:1048
+      message: Wildcard and local re-export declarations require project-level symbol resolution
+      sourceSpan:
+        start: 1048
+        length: 79
+    - severity: warning
+      code: OPAQUE_CONSTANT_INITIALIZER
+      path: source:1142
+      message: Constant initializer is preserved as a type but not as executable behavior
+      sourceSpan:
+        start: 1142
+        length: 443
+    - severity: error
+      code: UNSUPPORTED_RE_EXPORT
+      path: source:650
+      message: Wildcard and local re-export declarations require project-level symbol resolution
+      sourceSpan:
+        start: 650
+        length: 88
+    - severity: error
+      code: UNSUPPORTED_RE_EXPORT
+      path: source:739
+      message: Wildcard and local re-export declarations require project-level symbol resolution
+      sourceSpan:
+        start: 739
+        length: 208
+    - severity: error
+      code: UNSUPPORTED_RE_EXPORT
+      path: source:948
+      message: Wildcard and local re-export declarations require project-level symbol resolution
+      sourceSpan:
+        start: 948
+        length: 99
+  constraints:
+    style:
+      indent: 2
+      quotes: double
+      semicolons: true
+provenance:
+  sourceHash: 3e0aba6cf13dd198d7ab93c73685819bc4e9ed6b01101361399db26688a20382
+  parser: typescript-compiler-api
+  parserVersion: 5.9.3

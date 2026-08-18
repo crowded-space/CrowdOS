@@ -1,0 +1,125 @@
+# ACAD Twin-YAML
+# Version: 1.1.0
+# Source: packages/server/src/types/index
+
+block:
+  id: "165b3823-ceea-4b6f-bbb2-2b66657fa7b6"
+  label: "Index"
+  position: { x: 2520, y: 1300 }
+  size: { width: 240, height: 200 }
+  color: "#16a085"
+  collapsed: false
+  ports:
+    imports:
+      - ToolCall
+      - TokenUsage
+    exports:
+      - IndexModule
+
+spec:
+  version: "1.1.0"
+  file:
+    path: packages/server/src/types/index
+    language: typescript
+  imports:
+    - from: "./tool.types"
+      symbols:
+        - ToolCall
+        - TokenUsage
+  types:
+    - name: StandardMessage
+      kind: struct
+      fields:
+        - name: role
+          type: "\"system\" | \"user\" | \"assistant\" | \"tool\""
+          required: true
+        - name: content
+          type: string
+          required: true
+        - name: name
+          type: string
+          required: false
+        - name: toolCallId
+          type: string
+          required: false
+    - name: GenerationResult
+      kind: struct
+      fields:
+        - name: content
+          type: string
+          required: true
+        - name: toolCalls
+          type: "ToolCall[]"
+          required: false
+        - name: usage
+          type: TokenUsage
+          required: true
+        - name: finishReason
+          type: "\"stop\" | \"tool_call\" | \"length\" | \"error\""
+          required: true
+    - name: StreamChunk
+      kind: struct
+      fields:
+        - name: content
+          type: string
+          required: false
+        - name: toolCall
+          type: "Partial<ToolCall>"
+          required: false
+        - name: usage
+          type: TokenUsage
+          required: false
+        - name: done
+          type: boolean
+          required: true
+    - name: TokenBudget
+      kind: struct
+      fields:
+        - name: globalSoftCap
+          type: number
+          required: true
+        - name: perProviderBudget
+          type: "Record<string, {     softCap: number;     used: number;     resetPeriod: \"daily\" | \"weekly\" | \"monthly\" | \"never\";     lastResetAt: Date;   }>"
+          required: true
+    - name: TokenUsageLog
+      kind: struct
+      fields:
+        - name: id
+          type: string
+          required: true
+        - name: agentId
+          type: string
+          required: true
+        - name: channelId
+          type: string
+          required: true
+        - name: modelProfileId
+          type: string
+          required: true
+        - name: promptTokens
+          type: number
+          required: true
+        - name: completionTokens
+          type: number
+          required: true
+        - name: totalTokens
+          type: number
+          required: true
+        - name: timestamp
+          type: Date
+          required: true
+  exports:
+    - name: IndexModule
+      kind: function
+      async: false
+      params: []
+      returns: void
+      doc: "Module definition for packages/server/src/types/index.ts"
+      intent:
+        - action: return
+          value: "void"
+  constraints:
+    style:
+      indent: 2
+      quotes: double
+      semicolons: true

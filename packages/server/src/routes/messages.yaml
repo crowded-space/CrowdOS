@@ -1,0 +1,84 @@
+# ACAD Twin-YAML
+# Version: 1.1.0
+# Source: packages/server/src/routes/messages
+
+block:
+  id: "53f66d1d-826d-4883-93ca-2d9fa15666e5"
+  label: "Messages"
+  position: { x: 1400, y: 520 }
+  size: { width: 240, height: 200 }
+  color: "#8e44ad"
+  collapsed: false
+  ports:
+    imports:
+      - FastifyInstance
+      - z
+      - eq
+      - getDb
+      - messages
+      - stripToolCalls
+      - parseToolCalls
+    exports:
+      - messageRoutes
+
+spec:
+  version: "1.1.0"
+  file:
+    path: packages/server/src/routes/messages
+    language: typescript
+  imports:
+    - from: "fastify"
+      symbols:
+        - FastifyInstance
+    - from: "zod"
+      symbols:
+        - z
+    - from: "drizzle-orm"
+      symbols:
+        - eq
+    - from: "../config/database"
+      symbols:
+        - getDb
+    - from: "../db/schema"
+      symbols:
+        - messages
+    - from: "@community-agent/shared"
+      symbols:
+        - stripToolCalls
+        - parseToolCalls
+  types: []
+  exports:
+    - name: messageRoutes
+      kind: function
+      async: true
+      params:
+        - name: app
+          type: FastifyInstance
+      returns: void
+      doc: "Exported function messageRoutes."
+      intent:
+        - action: call
+          value: "app.get"
+        - action: call
+          value: "getDb"
+        - action: call
+          value: "db.query.messages.findMany"
+        - action: call
+          value: "eq"
+        - action: call
+          value: "asc"
+        - action: if
+          condition: "msg.isInternalMonologue"
+        - action: if
+          condition: "msg.content.startsWith(\"🛠️ [Tool Result: \")"
+        - action: call
+          value: "msg.content.startsWith"
+        - action: call
+          value: "msg.content.match"
+        - action: if
+          condition: "headerMatch"
+  constraints:
+    style:
+      indent: 2
+      quotes: single
+      semicolons: true

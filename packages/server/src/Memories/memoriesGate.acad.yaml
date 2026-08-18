@@ -1,0 +1,29 @@
+# ACAD Twin-YAML
+# Version: 1.1.0
+# Source: packages/server/src/Memories/memoriesGate
+
+block:
+  id: b697a6ef-c3cf-5e53-85cb-5e05b2401abf
+  label: MemoriesGate
+  position: { x: 0, y: 0 }
+  size: { width: 240, height: 200 }
+  color: "#50B27D"
+  collapsed: false
+  ports: { imports: [ resolveAgentId, generateNoteId, createMemoryNote, readMemoryNote, listMemoryPreviews, updateMemoryNote, archiveMemoryNote, suppressMemoryNote, retrieveMemoryCandidates, buildMemoryPreviewBlock ], exports: [] }
+spec:
+  version: 1.1.0
+  file:
+    path: packages/server/src/Memories/memoriesGate
+    language: typescript
+  imports:
+    - module: ./agentMemoryStore.js
+      symbols: [ resolveAgentId, generateNoteId, createMemoryNote, readMemoryNote, listMemoryPreviews, updateMemoryNote, archiveMemoryNote, suppressMemoryNote ]
+    - module: ./memoryRetrieval.js
+      symbols: [ retrieveMemoryCandidates, buildMemoryPreviewBlock ]
+  types: []
+  exports: []
+  constraints:
+    style:
+      indent: 2
+      quotes: double
+      semicolons: true
