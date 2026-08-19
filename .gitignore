@@ -1,0 +1,59 @@
+node_modules/
+dist/
+coverage/
+.turbo/
+.cache/
+.vite/
+playwright-report/
+test-results/
+.env
+.env.local
+.env.*.local
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+*.tsbuildinfo
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Specified project & metadata ignores
+.acad/
+.agents/
+.editorconfig
+.env.example
+.gitattributes
+.user idea/
+AGENTS.md
+DEVELOPMENT_BOARD.md
+GEMINI.md
+Identifier_Index.md
+codex session id.txt
+docs/
+dont readme.md
+execution-plan/
+target-frontend/
+
+# Tests & E2E ignores
+*.test.ts
+*.test.tsx
+*.test.js
+*.test.mjs
+*.test.jsx
+*.test.yaml
+*.test.yml
+*.spec.ts
+*.spec.tsx
+*.spec.js
+*.spec.mjs
+*.spec.jsx
+*.spec.yaml
+*.spec.yml
+__tests__/
+e2e/
+e2e-screenshots/
+vitest.config.*
+playwright.config.*
+

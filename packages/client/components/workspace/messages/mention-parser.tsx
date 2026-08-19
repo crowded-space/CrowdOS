@@ -292,13 +292,17 @@ function renderInlineStyles(text: string, mentionRegex: RegExp): React.ReactNode
     if (part.startsWith('`') && part.endsWith('`')) {
       const codeText = part.slice(1, -1);
       return (
-        <code key={index} className="px-1.5 py-0.5 rounded bg-zinc-950 font-mono text-[11px] text-indigo-300 border border-zinc-850/60 mx-0.5 shadow-inner">
+        <code key={`code-${index}`} className="px-1.5 py-0.5 rounded bg-zinc-950 font-mono text-[11px] text-indigo-300 border border-zinc-850/60 mx-0.5 shadow-inner">
           {codeText}
         </code>
       );
     }
 
-    return renderFormattedText(part, index, mentionRegex);
+    return (
+      <React.Fragment key={`fmt-${index}`}>
+        {renderFormattedText(part, index, mentionRegex)}
+      </React.Fragment>
+    );
   });
 }
 

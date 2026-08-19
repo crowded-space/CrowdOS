@@ -83,7 +83,7 @@ export class ConversationalRuntime extends BaseRuntime {
     } catch (err) {
       console.error(`[ConversationalRuntime] Error:`, err)
       await this.kernel.setAgentStatus(broker, packet.agentId, 'idle')
-      return this.buildFailedResult(packet, err)
+      return await this.buildFailedResult(packet, err, broker)
     }
   }
 }

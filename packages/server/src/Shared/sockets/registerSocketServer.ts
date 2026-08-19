@@ -85,7 +85,7 @@ async function emitRuntimeSnapshot(target: any): Promise<void> {
         id: ag.id,
         name: ag.name,
         title: ag.title,
-        species: ag.species || "Raven",
+        species: ag.species || "AI Assistant",
         avatar: ag.avatar || "🤖",
         authorityLevel: ag.authorityLevel,
         status: ag.status || "idle",

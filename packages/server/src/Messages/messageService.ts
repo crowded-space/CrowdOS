@@ -11,6 +11,7 @@ export async function getChannelMessages(channelId: string, includeMonologue: bo
   });
 
   const mergedList: any[] = [];
+  const pendingMonologues: Record<string, string> = {};
   const pendingToolCalls: Array<{
     agentId: string;
     toolCalls: Array<{ name: string; input: string }>;
@@ -65,19 +66,7 @@ export async function getChannelMessages(channelId: string, includeMonologue: bo
       } else {
         const cleanThoughts = stripToolCalls(msg.content);
         if (cleanThoughts) {
-          mergedList.push({
-            id: msg.id,
-            type: 'agent',
-            authorId: msg.authorId,
-            authorName: msg.authorName,
-            authorLevel: msg.authorLevel,
-            authorType: 'agent',
-            content: '',
-            channelId: msg.channelId,
-            timestamp: msg.timestamp,
-            sequenceNumber: msg.sequenceNumber,
-            metadata: { monologue: cleanThoughts }
-          });
+          pendingMonologues[msg.authorId] = cleanThoughts;
         }
 
         const calls = parseToolCalls(msg.content);
@@ -89,7 +78,15 @@ export async function getChannelMessages(channelId: string, includeMonologue: bo
         }
       }
     } else {
-      // Normal message
+      // Normal / final response message
+      const monologue = msg.authorType === 'agent' && pendingMonologues[msg.authorId]
+        ? pendingMonologues[msg.authorId]
+        : undefined;
+
+      if (msg.authorType === 'agent') {
+        delete pendingMonologues[msg.authorId];
+      }
+
       mergedList.push({
         id: msg.id,
         type: msg.authorType === 'user' ? 'human' : 'agent',
@@ -102,7 +99,24 @@ export async function getChannelMessages(channelId: string, includeMonologue: bo
         timestamp: msg.timestamp,
         sequenceNumber: msg.sequenceNumber,
         mentions: msg.mentions || [],
-        metadata: undefined
+        metadata: monologue ? { monologue } : undefined
+      });
+    }
+  }
+
+  for (const [agentId, monologue] of Object.entries(pendingMonologues)) {
+    if (monologue) {
+      mergedList.push({
+        id: 'monologue-' + agentId,
+        type: 'agent',
+        authorId: agentId,
+        authorName: 'Agent Swarm',
+        authorLevel: '3',
+        authorType: 'agent',
+        content: '*Reasoning completed*',
+        channelId: channelId,
+        timestamp: new Date().toISOString(),
+        metadata: { monologue }
       });
     }
   }

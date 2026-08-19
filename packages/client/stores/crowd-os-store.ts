@@ -249,7 +249,7 @@ const initialToolkitModules: ToolkitModule[] = [
 
 const initialAgents: Agent[] = [
   { id: 'agent-apex', name: 'Archon Apex', species: 'Falcon', level: 0, status: 'active', instructionModuleId: 'mod-inst-l0', modelModuleId: 'mod-model-heavy', toolkitModuleId: 'mod-tool-super', createdAt: new Date().toISOString(), lastActive: new Date().toISOString(), description: 'Strategic surveillance entity supervising cross-agent computational rates and execution rules.' },
-  { id: 'agent-raven', name: 'Raven Architect', species: 'Raven', level: 1, status: 'thinking', instructionModuleId: 'mod-inst-l1', modelModuleId: 'mod-model-heavy', toolkitModuleId: 'mod-tool-super', createdAt: new Date().toISOString(), lastActive: new Date().toISOString(), description: 'Workspace structural coordinator. Manages operational channels, delegates tasks, audits tool structures.' },
+  { id: 'agent-raven', name: 'Raven Architect', species: payload.species || 'AI Assistant', level: 1, status: 'thinking', instructionModuleId: 'mod-inst-l1', modelModuleId: 'mod-model-heavy', toolkitModuleId: 'mod-tool-super', createdAt: new Date().toISOString(), lastActive: new Date().toISOString(), description: 'Workspace structural coordinator. Manages operational channels, delegates tasks, audits tool structures.' },
   { id: 'agent-crow', name: 'Crow Orchestrator', species: 'Crow', level: 2, status: 'idle', instructionModuleId: 'mod-inst-l2', modelModuleId: 'mod-model-light', toolkitModuleId: 'mod-tool-super', parentId: 'agent-raven', createdAt: new Date().toISOString(), lastActive: new Date().toISOString(), description: 'Delegation and tasks router. Spawns, monitors, and validates temporary operations workers.' },
   { id: 'agent-sparrow', name: 'Sparrow Runner', species: 'Sparrow', level: 3, status: 'executing', instructionModuleId: 'mod-inst-l3-coder', modelModuleId: 'mod-model-light', toolkitModuleId: 'mod-tool-coder', parentId: 'agent-crow', createdAt: new Date().toISOString(), lastActive: new Date().toISOString(), description: 'Rapid frontend rendering drone focused on visual styling, touch mechanics, and UI layout trees.' },
   { id: 'agent-pigeon', name: 'Pigeon Gatherer', species: 'Pigeon', level: 3, status: 'sleeping', instructionModuleId: 'mod-inst-l3-coder', modelModuleId: 'mod-model-light', toolkitModuleId: 'mod-tool-coder', parentId: 'agent-crow', createdAt: new Date().toISOString(), lastActive: new Date().toISOString(), description: 'Asynchronous fetch/crawl operator gathering repository metadata and caching assets.' }
@@ -355,7 +355,8 @@ export const useCrowdOSStore = create<CrowdOSState>((set, get) => {
 
   // Keep track of streaming tool parser state per agent
   interface StreamParserState {
-    buffer: string;             // Raw text buffer to match tags
+    thoughtsBuffer: string;     // Accumulated thought reasoning buffer
+    contentBuffer: string;      // Accumulated user-facing content buffer
     inToolCall: boolean;        // Are we currently inside a <call_tool ...>...</call_tool> block?
     toolName: string;           // Extracted tool name
     toolInputBuffer: string;    // Captured content inside <call_tool>...</call_tool>
@@ -452,7 +453,8 @@ export const useCrowdOSStore = create<CrowdOSState>((set, get) => {
     const agentId = payload.agentId;
     if (!streamParsers[agentId]) {
       streamParsers[agentId] = {
-        buffer: '',
+        thoughtsBuffer: '',
+        contentBuffer: '',
         inToolCall: false,
         toolName: '',
         toolInputBuffer: ''
@@ -460,84 +462,64 @@ export const useCrowdOSStore = create<CrowdOSState>((set, get) => {
     }
 
     const p = streamParsers[agentId];
-    p.buffer += payload.chunk;
+    if (payload.isThoughts) {
+      p.thoughtsBuffer = (p.thoughtsBuffer || '') + payload.chunk;
+    } else {
+      p.contentBuffer = (p.contentBuffer || '') + payload.chunk;
+    }
 
-    // Parse the buffer to see if we've entered or completed a tool call
-    const openTagIdx = p.buffer.indexOf('<call_tool');
+    // Parse tool calls across both thoughts and content buffers
+    const combinedBuffer = (p.thoughtsBuffer || '') + '\n' + (p.contentBuffer || '');
+    const openTagIdx = combinedBuffer.indexOf('<call_tool');
     if (openTagIdx !== -1) {
-      // Look for the name attribute
-      const closeTagIdx = p.buffer.indexOf('>', openTagIdx);
+      const closeTagIdx = combinedBuffer.indexOf('>', openTagIdx);
       if (closeTagIdx !== -1) {
-        const tagText = p.buffer.substring(openTagIdx, closeTagIdx + 1);
+        const tagText = combinedBuffer.substring(openTagIdx, closeTagIdx + 1);
         const nameMatch = tagText.match(/name=["']([^"']+)["']/);
         if (nameMatch) {
           p.toolName = nameMatch[1];
         }
 
-        const closingTagIdx = p.buffer.indexOf('</call_tool>', closeTagIdx);
+        const closingTagIdx = combinedBuffer.indexOf('</call_tool>', closeTagIdx);
         if (closingTagIdx !== -1) {
-          p.toolInputBuffer = p.buffer.substring(closeTagIdx + 1, closingTagIdx);
+          p.toolInputBuffer = combinedBuffer.substring(closeTagIdx + 1, closingTagIdx);
           p.inToolCall = false;
         } else {
-          p.toolInputBuffer = p.buffer.substring(closeTagIdx + 1);
+          p.toolInputBuffer = combinedBuffer.substring(closeTagIdx + 1);
           p.inToolCall = true;
         }
       } else {
-        // Tag not complete yet
         p.inToolCall = false;
       }
     } else {
       p.inToolCall = false;
     }
 
-    // Reconstruct the clean text (stripped of <call_tool> ... </call_tool> blocks)
-    let cleanText = '';
-    let searchIdx = 0;
-    while (searchIdx < p.buffer.length) {
-      const startIdx = p.buffer.indexOf('<call_tool', searchIdx);
-      if (startIdx === -1) {
-        cleanText += p.buffer.substring(searchIdx);
-        break;
-      }
-      cleanText += p.buffer.substring(searchIdx, startIdx);
-      const endIdx = p.buffer.indexOf('</call_tool>', startIdx);
-      if (endIdx === -1) {
-        break; // Active block, strip it
-      }
-      searchIdx = endIdx + '</call_tool>'.length;
-    }
+    const cleanThoughts = stripToolCalls(p.thoughtsBuffer || '');
+    const cleanContent = stripToolCalls(p.contentBuffer || '');
 
     set(state => {
       let updated = [...state.messages];
 
-      // 1. Update the monologue or text streaming message
+      // 1. Update the monologue and text streaming message
       const existingIdx = updated.findIndex(m => m.id === `stream-${agentId}`);
       if (existingIdx !== -1) {
-        if (payload.isThoughts) {
-          updated[existingIdx] = {
-            ...updated[existingIdx],
-            metadata: {
-              ...updated[existingIdx].metadata,
-              monologue: cleanText
-            }
-          };
-        } else {
-          updated[existingIdx] = {
-            ...updated[existingIdx],
-            content: cleanText
-          };
-        }
+        updated[existingIdx] = {
+          ...updated[existingIdx],
+          content: cleanContent,
+          metadata: cleanThoughts ? { ...updated[existingIdx].metadata, monologue: cleanThoughts } : updated[existingIdx].metadata
+        };
       } else {
         const streamMsg: Message = {
           id: `stream-${agentId}`,
           type: 'agent',
-          content: payload.isThoughts ? '' : cleanText,
+          content: cleanContent,
           authorId: agentId,
           authorName: state.agents.find(a => a.id === agentId)?.name || 'Agent Swarm',
           authorAvatar: '🤖',
           channelId: payload.channelId,
           timestamp: new Date().toISOString(),
-          metadata: payload.isThoughts ? { monologue: cleanText } : undefined
+          metadata: cleanThoughts ? { monologue: cleanThoughts } : undefined
         };
         updated.push(streamMsg);
       }
@@ -547,7 +529,6 @@ export const useCrowdOSStore = create<CrowdOSState>((set, get) => {
         const toolMsgId = `stream-tool-${agentId}`;
         const existingToolIdx = updated.findIndex(m => m.id === toolMsgId);
 
-        // Format clean input string
         let cleanInput = p.toolInputBuffer.trim();
         cleanInput = cleanInput.replace(/^```json\s*/i, '').replace(/```$/, '').trim();
 
@@ -574,11 +555,11 @@ export const useCrowdOSStore = create<CrowdOSState>((set, get) => {
           updated.push(toolMsg);
         }
       }
- 
+
       return { messages: updated };
     });
   });
- 
+
   socket.on('tool:start', (payload: any) => {
     const activeCh = get().activeChannelId;
     if (payload.channelId !== activeCh) return;
@@ -702,7 +683,7 @@ export const useCrowdOSStore = create<CrowdOSState>((set, get) => {
       const newAgent: Agent = {
         id: payload.agentId,
         name: payload.name,
-        species: 'Raven',
+        species: payload.species || 'AI Assistant',
         level: payload.level as AgentLevel,
         status: 'active',
         createdAt: payload.timestamp || new Date().toISOString(),
@@ -735,7 +716,7 @@ export const useCrowdOSStore = create<CrowdOSState>((set, get) => {
       const mappedAgents: Agent[] = (payload.agents || []).map((ag: any) => ({
         id: ag.id,
         name: ag.name,
-        species: ag.species || 'Raven',
+        species: ag.species || 'AI Assistant',
         level: ag.authorityLevel as AgentLevel,
         status: ag.status || 'idle',
         avatar: ag.avatar || '🤖',
@@ -981,7 +962,7 @@ export const useCrowdOSStore = create<CrowdOSState>((set, get) => {
           dbAgents = (backendAgents || []).map((ag: any) => ({
             id: ag.id,
             name: ag.name,
-            species: ag.species || 'Raven',
+            species: ag.species || 'AI Assistant',
             level: ag.authorityLevel,
             status: ag.status || 'idle',
             avatar: ag.avatar || '🤖',
@@ -1238,11 +1219,17 @@ export const useCrowdOSStore = create<CrowdOSState>((set, get) => {
     },
 
     setActiveChannel: async (id) => {
-      // Clear notifications
+      // Clear notifications across both categories and top-level channels
       const updatedWorkspaces = get().workspaces.map(ws => {
         if (ws.id === get().activeWorkspaceId) {
           return {
             ...ws,
+            channels: ws.channels ? ws.channels.map(ch => {
+              if (ch.id === id) {
+                return { ...ch, unreadCount: 0, hasMention: false };
+              }
+              return ch;
+            }) : undefined,
             categories: ws.categories.map(cat => ({
               ...cat,
               channels: cat.channels.map(ch => {

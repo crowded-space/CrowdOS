@@ -21,6 +21,12 @@ export default function InlineChannelModal({ open, categoryId, onClose }: Inline
   const [description, setDescription] = useState('');
   const [selectedCatId, setSelectedCatId] = useState(categoryId || targetCategory?.id || '');
 
+  const formattedName = channelName.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '');
+  const isDuplicate = activeWS ? (
+    (activeWS.channels || []).some(c => c.name.toLowerCase() === formattedName) ||
+    activeWS.categories.some(cat => cat.channels.some(c => c.name.toLowerCase() === formattedName))
+  ) : false;
+
   const handleCreate = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!channelName.trim()) return;
@@ -118,6 +124,12 @@ export default function InlineChannelModal({ open, categoryId, onClose }: Inline
                 />
               </div>
 
+              {isDuplicate && channelName.trim() && (
+                <div className="text-[11px] font-mono text-rose-400 bg-rose-500/10 border border-rose-500/20 px-2.5 py-1.5 rounded-lg">
+                  A channel named "#{formattedName}" already exists in this workspace.
+                </div>
+              )}
+
               <div className="flex items-center justify-end gap-2 pt-3 border-t border-zinc-900 select-none">
                 <button
                   type="button"
@@ -128,8 +140,8 @@ export default function InlineChannelModal({ open, categoryId, onClose }: Inline
                 </button>
                 <button
                   type="submit"
-                  disabled={!channelName.trim()}
-                  className="px-3.5 py-1.5 rounded-lg text-xs font-semibold bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white transition focus:outline-none cursor-pointer flex items-center gap-1.5 shadow-sm"
+                  disabled={!channelName.trim() || isDuplicate}
+                  className="px-3.5 py-1.5 rounded-lg text-xs font-semibold bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 disabled:hover:bg-indigo-600 disabled:cursor-not-allowed text-white transition focus:outline-none cursor-pointer flex items-center gap-1.5 shadow-sm"
                 >
                   <Plus size={13} />
                   <span>Create Channel</span>

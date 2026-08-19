@@ -34,7 +34,7 @@ export default function OmniSearchModal({ open, onClose }: OmniSearchModalProps)
   }, [open, onClose]);
 
   const activeWS = workspaces.find(w => w.id === activeWorkspaceId);
-  const allChannels = activeWS?.categories.flatMap(cat => cat.channels) || activeWS?.channels || [];
+  const allChannels = [ ...(activeWS?.channels || []), ...(activeWS?.categories.flatMap(cat => cat.channels) || []) ];
 
   const filteredChannels = query.trim() 
     ? allChannels.filter(c => c.name.toLowerCase().includes(query.toLowerCase()))

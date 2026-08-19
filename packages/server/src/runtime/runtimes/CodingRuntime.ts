@@ -231,7 +231,7 @@ export class CodingRuntime extends BaseRuntime {
     } catch (err) {
       console.error('[CodingRuntime] Execution Error:', err);
       await this.kernel.setAgentStatus(broker, packet.agentId, 'idle');
-      return this.buildFailedResult(packet, err);
+      return await this.buildFailedResult(packet, err, broker);
     }
   }
 }

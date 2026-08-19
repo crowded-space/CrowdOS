@@ -179,6 +179,13 @@ export default function FileExplorer() {
           >
             <Search size={12} />
           </button>
+          <button 
+            onClick={() => useCrowdOSStore.getState().setRightSidebarOpen(true)} 
+            className="text-zinc-500 hover:text-zinc-200 p-1 hover:bg-zinc-800 rounded transition cursor-pointer focus:outline-none"
+            title="Close Sandbox (Back to Agent Roster)"
+          >
+            <span className="text-xs font-mono font-bold px-1 text-zinc-400 hover:text-white">✕</span>
+          </button>
         </div>
       </div>
 

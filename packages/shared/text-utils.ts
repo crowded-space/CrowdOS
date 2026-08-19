@@ -1,5 +1,5 @@
-const CALL_TOOL_REGEX = /<call_tool\s+name="([^"]+)"\s*>([\s\S]*?)<\/call_tool>/g;
-const STRIP_CALL_TOOL_REGEX = /<call_tool\s+name="[^"]+"\s*>[\s\S]*?<\/call_tool>/g;
+const CALL_TOOL_REGEX = /<call_tool[^>]*name=["']([^"']+)["'][^>]*>([\s\S]*?)<\/call_tool>/gi;
+const STRIP_CALL_TOOL_REGEX = /<call_tool[\s\S]*?<\/call_tool>|<call_tool[^>]*\/?>|<\/call_tool>/gi;
 
 export interface ParsedToolCall {
   name: string;

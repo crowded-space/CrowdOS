@@ -255,6 +255,9 @@ export default function MainChatArea({ onOpenSearch }: MainChatAreaProps) {
         break;
       }
     }
+    if (!activeChannel && activeWS.channels) {
+      activeChannel = activeWS.channels.find(c => c.id === activeChannelId) || null;
+    }
   }
 
   // Filter messages belonging to this channel
@@ -512,9 +515,9 @@ export default function MainChatArea({ onOpenSearch }: MainChatAreaProps) {
               <Users size={15} />
             </button>
             <button 
-              onClick={() => setRightSidebarOpen(false)}
+              onClick={() => setRightSidebarOpen(!rightSidebarOpen ? true : false)}
               className={`p-1.5 rounded-md transition cursor-pointer focus:outline-none flex items-center justify-center min-w-[32px] ${!rightSidebarOpen ? 'text-indigo-400 bg-indigo-500/10 shadow-sm' : 'text-zinc-500 hover:text-zinc-300'}`}
-              title="Workspace Sandbox"
+              title={!rightSidebarOpen ? "Close Workspace Sandbox" : "Open Workspace Sandbox"}
             >
               <Terminal size={15} />
             </button>

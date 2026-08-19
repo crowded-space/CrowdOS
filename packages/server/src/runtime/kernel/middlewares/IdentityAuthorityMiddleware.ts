@@ -1,4 +1,4 @@
-﻿import type { IContextMiddleware, MutableContextPacket, ContextBuildContext } from "../contextTypes.js";
+import type { IContextMiddleware, MutableContextPacket, ContextBuildContext } from "../contextTypes.js";
 
 export class IdentityAuthorityMiddleware implements IContextMiddleware {
   readonly name = "IdentityAuthorityMiddleware";
@@ -40,7 +40,15 @@ You are an execution specialist. Focus on completing assigned task files cleanly
         authorityBlock = `[AUTHORITY LEVEL ${tier}: COLLABORATIVE SPECIALIST]`;
     }
 
-    const identityText = `You are @${agent.name}, ${agent.title}.\n${authorityBlock}`;
+    const roleTitle = agent.title || agent.species || "AI Assistant";
+    const speciesLabel = agent.species ? ` (Species/Archetype: ${agent.species})` : "";
+    const identityText = `[IDENTITY & PERSONA GROUNDING]
+You are @${agent.name}, ${roleTitle}${speciesLabel}.
+You MUST ALWAYS remain strictly in character as @${agent.name}.
+NEVER introduce or identify yourself as Gemma, ChatGPT, Claude, Gemini, or any generic underlying foundation model.
+Your authoritative identity and role in this multi-agent workspace is exclusively @${agent.name}.
+
+${authorityBlock}`;
     packet.systemPromptBlocks.push({
       id: "identity_authority",
       priority: 10,

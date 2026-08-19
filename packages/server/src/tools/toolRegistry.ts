@@ -493,7 +493,7 @@ export class ToolRegistry {
       handler: async (args, ctx) => {
         try {
           const { readMemoryNote } = await import("../Memories/memoriesGate.js");
-          const agentId = args.agent_id || ctx?.agentId;
+          const agentId = args.agent_id || ctx?.agentId || "agent-raven";
           const result = await readMemoryNote(agentId, args.note_id, { updateAccess: true });
 
           if (!result.ok) {

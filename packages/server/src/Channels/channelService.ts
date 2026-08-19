@@ -25,6 +25,17 @@ export async function createChannel(body: CreateChannelBody) {
     return { error: "category", categoryId: body.categoryId } as const;
   }
 
+  // Duplicate name validation within same category scope
+  const existingSameName = await db.query.channels.findFirst({
+    where: (table, { and, eq, isNull }) => and(
+      eq(table.name, body.name.trim().toLowerCase()),
+      body.categoryId ? eq(table.categoryId, body.categoryId) : isNull(table.categoryId)
+    )
+  });
+  if (existingSameName) {
+    return { error: "duplicate_name", name: body.name } as const;
+  }
+
   const id = randomUUID();
   const [res] = await db
     .insert(channels)

@@ -1,4 +1,4 @@
-﻿import { randomUUID } from 'node:crypto'
+import { randomUUID } from 'node:crypto'
 import type { ContextPacket, RuntimeResult, RuntimeEvent, ToolCallRecord, HistoryMessage } from '../types.js'
 import type { EventBroker } from '../../EventBroker/eventBrokerGate.js'
 import { BaseRuntime } from './BaseRuntime.js'
@@ -17,6 +17,7 @@ export class AgenticRuntime extends BaseRuntime {
 
       let iteration = 0
       let finalResponse = ''
+      let lastThoughts: string | undefined
       let totalUsage = { promptTokens: 0, completionTokens: 0, totalTokens: 0 }
 
       // Keep a local copy of message history to append tool execution outcomes
@@ -38,6 +39,7 @@ export class AgenticRuntime extends BaseRuntime {
         totalUsage.totalTokens += llmResponse.usage.totalTokens
 
         if (llmResponse.thoughts) {
+          lastThoughts = llmResponse.thoughts
           await this.kernel.persistMessage(
             broker, packet.channelId, packet.agentId,
             packet.agentName, packet.authorityLevel,
@@ -156,10 +158,15 @@ export class AgenticRuntime extends BaseRuntime {
         finalResponse = llmResponse.content
       }
 
+      // Guarantee non-empty final response
+      const responseToPersist = finalResponse && finalResponse.trim().length > 0
+        ? finalResponse
+        : (lastThoughts ? `*Internal reasoning concluded without direct output:*\n\n${lastThoughts}` : "Task completed with no direct output.");
+
       await this.kernel.persistMessage(
         broker, packet.channelId, packet.agentId,
         packet.agentName, packet.authorityLevel,
-        finalResponse, false
+        responseToPersist, false
       )
 
       await this.kernel.setAgentStatus(broker, packet.agentId, 'idle')
@@ -168,47 +175,35 @@ export class AgenticRuntime extends BaseRuntime {
         requestId: packet.requestId,
         agentId: packet.agentId,
         channelId: packet.channelId,
-        finalResponse,
-        toolCalls: toolCallRecords,
+        finalResponse: responseToPersist,
         runtimeEvents,
+        toolCalls: toolCallRecords,
         usage: totalUsage,
         status: 'completed',
       }
     } catch (err) {
       console.error(`[AgenticRuntime] Error:`, err)
       await this.kernel.setAgentStatus(broker, packet.agentId, 'idle')
-      return this.buildFailedResult(packet, err)
+      return await this.buildFailedResult(packet, err, broker)
     }
   }
 
-  /**
-   * Universal parser for <call_tool name="...">...</call_tool> XML-like tags.
-   */
-  private parseToolCalls(text: string): Array<{ name: string; arguments: Record<string, any> }> {
-    const toolCalls: Array<{ name: string; arguments: Record<string, any> }> = []
-    const regex = /<call_tool\s+name="([^"]+)"\s*>([\s\S]*?)<\/call_tool>/g
-    let match
+  protected parseToolCalls(raw: string): Array<{ name: string; arguments: Record<string, unknown> }> {
+    const results: Array<{ name: string; arguments: Record<string, unknown> }> = []
+    const tagRegex = /<call_tool\b[^>]*\bname=["']([^"']+)["'][^>]*>([\s\S]*?)<\/call_tool>/gi
+    let match: RegExpExecArray | null
 
-    while ((match = regex.exec(text)) !== null) {
-      const name = match[1].trim()
-      const rawArgs = match[2].trim()
-      let args: Record<string, any> = {}
-
+    while ((match = tagRegex.exec(raw)) !== null) {
+      const name = match[1]!
+      const body = match[2]?.trim() ?? '{}'
       try {
-        args = JSON.parse(rawArgs)
+        const parsed = JSON.parse(body) as Record<string, unknown>
+        results.push({ name, arguments: parsed })
       } catch {
-        // Fallback: clean markdown blocks
-        const cleanArgs = rawArgs.replace(/```json|```/g, '').trim()
-        try {
-          args = JSON.parse(cleanArgs)
-        } catch {
-          console.warn(`[AgenticRuntime ReAct Parser] Failed to parse JSON arguments for tool ${name}:`, rawArgs)
-        }
+        results.push({ name, arguments: { raw: body } })
       }
-
-      toolCalls.push({ name, arguments: args })
     }
 
-    return toolCalls
+    return results
   }
 }

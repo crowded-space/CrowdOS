@@ -12,11 +12,24 @@ export abstract class BaseRuntime implements IRuntime {
 
   abstract execute(packet: ContextPacket, broker: EventBroker): Promise<RuntimeResult>
 
-  protected buildFailedResult(
+  protected async buildFailedResult(
     packet: ContextPacket,
-    error: unknown
-  ): RuntimeResult {
+    error: unknown,
+    broker?: EventBroker
+  ): Promise<RuntimeResult> {
     const errorMessage = error instanceof Error ? error.message : String(error)
+    const failureMsg = `⚠️ [Agent Runtime Warning] Request could not be completed: ${errorMessage}`
+    if (broker) {
+      try {
+        await this.kernel.persistMessage(
+          broker, packet.channelId, packet.agentId,
+          packet.agentName, packet.authorityLevel,
+          failureMsg, false
+        )
+      } catch (persistErr) {
+        console.error('[BaseRuntime] Failed to persist runtime error message:', persistErr)
+      }
+    }
     return {
       requestId: packet.requestId,
       agentId: packet.agentId,

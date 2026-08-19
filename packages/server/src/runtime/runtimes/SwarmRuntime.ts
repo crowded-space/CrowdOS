@@ -24,6 +24,14 @@ Respond with your reasoning and answer.`
 
       const llmResponse = await this.kernel.callLLM(packet, broker)
 
+      if (llmResponse.thoughts) {
+        await this.kernel.persistMessage(
+          broker, packet.channelId, packet.agentId,
+          packet.agentName, packet.authorityLevel,
+          llmResponse.thoughts, true
+        )
+      }
+
       await this.kernel.persistMessage(
         broker, packet.channelId, packet.agentId,
         packet.agentName, packet.authorityLevel,
@@ -44,7 +52,7 @@ Respond with your reasoning and answer.`
     } catch (err) {
       console.error(`[SwarmRuntime] Error:`, err)
       await this.kernel.setAgentStatus(broker, packet.agentId, 'idle')
-      return this.buildFailedResult(packet, err)
+      return await this.buildFailedResult(packet, err, broker)
     }
   }
 }

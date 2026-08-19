@@ -1379,7 +1379,7 @@ export default function WorkspaceSettingsModal() {
                         <div className="flex items-center gap-2 overflow-hidden">
                           <GripVertical size={13} className="text-zinc-600 cursor-grab shrink-0" />
                           <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: r.color }} />
-                          <span className="text-sm font-medium truncate text-zinc-200">
+                          <span className="text-sm font-medium truncate text-zinc-200" title={r.name}>
                             {r.name}
                           </span>
                         </div>
@@ -1395,7 +1395,12 @@ export default function WorkspaceSettingsModal() {
                     <div className="absolute inset-0 overflow-y-auto">
                       <div className="p-5 border-b border-zinc-900 space-y-4">
                         <div className="flex items-center justify-between">
-                          <h3 className="font-semibold text-zinc-200 uppercase text-xs">Edit Role</h3>
+                          <div className="flex items-center gap-2">
+                            <h3 className="font-semibold text-zinc-200 uppercase text-xs">Edit Role</h3>
+                            <span className="text-[10px] font-mono text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 px-2 py-0.5 rounded">
+                              ● Autosaved
+                            </span>
+                          </div>
                           <button
                             onClick={() => {
                               askConfirmation({
