@@ -88,6 +88,7 @@ export async function agentRoutes(app: FastifyInstance) {
     },
     async (request, reply) => {
       try {
+        const previous = await agentGate.getById(request.params.id);
         const updated = await agentGate.update(request.params.id, request.body);
         if (!updated) {
           return reply.status(404).send({
@@ -95,6 +96,10 @@ export async function agentRoutes(app: FastifyInstance) {
             error: "Not Found",
             message: "Agent not found",
           });
+        }
+
+        if (previous && previous.status === "paused" && updated.status !== "paused") {
+          globalBroker?.emit("agent:resumed", { agentId: updated.id });
         }
 
         emitWorkspaceSync();

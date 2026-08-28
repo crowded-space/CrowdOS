@@ -1,8 +1,10 @@
 import { randomUUID } from "node:crypto";
 
-import { and, eq } from "drizzle-orm";
+import { and, eq, isNull } from "drizzle-orm";
 
 import { getDb } from "../Shared/config/database.js";
+import { skillsGate } from "../Skills/skillsGate.js";
+import { getCachedRoster, invalidateRosterCache } from "./agentRosterCache.js";
 import {
   agents,
   capabilitiesModules,
@@ -39,6 +41,8 @@ function mapAgentProfile(row: typeof agents.$inferSelect): AgentProfile {
     capabilitiesModuleId: row.capabilitiesModuleId ?? undefined,
     fallbackAgentId: row.fallbackAgentId ?? undefined,
     categoryPermissions: row.categoryPermissions ?? [],
+    // contextTokenCap is managed via AgentProfile override; if column exists, map it, else derived fallback
+    contextTokenCap: (row as any).contextTokenCap ?? (row as any).context_token_cap ?? null,
   };
 }
 
@@ -55,8 +59,17 @@ function normalizePermissions(
 
 export class AgentRegistry {
   async list(filters: AgentRegistryFilters = {}): Promise<AgentProfile[]> {
+    // PERF-2: 30s TTL roster cache; stores only already-filtered results so
+    // the DB-3 archived-row guard holds through the cache. Cleared on every
+    // agent mutation below.
+    return getCachedRoster(`roster:${JSON.stringify(filters)}`, () => this.loadRoster(filters));
+  }
+
+  private async loadRoster(filters: AgentRegistryFilters): Promise<AgentProfile[]> {
     const db = getDb();
     const whereClauses = [];
+
+    whereClauses.push(isNull(agents.archivedAt));
 
     if (filters.authorityLevel !== undefined) {
       whereClauses.push(eq(agents.authorityLevel, filters.authorityLevel));
@@ -131,6 +144,8 @@ export class AgentRegistry {
       throw new Error("Failed to create agent profile.");
     }
 
+    invalidateRosterCache();
+
     return created;
   }
 
@@ -191,6 +206,10 @@ export class AgentRegistry {
       })
       .where(eq(agents.id, id));
 
+    if (input.toolkitModuleId !== undefined || input.permissions !== undefined) {
+      skillsGate.invalidateAgentCaches(id);
+    }
+
     await db
       .update(runtimeStates)
       .set({
@@ -199,12 +218,15 @@ export class AgentRegistry {
       })
       .where(eq(runtimeStates.agentId, id));
 
+    invalidateRosterCache();
+
     return this.getById(id);
   }
 
   async delete(id: string): Promise<boolean> {
     const db = getDb();
     const result = await db.delete(agents).where(eq(agents.id, id)).returning({ id: agents.id });
+    invalidateRosterCache();
     return result.length > 0;
   }
 

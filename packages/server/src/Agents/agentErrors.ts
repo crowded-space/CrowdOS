@@ -1,10 +1,11 @@
-import { eq } from "drizzle-orm";
+import { and, eq, isNull } from "drizzle-orm";
 import { getDb } from "../Shared/config/database.js";
 import { agents, runtimeStates, messages } from "../db/schema.js";
 import type { EventBroker } from "../EventBroker/eventBrokerGate.js";
 import type { AgentProfile } from "./agentTypes.js";
 import type { ChannelMessage } from "../Messages/messageGate.js";
 import { getNextSequenceNumber } from "../Shared/core/sequenceNumber.js";
+import { monotonicUlid } from "../Shared/core/ulid.js";
 
 export type AgentErrorType =
   | "LLM_API_ERROR"
@@ -66,6 +67,7 @@ export class EscalationChain {
     // 1. Pause the failing agent
     await db.update(agents).set({ status: "paused" }).where(eq(agents.id, agent.id));
     broker.emit("agent:status", { agentId: agent.id, status: "paused" });
+    broker.emit("agent:paused", { agentId: agent.id, reason: `${errorType}: ${errorMessage}` });
 
     // Update RuntimeState
     const [state] = await db.select().from(runtimeStates).where(eq(runtimeStates.agentId, agent.id)).limit(1);
@@ -102,7 +104,7 @@ export class EscalationChain {
     if (targetLevel !== null) {
       // Find active coordinators at targetLevel
       const allAgents = await db.query.agents.findMany({
-        where: eq(agents.isTemplate, false),
+        where: and(eq(agents.isTemplate, false), isNull(agents.archivedAt)),
       });
       const targetAgent = allAgents.find(a => a.authorityLevel === targetLevel && a.status !== "offline" && a.status !== "paused");
 
@@ -111,7 +113,7 @@ export class EscalationChain {
         const msgContent = `[ESCALATION] ⚠️ Agent @${agent.name} (L${agent.authorityLevel}) encountered error [${errorType}]: "${errorMessage}". Escalating to @${targetAgent.name} (L${targetAgent.authorityLevel}) for resolution.`;
 
         const escMsg: ChannelMessage = {
-          id: `msg-esc-${Date.now()}`,
+          id: monotonicUlid(),
           channelId,
           authorId: "system",
           authorName: "System Safety Monitor",
@@ -139,7 +141,7 @@ export class EscalationChain {
           const replyContent = `I am @${targetAgent.name}, L${targetAgent.authorityLevel} Coordinator. I have taken over the error escalation from @${agent.name}. Examining error stack and initializing fallback pipelines.`;
           const replySeq = await getNextSequenceNumber(channelId);
           const replyMsg: ChannelMessage = {
-            id: `msg-reply-${Date.now()}`,
+            id: monotonicUlid(),
             channelId,
             authorId: targetAgent.id,
             authorName: targetAgent.name,
@@ -170,7 +172,7 @@ export class EscalationChain {
     const userMsgContent = `[EMERGENCY NOTIFICATION] 🚨 Fatal escalation block reached. Agent @${agent.name} (L${agent.authorityLevel}) encountered unresolved error [${errorType}]: "${errorMessage}". System swarm paused. Operator intervention required! Opsi: Reset budget, update agent prompt, or clear Sandbox files.`;
 
     const userMsg: ChannelMessage = {
-      id: `msg-fatal-${Date.now()}`,
+      id: monotonicUlid(),
       channelId,
       authorId: "system",
       authorName: "System Warning",

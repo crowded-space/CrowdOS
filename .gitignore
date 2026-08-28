@@ -45,38 +45,15 @@ Thumbs.db
 .acad/
 .agents/
 .editorconfig
-.env.example
 .gitattributes
 .user idea/
-AGENTS.md
-DEVELOPMENT_BOARD.md
 GEMINI.md
-Identifier_Index.md
-codex session id.txt
-docs/
 dont readme.md
-execution-plan/
-target-frontend/
 
-# Tests & E2E ignores
-*.test.ts
-*.test.tsx
-*.test.js
-*.test.mjs
-*.test.jsx
-*.test.yaml
-*.test.yml
-*.spec.ts
-*.spec.tsx
-*.spec.js
-*.spec.mjs
-*.spec.jsx
-*.spec.yaml
-*.spec.yml
-__tests__/
-e2e/
+# Archived / dead code
+_archive/
+
+# Tests: generated artifacts only
 e2e-screenshots/
-vitest.config.*
-playwright.config.*
 
 

@@ -1,4 +1,4 @@
-﻿import { useState } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
   X, MessageSquare, ShieldAlert, Cpu, Hammer, FileText, 
@@ -100,7 +100,7 @@ export default function AgentProfileModal() {
 
     addRuntimeOverride({
       agentId: agent.id,
-      targetType: patchType,
+      type: patchType,
       patch: patchObj,
       reason: patchReason || 'Manual developer runtime patch',
       active: true
@@ -111,12 +111,26 @@ export default function AgentProfileModal() {
     setPatchPanelOpen(false);
   };
 
+  useEffect(() => {
+    if (!agentProfileModalOpen) return;
+    const onEsc = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') closeAgentProfileModal();
+    };
+    window.addEventListener('keydown', onEsc);
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => {
+      window.removeEventListener('keydown', onEsc);
+      document.body.style.overflow = prev;
+    };
+  }, [agentProfileModalOpen, closeAgentProfileModal]);
+
   if (!agentProfileModalOpen || !agent) return null;
 
   return (
     <>
       <AnimatePresence>
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+        <div role="dialog" aria-modal="true" aria-label={`Agent profile for ${agent.name}`} className="fixed inset-0 z-50 flex items-center justify-center p-4">
           {/* Blur Backdrop */}
           <motion.div 
             initial={{ opacity: 0 }}
@@ -138,9 +152,10 @@ export default function AgentProfileModal() {
             <div className={`h-24 bg-gradient-to-r ${style.banner} relative p-4 flex justify-end shrink-0`}>
               <button
                 onClick={closeAgentProfileModal}
-                className="w-7 h-7 bg-zinc-950/40 hover:bg-zinc-950/80 rounded-full flex items-center justify-center text-zinc-400 hover:text-zinc-100 transition focus:outline-none cursor-pointer"
+                aria-label="Close agent profile"
+                className="w-7 h-7 bg-zinc-950/40 hover:bg-zinc-950/80 rounded-full flex items-center justify-center text-zinc-400 hover:text-zinc-100 transition focus:outline-none focus-visible:ring-2 focus-visible:ring-zinc-700 cursor-pointer"
               >
-                <X size={15} />
+                <X size={15} aria-hidden="true" />
               </button>
             </div>
 
@@ -291,7 +306,7 @@ export default function AgentProfileModal() {
                         <div className="space-y-0.5 min-w-0">
                           <div className="flex items-center gap-1.5">
                             <span className="font-bold uppercase text-[9px] px-1 rounded bg-zinc-900 border border-zinc-800 text-indigo-400">
-                              {o.targetType}
+                              {o.type}
                             </span>
                             <span className="text-[10px] text-zinc-400 truncate">{o.reason}</span>
                           </div>

@@ -16,13 +16,42 @@ export default defineConfig(() => {
       host: '0.0.0.0',
       proxy: {
         '/api': {
-          target: 'http://localhost:3001',
+          target: 'http://127.0.0.1:3001',
           changeOrigin: true,
         },
         '/socket.io': {
-          target: 'http://localhost:3001',
+          target: 'http://127.0.0.1:3001',
           ws: true,
           changeOrigin: true,
+          configure: (proxy) => {
+            // Suppress noisy proxy errors expected during dev:
+            //   ECONNRESET  — backend restarting or rejecting connections
+            //   ECONNREFUSED — backend not yet up
+            //   ECONNABORTED — client disconnected mid-upgrade
+            const SUPPRESSED = new Set(['ECONNRESET', 'ECONNREFUSED', 'ECONNABORTED']);
+            const isSuppressed = (err: any) => SUPPRESSED.has(err?.code);
+
+            // 1) Proxy-level error event (http-proxy "error")
+            process.nextTick(() => {
+              proxy.removeAllListeners('error');
+              proxy.on('error', (err) => {
+                if (!isSuppressed(err)) console.error('[vite ws proxy error]', err);
+              });
+            });
+
+            // 2) Socket-level errors on raw TCP sockets during WebSocket upgrade.
+            //    Vite 6.4+ adds socket.on('error') inside proxyReqWs which
+            //    fires BEFORE our proxyReqWs listener. We add our own listener
+            //    that re-emits nothing — the existing Vite handler will still
+            //    fire, but by removing and re-adding on the *socket* we take
+            //    control of the error path.
+            proxy.on('proxyReqWs', (_proxyReq, _req, socket) => {
+              socket.removeAllListeners('error');
+              socket.on('error', (err) => {
+                if (!isSuppressed(err)) console.error('[vite ws proxy socket error]', err);
+              });
+            });
+          },
         },
       },
       // HMR is disabled in AI Studio via DISABLE_HMR env var.

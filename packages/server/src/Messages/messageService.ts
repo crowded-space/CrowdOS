@@ -1,15 +1,99 @@
-import { eq } from "drizzle-orm";
+import { eq, and, sql } from "drizzle-orm";
 import { getDb } from "../Shared/config/database.js";
 import { messages } from "../db/schema.js";
 import { stripToolCalls, parseToolCalls } from "@community-agent/shared";
+import type { StructuredToolCall, MessagePageCursor, ChannelMessagesPage } from "./messageTypes.js";
 
-export async function getChannelMessages(channelId: string, includeMonologue: boolean) {
-  const db = getDb();
-  const list = await db.query.messages.findMany({
-    where: eq(messages.channelId, channelId),
-    orderBy: (table, { asc }) => [asc(table.sequenceNumber)],
-  });
+interface ToolExecutionCard {
+  id: string;
+  type: 'tool_execution';
+  authorId: string;
+  authorName: string;
+  authorLevel: string;
+  authorType: 'agent';
+  content: string;
+  channelId: string;
+  timestamp: Date;
+  sequenceNumber: number;
+  toolExecution: {
+    name: string;
+    input: string;
+    output: string;
+    status: 'success' | 'error';
+    durationMs: number;
+  };
+}
 
+function buildToolCard(
+  msg: typeof messages.$inferSelect,
+  name: string,
+  input: string,
+  output: string,
+  durationMs: number
+): ToolExecutionCard {
+  const isSuccess = !output.startsWith("Error:");
+  return {
+    id: `tool-${msg.id}`,
+    type: 'tool_execution',
+    authorId: msg.authorId,
+    authorName: msg.authorName,
+    authorLevel: msg.authorLevel,
+    authorType: 'agent',
+    content: '',
+    channelId: msg.channelId,
+    timestamp: msg.timestamp,
+    sequenceNumber: msg.sequenceNumber,
+    toolExecution: {
+      name,
+      input,
+      output,
+      status: isSuccess ? 'success' : 'error',
+      durationMs
+    }
+  };
+}
+
+function parseStructuredToolCalls(value: unknown): StructuredToolCall[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter(
+    (entry): entry is StructuredToolCall =>
+      !!entry && typeof entry === 'object' && typeof (entry as StructuredToolCall).name === 'string'
+  );
+}
+
+function normalizeStructuredInput(args: unknown): string {
+  if (typeof args === 'string') return args;
+  if (args === undefined || args === null) return '';
+  try {
+    return JSON.stringify(args);
+  } catch {
+    return String(args);
+  }
+}
+
+export const DEFAULT_PAGE_LIMIT = 50;
+export const MAX_PAGE_LIMIT = 200;
+
+export class MalformedCursorError extends Error {
+  code = "PAGINATION_BAD_CURSOR";
+  constructor() {
+    super("Invalid before cursor. Expected '<ISO timestamp>;<sequenceNumber>'.");
+  }
+}
+
+export function parseBeforeCursor(raw: string | undefined | null): { timestamp: Date; seq: number } | undefined {
+  if (!raw) return undefined;
+  const sepIdx = raw.lastIndexOf(";");
+  if (sepIdx === -1 || sepIdx === 0 || sepIdx === raw.length - 1) throw new MalformedCursorError();
+  const ts = new Date(raw.slice(0, sepIdx));
+  const seqPart = raw.slice(sepIdx + 1);
+  if (!/^\d+$/.test(seqPart) || Number.isNaN(ts.getTime())) {
+    throw new MalformedCursorError();
+  }
+  return { timestamp: ts, seq: Number(seqPart) };
+}
+
+function mergeMessageRows(list: Array<typeof messages.$inferSelect>, channelId: string): any[] {
   const mergedList: any[] = [];
   const pendingMonologues: Record<string, string> = {};
   const pendingToolCalls: Array<{
@@ -19,7 +103,20 @@ export async function getChannelMessages(channelId: string, includeMonologue: bo
 
   for (const msg of list) {
     if (msg.isInternalMonologue) {
-      if (msg.content.startsWith("🛠️ [Tool Result: ")) {
+      const structured = parseStructuredToolCalls(msg.toolCalls);
+      if (structured.length > 0) {
+        for (const stc of structured) {
+          mergedList.push(
+            buildToolCard(
+              msg,
+              stc.name,
+              normalizeStructuredInput(stc.args),
+              typeof stc.result === 'string' ? stc.result : String(stc.result ?? ''),
+              stc.durationMs ?? 0
+            )
+          );
+        }
+      } else if (msg.content.startsWith("🛠️ [Tool Result: ")) {
         const headerMatch = msg.content.match(/^🛠️ \[Tool Result: ([^\]]+)\]\n?([\s\S]*)$/);
         if (headerMatch) {
           const toolName = headerMatch[1].trim();
@@ -42,26 +139,7 @@ export async function getChannelMessages(channelId: string, includeMonologue: bo
             }
           }
 
-          const isSuccess = !outcomeStr.startsWith("Error:");
-          mergedList.push({
-            id: `tool-${msg.id}`,
-            type: 'tool_execution',
-            authorId: msg.authorId,
-            authorName: msg.authorName,
-            authorLevel: msg.authorLevel,
-            authorType: 'agent',
-            content: '',
-            channelId: msg.channelId,
-            timestamp: msg.timestamp,
-            sequenceNumber: msg.sequenceNumber,
-            toolExecution: {
-              name: toolName,
-              input,
-              output: outcomeStr,
-              status: isSuccess ? 'success' : 'error',
-              durationMs: 0
-            }
-          });
+          mergedList.push(buildToolCard(msg, toolName, input, outcomeStr, 0));
         }
       } else {
         const cleanThoughts = stripToolCalls(msg.content);
@@ -122,4 +200,58 @@ export async function getChannelMessages(channelId: string, includeMonologue: bo
   }
 
   return mergedList;
+}
+
+export async function getChannelMessages(channelId: string, includeMonologue: boolean) {
+  const db = getDb();
+  const list = await db.query.messages.findMany({
+    where: eq(messages.channelId, channelId),
+    orderBy: (table, { asc }) => [asc(table.sequenceNumber)],
+  });
+
+  return mergeMessageRows(list, channelId);
+}
+
+export async function getChannelMessagesPage(
+  channelId: string,
+  includeMonologue: boolean,
+  opts: { limit?: number; before?: { timestamp: Date; seq: number } } = {}
+): Promise<ChannelMessagesPage> {
+  const db = getDb();
+  const limit = Math.min(Math.max(Math.trunc(opts.limit ?? DEFAULT_PAGE_LIMIT), 1), MAX_PAGE_LIMIT);
+
+  const keysetFilter = opts.before
+    ? and(
+        eq(messages.channelId, channelId),
+        sql`(${messages.timestamp}, ${messages.sequenceNumber}) < (${opts.before.timestamp.toISOString()}::timestamptz, ${opts.before.seq})`
+      )
+    : eq(messages.channelId, channelId);
+
+  const rows = await db.query.messages.findMany({
+    where: keysetFilter,
+    orderBy: (table, { desc }) => [desc(table.timestamp), desc(table.sequenceNumber)],
+    limit: limit + 1,
+  });
+
+  const hasMore = rows.length > limit;
+  const pageRows = hasMore ? rows.slice(0, limit) : rows;
+  if (pageRows.length === 0) {
+    return { messages: [], cursor: null };
+  }
+
+  // Merge pairing runs chronologically; the page is fetched newest-first.
+  const chronological = [...pageRows].reverse();
+  const mergedList = mergeMessageRows(chronological, channelId);
+
+  const oldestRow = pageRows[pageRows.length - 1];
+  const cursor: MessagePageCursor | null = hasMore
+    ? {
+        before: {
+          timestamp: oldestRow.timestamp.toISOString(),
+          seq: oldestRow.sequenceNumber,
+        },
+      }
+    : null;
+
+  return { messages: mergedList.reverse(), cursor };
 }

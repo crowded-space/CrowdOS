@@ -5,9 +5,10 @@ import { ToolExecution } from '@/types/crowd-os';
 interface ToolExecutionMessageProps {
   toolExecution?: ToolExecution;
   timestamp: string;
+  inline?: boolean;
 }
 
-export default function ToolExecutionMessage({ toolExecution, timestamp }: ToolExecutionMessageProps) {
+export default function ToolExecutionMessage({ toolExecution, timestamp, inline = false }: ToolExecutionMessageProps) {
   const [expanded, setExpanded] = useState(false);
   const [copiedInput, setCopiedInput] = useState(false);
   const [copiedOutput, setCopiedOutput] = useState(false);
@@ -73,10 +74,14 @@ export default function ToolExecutionMessage({ toolExecution, timestamp }: ToolE
     settingsColor = 'text-amber-400 animate-spin';
   }
 
+  const containerClass = inline
+    ? "w-full border border-zinc-800 bg-zinc-950/60 rounded-xl overflow-hidden font-mono text-xs"
+    : "max-w-xl mx-auto border border-zinc-800 bg-zinc-950/40 rounded-lg overflow-hidden my-2 font-mono text-xs shadow-md";
+
   return (
     <div 
       id="tool-execution-message"
-      className="max-w-xl mx-auto border border-zinc-800 bg-zinc-950/40 rounded-lg overflow-hidden my-2 font-mono text-xs shadow-md"
+      className={containerClass}
     >
       {/* Header clickable to expand */}
       <button

@@ -20,9 +20,15 @@ export default function RightSidebar() {
     let cost = 0;
 
     relevantMessages.forEach(m => {
-      const textTokens = Math.floor(m.content.length * 1.5);
+      // UX-7: Honest telemetry pass - use actual metadata.usage if available, otherwise calculate from delegationInfo or fallback to 0
+      const metadataUsage = m.metadata?.usage;
+      const textTokens = (typeof metadataUsage?.totalTokens === 'number')
+        ? metadataUsage.totalTokens
+        : ((typeof metadataUsage?.promptTokens === 'number' || typeof metadataUsage?.completionTokens === 'number')
+            ? (metadataUsage?.promptTokens || 0) + (metadataUsage?.completionTokens || 0)
+            : 0);
       const msgTokens = (m.delegationInfo?.tokens || 0) + textTokens;
-      const msgCost = (m.delegationInfo?.cost || 0) + (textTokens * 0.000003);
+      const msgCost = (m.delegationInfo?.cost || 0) + (typeof m.metadata?.cost === 'number' ? m.metadata.cost : (textTokens * 0.000003));
       
       tokens += msgTokens;
       cost += msgCost;
@@ -49,15 +55,16 @@ export default function RightSidebar() {
       ).length;
     }
 
-    const baseTokens = telemetryTab === 'global' ? (totalTokensConsumed || 42000) : 1200;
+    // UX-7: Real token calculation without fake baseline numbers
+    const baseTokens = telemetryTab === 'global' ? (totalTokensConsumed || 0) : 0;
     const baseCost = (baseTokens + tokens) * 0.000003;
 
     return {
       calculatedTokens: baseTokens + tokens,
-      calculatedBudgetSpent: baseCost + cost,
+      calculatedBudgetSpent: telemetryTab === 'global' && totalTokensConsumed > 0 ? (totalTokensConsumed * 0.000003 + cost) : (baseCost + cost),
       activeCount: activeAgs,
       totalAgentsCount: totalAgs || agents.length,
-      currentChannelsCount: telemetryTab === 'global' ? channelsCount : 1
+      currentChannelsCount: telemetryTab === 'global' ? channelsCount : (activeChannelId ? 1 : 0)
     };
   }, [messages, telemetryTab, activeChannelId, agents, workspaces, activeWorkspaceId, totalTokensConsumed]);
 
@@ -82,31 +89,31 @@ export default function RightSidebar() {
     return (
       <button
         onClick={() => openAgentProfileModal(id)}
-        className="w-full flex items-center gap-2.5 px-2 py-1.5 hover:bg-zinc-900/40 rounded-md transition text-left cursor-pointer focus:outline-none"
+        className="w-full flex items-center gap-3 px-2.5 py-2.5 min-h-[52px] hover:bg-zinc-900/60 active:bg-zinc-900 rounded-xl transition-colors text-left cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500/30 border border-transparent hover:border-zinc-800/60 touch-manipulation active:scale-[0.99]"
         id={`agent-row-${id}`}
       >
         {/* Border mapped to Level-Color */}
-        <div className={`relative w-8 h-8 rounded-full flex items-center justify-center bg-zinc-950 border ${meta.border} select-none text-sm font-sans shrink-0`}>
+        <div className={`relative w-9 h-9 rounded-xl flex items-center justify-center bg-zinc-950 border ${meta.border} select-none text-[15px] font-sans shrink-0 shadow-sm`}>
           {avatar || '🤖'}
           {/* Presence cutout Dot */}
-          <div className="absolute -bottom-0.5 -right-0.5">
+          <div className="absolute -bottom-1 -right-1 bg-[#0c0c0e] rounded-full p-0.5">
             <PresenceIndicator status={status} size="sm" />
           </div>
         </div>
 
-        <div className="min-w-0 leading-snug">
-          <div className="text-xs font-semibold text-zinc-100 truncate flex items-center gap-1.5 font-sans">
+        <div className="min-w-0 leading-snug flex-1">
+          <div className="text-[13px] font-semibold text-zinc-100 truncate flex items-center gap-1.5 font-sans tracking-[-0.01em]">
             <span className={`${meta.text}`}>{name}</span>
             {isOmniscient && (
-              <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[8px] font-extrabold font-mono bg-cyan-950/80 text-cyan-400 border border-cyan-800/35 tracking-tight leading-none animate-pulse">
+              <span className="inline-flex items-center px-1.5 py-0.5 rounded-full text-[9px] font-extrabold font-mono bg-cyan-500/10 text-cyan-400 border border-cyan-500/20 tracking-tight leading-none">
                 👁️ OMNI
               </span>
             )}
           </div>
-          <div className="text-[9.5px] text-zinc-500 font-mono flex items-center gap-1">
+          <div className="text-[11px] text-zinc-500 font-sans flex items-center gap-1.5">
             <span>{species}</span>
-            <span>•</span>
-            <span className="uppercase text-[8px] font-bold">L{level}</span>
+            <span className="w-1 h-1 rounded-full bg-zinc-700" />
+            <span className="font-mono text-[10px] uppercase font-semibold tracking-wide px-1.5 py-0.5 rounded-full bg-zinc-900 border border-zinc-800 text-zinc-400">L{level}</span>
           </div>
         </div>
       </button>
@@ -136,21 +143,28 @@ export default function RightSidebar() {
           id="right-sidebar"
           className="w-[260px] bg-[#0c0c0e]/95 border-l border-zinc-900 flex flex-col h-full overflow-hidden select-none shrink-0"
         >
-      {/* Title */}
-      <h2 className="p-3.5 border-b border-zinc-900 text-[10.5px] font-mono tracking-wider font-bold text-zinc-550 flex items-center gap-1.5 shrink-0 uppercase select-none">
-        <Network size={12} className="text-zinc-550 rotate-90" />
-        <span>Operations Roster</span>
-      </h2>
+      {/* Title — larger, calmer */}
+      <div className="px-4 py-3.5 border-b border-zinc-900 flex items-center justify-between shrink-0 select-none">
+        <h2 className="text-[11px] font-mono tracking-[0.08em] font-bold text-zinc-400 flex items-center gap-2 uppercase">
+          <span className="w-7 h-7 rounded-lg bg-zinc-900 border border-zinc-800 flex items-center justify-center">
+            <Network size={12} className="text-zinc-500" />
+          </span>
+          Operations Roster
+        </h2>
+        <span className="text-[11px] font-mono text-zinc-500 bg-zinc-900 border border-zinc-800 px-2 py-1 rounded-full">{agents.length}</span>
+      </div>
 
-      {/* Roster Area */}
-      <div className="flex-1 overflow-y-auto px-3 py-4 space-y-5 scrollbar-thin">
+      {/* Roster Area — airy spacing, progressive disclosure */}
+      <div className="flex-1 overflow-y-auto px-3 py-4 space-y-6 scrollbar-thin overscroll-contain">
         {/* Tier L0 */}
         {tierL0.length > 0 && (
-          <div className="space-y-1">
-            <h3 className="text-[10px] font-mono font-bold text-cyan-500/80 tracking-wide px-1">
-              TIER L0 — SURVEILLANCE ({tierL0.length})
+          <div className="space-y-2">
+            <h3 className="text-[11px] font-mono font-bold text-cyan-400 tracking-[0.06em] px-1 flex items-center gap-2">
+              <span className="w-1.5 h-1.5 rounded-full bg-cyan-400" />
+              TIER L0 — SURVEILLANCE
+              <span className="ml-auto text-[10px] font-mono font-semibold bg-cyan-500/10 border border-cyan-500/20 text-cyan-300 px-1.5 py-0.5 rounded-full">{tierL0.length}</span>
             </h3>
-            <div className="space-y-0.5">
+            <div className="space-y-1">
               {tierL0.map(ag => <AgentRow key={ag.id} {...ag} />)}
             </div>
           </div>
@@ -158,25 +172,27 @@ export default function RightSidebar() {
 
         {/* Tier L1 */}
         {tierL1.length > 0 && (
-          <div className="space-y-10" id="roster-tier-l1">
+          <div className="space-y-2" id="roster-tier-l1">
+            <h3 className="text-[11px] font-mono font-bold text-rose-400 tracking-[0.06em] px-1 flex items-center gap-2">
+              <span className="w-1.5 h-1.5 rounded-full bg-rose-400" />
+              TIER L1 — EXECUTIVE
+              <span className="ml-auto text-[10px] font-mono font-semibold bg-rose-500/10 border border-rose-500/20 text-rose-300 px-1.5 py-0.5 rounded-full">{tierL1.length}</span>
+            </h3>
             <div className="space-y-1">
-              <h3 className="text-[10px] font-mono font-bold text-rose-500/80 tracking-wide px-1">
-                TIER L1 — EXECUTIVE ADM ({tierL1.length})
-              </h3>
-              <div className="space-y-0.5">
-                {tierL1.map(ag => <AgentRow key={ag.id} {...ag} />)}
-              </div>
+              {tierL1.map(ag => <AgentRow key={ag.id} {...ag} />)}
             </div>
           </div>
         )}
 
         {/* Tier L2 */}
         {tierL2.length > 0 && (
-          <div className="space-y-1">
-            <h3 className="text-[10px] font-mono font-bold text-indigo-400 tracking-wide px-1">
-              TIER L2 — COORDINATORS ({tierL2.length})
+          <div className="space-y-2">
+            <h3 className="text-[11px] font-mono font-bold text-indigo-400 tracking-[0.06em] px-1 flex items-center gap-2">
+              <span className="w-1.5 h-1.5 rounded-full bg-indigo-400" />
+              TIER L2 — COORDINATORS
+              <span className="ml-auto text-[10px] font-mono font-semibold bg-indigo-500/10 border border-indigo-500/20 text-indigo-300 px-1.5 py-0.5 rounded-full">{tierL2.length}</span>
             </h3>
-            <div className="space-y-0.5">
+            <div className="space-y-1">
               {tierL2.map(ag => <AgentRow key={ag.id} {...ag} />)}
             </div>
           </div>
@@ -184,78 +200,94 @@ export default function RightSidebar() {
 
         {/* Tier L3 */}
         {tierL3.length > 0 && (
-          <div className="space-y-1">
-            <h3 className="text-[10px] font-mono font-bold text-emerald-500/80 tracking-wide px-1">
-              TIER L3 — WORKER MODULES ({tierL3.length})
+          <div className="space-y-2">
+            <h3 className="text-[11px] font-mono font-bold text-emerald-400 tracking-[0.06em] px-1 flex items-center gap-2">
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
+              TIER L3 — WORKERS
+              <span className="ml-auto text-[10px] font-mono font-semibold bg-emerald-500/10 border border-emerald-500/20 text-emerald-300 px-1.5 py-0.5 rounded-full">{tierL3.length}</span>
             </h3>
-            <div className="space-y-0.5">
+            <div className="space-y-1">
               {tierL3.map(ag => <AgentRow key={ag.id} {...ag} />)}
             </div>
           </div>
         )}
+
+        {agents.length === 0 && (
+          <div className="text-center py-12 px-4">
+            <div className="w-12 h-12 rounded-2xl bg-zinc-900 border border-zinc-800 flex items-center justify-center mx-auto mb-3 text-zinc-600">
+              <Network size={18} />
+            </div>
+            <p className="text-sm font-medium text-zinc-300">No agents yet</p>
+            <p className="text-xs text-zinc-500 mt-1">Spawn your first agent in Settings → Agents Board.</p>
+          </div>
+        )}
       </div>
 
-      {/* Bottom Collapsible Telemetry Dashboard */}
-      <div className="bg-[#09090b] border-t border-zinc-900 p-3.5 space-y-3 shrink-0 select-none">
+      {/* Bottom Telemetry Dashboard — readable, airy */}
+      <div className="bg-[#09090b] border-t border-zinc-900 p-4 pb-[max(1rem,env(safe-area-inset-bottom))] space-y-3.5 shrink-0 select-none">
         <div className="flex items-center justify-between">
-          <h4 className="text-[9.5px] font-mono font-bold text-zinc-550 flex items-center gap-1 uppercase">
-            <BarChart3 size={11} className="text-zinc-650" />
+          <h4 className="text-[11px] font-mono font-bold text-zinc-400 flex items-center gap-1.5 uppercase tracking-wide">
+            <BarChart3 size={12} className="text-zinc-500" />
             <span>{telemetryTab === 'channel' ? 'Channel Telemetry' : 'Global Telemetry'}</span>
           </h4>
-          <div className="flex bg-zinc-900 rounded-[4px] p-0.5">
+          <div className="flex bg-zinc-900 rounded-full p-1 border border-zinc-800" role="tablist" aria-label="Telemetry scope">
             <button
               onClick={() => setTelemetryTab('channel')}
-              className={`px-2 py-0.5 text-[8.5px] font-mono uppercase rounded-[2px] transition focus:outline-none ${telemetryTab === 'channel' ? 'bg-zinc-700 text-zinc-100 shadow-sm' : 'text-zinc-500 hover:text-zinc-300'}`}
+              role="tab"
+              aria-selected={telemetryTab === 'channel'}
+              className={`px-3 py-1 text-[11px] font-mono font-semibold uppercase rounded-full transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500/30 cursor-pointer touch-manipulation ${telemetryTab === 'channel' ? 'bg-zinc-800 text-zinc-100 shadow-sm border border-zinc-700' : 'text-zinc-500 hover:text-zinc-300'}`}
             >
-              CH
+              Channel
             </button>
             <button
               onClick={() => setTelemetryTab('global')}
-              className={`px-2 py-0.5 text-[8.5px] font-mono uppercase rounded-[2px] transition focus:outline-none ${telemetryTab === 'global' ? 'bg-zinc-700 text-zinc-100 shadow-sm' : 'text-zinc-500 hover:text-zinc-300'}`}
+              role="tab"
+              aria-selected={telemetryTab === 'global'}
+              className={`px-3 py-1 text-[11px] font-mono font-semibold uppercase rounded-full transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500/30 cursor-pointer touch-manipulation ${telemetryTab === 'global' ? 'bg-zinc-800 text-zinc-100 shadow-sm border border-zinc-700' : 'text-zinc-500 hover:text-zinc-300'}`}
             >
-              GL
+              Global
             </button>
           </div>
         </div>
 
-        <div className="grid grid-cols-2 gap-2 text-left">
-          <div className="bg-zinc-950/50 p-2 rounded border border-zinc-900/60 leading-tight">
-            <div className="flex items-center gap-1 text-[8.5px] font-mono text-zinc-550 uppercase">
-              <Database size={10} className="text-zinc-650" />
-              <span>Context (Tokens)</span>
+        <div className="grid grid-cols-2 gap-2.5 text-left">
+          <div className="bg-zinc-900/70 p-3 rounded-xl border border-zinc-800 leading-tight">
+            <div className="flex items-center gap-1.5 text-[10px] font-mono text-zinc-500 uppercase tracking-wide">
+              <Database size={11} className="text-zinc-500" />
+              <span>Tokens</span>
             </div>
-            <div className="text-xs font-semibold text-zinc-350 font-mono mt-1">
+            <div className="text-[13px] font-semibold text-zinc-100 font-mono mt-1.5 tracking-tight">
               {calculatedTokens.toLocaleString()}
             </div>
           </div>
 
-          <div className="bg-zinc-950/50 p-2 rounded border border-zinc-900/60 leading-tight">
-            <div className="flex items-center gap-0.5 text-[8.5px] font-mono text-zinc-550 uppercase">
-              <Coins size={10} className="text-emerald-600" />
+          <div className="bg-zinc-900/70 p-3 rounded-xl border border-zinc-800 leading-tight">
+            <div className="flex items-center gap-1.5 text-[10px] font-mono text-zinc-500 uppercase tracking-wide">
+              <Coins size={11} className="text-emerald-500" />
               <span>Est Cost</span>
             </div>
-            <div className="text-xs font-semibold text-emerald-500 font-mono mt-1">
+            <div className="text-[13px] font-semibold text-emerald-400 font-mono mt-1.5 tracking-tight">
               ${calculatedBudgetSpent.toFixed(4)}
             </div>
           </div>
 
-          <div className="bg-zinc-950/50 p-2 rounded border border-zinc-900/60 leading-tight">
-            <div className="flex items-center gap-1 text-[8.5px] font-mono text-zinc-550 uppercase">
-              <Activity size={10} className="text-zinc-650" />
-              <span>Active Agents</span>
+          <div className="bg-zinc-900/70 p-3 rounded-xl border border-zinc-800 leading-tight">
+            <div className="flex items-center gap-1.5 text-[10px] font-mono text-zinc-500 uppercase tracking-wide">
+              <Activity size={11} className="text-zinc-500" />
+              <span>Active</span>
             </div>
-            <div className="text-xs font-semibold text-zinc-350 font-mono mt-1">
+            <div className="text-[13px] font-semibold text-zinc-100 font-mono mt-1.5">
               {activeCount} / {totalAgentsCount}
             </div>
           </div>
 
-          <div className="bg-zinc-950/50 p-2 rounded border border-zinc-900/60 leading-tight">
-            <div className="flex items-center gap-1 text-[8.5px] font-mono text-zinc-550 uppercase">
-              <Network size={10} className="text-zinc-650" />
+          <div className="bg-zinc-900/70 p-3 rounded-xl border border-zinc-800 leading-tight">
+            <div className="flex items-center gap-1.5 text-[10px] font-mono text-zinc-500 uppercase tracking-wide">
+              <Network size={11} className="text-zinc-500" />
               <span>Channels</span>
             </div>
-            <div className="text-xs font-semibold text-zinc-350 font-mono mt-1">
-              {currentChannelsCount} Areas
+            <div className="text-[13px] font-semibold text-zinc-100 font-mono mt-1.5">
+              {currentChannelsCount}
             </div>
           </div>
         </div>

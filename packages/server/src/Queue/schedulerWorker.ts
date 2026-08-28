@@ -1,0 +1,152 @@
+import { Worker, type Job } from "bullmq";
+import IORedis from "ioredis";
+import { createRedisConnection, getQueueMode } from "./connection.js";
+import { SCHEDULER_QUEUE_NAME } from "./queues.js";
+import { EventBroker } from "../EventBroker/eventBrokerGate.js";
+
+let schedulerWorker: Worker | null = null;
+
+export interface ScheduledJobData {
+  id: string;
+  channelId: string;
+  task: string;
+  message?: string;
+  workspaceId?: string;
+  targetAgentId?: string;
+  cron?: string;
+  createdAt: string;
+}
+
+async function handleScheduledTrigger(job: Job<ScheduledJobData>): Promise<void> {
+  const data = job.data as ScheduledJobData;
+  const channelId = data.channelId || "general";
+  const content = data.message || `⏰ Scheduled task: ${data.task}`;
+  const workspaceId = data.workspaceId || "default";
+
+  // Persist + emit a real system message into the channel (honest firing).
+  // We reuse the same transactional sequence pattern as the socket layer (DB-2)
+  // but fall back to an ephemeral emit when DB is unavailable (test fakes,
+  // offline dev). Either path emits via EventBroker so sockets/replays see it.
+  // Prefer the live socket broker if available (dynamic import avoids static cycle with registerSocketServer)
+  let broker: InstanceType<typeof EventBroker>;
+  try {
+    const socketMod = (await import("../Shared/sockets/registerSocketServer.js")) as unknown as { globalBroker?: InstanceType<typeof EventBroker> | null };
+    broker = (socketMod.globalBroker as InstanceType<typeof EventBroker>) ?? new EventBroker();
+  } catch {
+    broker = new EventBroker();
+  }
+
+  // Try to persist message transactionally
+  try {
+    const { withTransaction } = await import("../Shared/config/database.js");
+    const { allocateSequence } = await import("../Shared/core/sequenceNumber.js");
+    const { monotonicUlid } = await import("../Shared/core/ulid.js");
+    const { messages } = await import("../db/schema.js");
+
+    const persisted = await withTransaction(async (tx: unknown) => {
+      const seq = await (allocateSequence as (cid: string, n: number, t: unknown) => Promise<number>)(channelId, 1, tx);
+      const msg = {
+        id: monotonicUlid(),
+        channelId,
+        authorId: "system-scheduler",
+        authorName: "Scheduler",
+        authorLevel: "system",
+        authorType: "system" as const,
+        content,
+        mentions: [] as unknown[],
+        isInternalMonologue: false,
+        sequenceNumber: seq,
+        timestamp: new Date(),
+      };
+      await (tx as { insert: (table: unknown) => { values: (v: unknown) => Promise<void> } }).insert(messages).values({
+        ...(msg as Record<string, unknown>),
+        authorLevel: String((msg as Record<string, unknown>).authorLevel),
+      });
+      return msg;
+    });
+    (broker as unknown as { emit: (t: string, p: unknown, o?: unknown) => void }).emit("message:new", persisted as unknown as never, { channelId });
+  } catch {
+    // Ephemeral fallback when DB not reachable (e.g., in-memory test fake without messages table)
+    const ephemeral = {
+      id: (job.id as string) || data.id || `sched-${Date.now()}`,
+      channelId,
+      authorId: "system-scheduler",
+      authorName: "Scheduler",
+      authorLevel: "system",
+      authorType: "system",
+      content,
+      mentions: [],
+      isInternalMonologue: false,
+      sequenceNumber: 0,
+      timestamp: new Date(),
+    };
+    try {
+      (broker as unknown as { emit: (t: string, p: unknown, o?: unknown) => void }).emit("message:new", ephemeral as unknown as never, { channelId });
+    } catch {}
+  }
+
+  // Also emit a dedicated scheduled event for observability/consumers (additive)
+  try {
+    (broker as unknown as { emit: (t: string, p: unknown, o?: unknown) => void }).emit("scheduled:triggered" as string, {
+      id: data.id,
+      channelId,
+      task: data.task,
+      cron: data.cron ?? null,
+      triggeredAt: new Date().toISOString(),
+    } as unknown as never, { channelId });
+  } catch {}
+
+  // Optional: if a target agent was requested, we could enqueue a run here.
+  // Keeping the scheduler honest but minimal: the message itself will trigger
+  // normal mention dispatch on the next user:message cycle if the scheduler
+  // seeded an @mention into the content (e.g., "@agent do X"). For explicit
+  // targetAgentId we could enqueue a run directly; left as additive hook.
+}
+
+async function schedulerProcessor(job: Job<ScheduledJobData>): Promise<unknown> {
+  // BullMQ repeatables arrive with name "scheduled:trigger" or "scheduled:cron"
+  // and occasionally as "scheduled:trigger:xyz" — route all to the same handler.
+  if (job.name.startsWith("scheduled")) {
+    return handleScheduledTrigger(job);
+  }
+  // Fallback for repeatable data.kind shape (parity with maintenanceWorker)
+  const kind = (job.data as unknown as { kind?: string })?.kind;
+  if (kind === "scheduled:trigger" || kind === "scheduled:cron" || (job.data as ScheduledJobData)?.task) {
+    return handleScheduledTrigger(job as Job<ScheduledJobData>);
+  }
+  return handleScheduledTrigger(job as Job<ScheduledJobData>);
+}
+
+export function getSchedulerWorker(): Worker | null {
+  return schedulerWorker;
+}
+
+export async function startSchedulerWorker(): Promise<Worker | null> {
+  if (getQueueMode() !== "bullmq") return null;
+  if (schedulerWorker) return schedulerWorker;
+  const conn = createRedisConnection() as InstanceType<typeof IORedis> | null;
+  if (!conn) return null;
+  schedulerWorker = new Worker<ScheduledJobData>(SCHEDULER_QUEUE_NAME, schedulerProcessor, {
+    connection: conn as unknown as IORedis,
+    concurrency: 4,
+    lockDuration: 900000,
+  });
+  schedulerWorker.on("error", () => {});
+  const bullMqFailed = "failed";
+  (schedulerWorker as unknown as { on: (e: string, h: () => void) => void }).on(bullMqFailed, () => {});
+  return schedulerWorker;
+}
+
+export async function stopSchedulerWorker(): Promise<void> {
+  if (schedulerWorker) {
+    const w = schedulerWorker;
+    schedulerWorker = null;
+    try {
+      await w.close();
+    } catch {}
+  }
+}
+
+export function resetSchedulerWorkerForTests(): void {
+  schedulerWorker = null;
+}

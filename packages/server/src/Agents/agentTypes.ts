@@ -38,6 +38,8 @@ export interface AgentProfile {
 
   status: AgentStatus;
   isTemplate: boolean;
+  /** Optional per-agent input context token cap (agent-context only). Null = unlimited / fallback to modelModule/policy. */
+  contextTokenCap?: number | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -61,6 +63,7 @@ export interface CreateAgentProfileInput {
   permissions?: Partial<AgentAuthorityPermissions>;
   status?: AgentStatus;
   isTemplate?: boolean;
+  contextTokenCap?: number | null;
 }
 
 export interface UpdateAgentProfileInput {
@@ -82,6 +85,7 @@ export interface UpdateAgentProfileInput {
   permissions?: Partial<AgentAuthorityPermissions>;
   status?: AgentStatus;
   isTemplate?: boolean;
+  contextTokenCap?: number | null;
 }
 
 export interface AgentRegistryFilters {

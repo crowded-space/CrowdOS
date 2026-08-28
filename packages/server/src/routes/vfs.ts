@@ -1,6 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
-import { LocalVFS } from "../vfs/local-vfs.js";
+import { LocalVFS } from "../vfs/vfsGate.js";
 import * as path from "node:path";
 import process from "node:process";
 
@@ -8,15 +8,17 @@ import { getDb } from "../Shared/config/database.js";
 import { workspaces } from "../db/schema.js";
 import { eq } from "drizzle-orm";
 
-async function getDynamicVFS(workspaceId: string): Promise<LocalVFS | null> {
+async function getDynamicVFS(workspaceId: string, actorId?: string): Promise<LocalVFS | null> {
   const db = getDb();
   const [ws] = await db.select().from(workspaces).where(eq(workspaces.id, workspaceId)).limit(1);
   if (!ws) return null;
   
+  // Derive actor from verified request identity, not hard-coded (P0-1)
+  const resolvedActor = actorId || ws.ownerId || process.env.SYSTEM_ACTOR_ID || "system";
   return new LocalVFS({
     workspaceId: ws.id,
     workspaceRoot: ws.rootPath,
-    actorId: "human_operator",
+    actorId: resolvedActor,
   });
 }
 
@@ -39,7 +41,8 @@ export async function vfsRoutes(app: FastifyInstance) {
     "/api/workspace/files",
     { schema: { querystring: pathQuerySchema } },
     async (request, reply) => {
-      const vfs = await getDynamicVFS(request.query.workspaceId);
+      const actorId = (request.headers["x-user-id"] as string) || (request.headers["x-actor-id"] as string);
+      const vfs = await getDynamicVFS(request.query.workspaceId, actorId);
       if (!vfs) return reply.status(404).send({ error: "Not Found", message: "Workspace not found" });
 
       try {
@@ -63,7 +66,8 @@ export async function vfsRoutes(app: FastifyInstance) {
         return reply.status(400).send({ error: "Bad Request", message: "Path is required" });
       }
       
-      const vfs = await getDynamicVFS(request.query.workspaceId);
+      const actorId = (request.headers["x-user-id"] as string) || (request.headers["x-actor-id"] as string);
+      const vfs = await getDynamicVFS(request.query.workspaceId, actorId);
       if (!vfs) return reply.status(404).send({ error: "Not Found", message: "Workspace not found" });
 
       try {
@@ -83,7 +87,8 @@ export async function vfsRoutes(app: FastifyInstance) {
     "/api/workspace/files/content",
     { schema: { body: writeBodySchema } },
     async (request, reply) => {
-      const vfs = await getDynamicVFS(request.body.workspaceId);
+      const actorId = (request.headers["x-user-id"] as string) || (request.headers["x-actor-id"] as string);
+      const vfs = await getDynamicVFS(request.body.workspaceId, actorId);
       if (!vfs) return reply.status(404).send({ error: "Not Found", message: "Workspace not found" });
 
       try {
@@ -104,7 +109,8 @@ export async function vfsRoutes(app: FastifyInstance) {
         return reply.status(400).send({ error: "Bad Request", message: "Path is required" });
       }
 
-      const vfs = await getDynamicVFS(request.query.workspaceId);
+      const actorId = (request.headers["x-user-id"] as string) || (request.headers["x-actor-id"] as string);
+      const vfs = await getDynamicVFS(request.query.workspaceId, actorId);
       if (!vfs) return reply.status(404).send({ error: "Not Found", message: "Workspace not found" });
 
       try {

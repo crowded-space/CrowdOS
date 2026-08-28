@@ -11,7 +11,7 @@ export interface ContextBuildContext {
   runtimeType: RuntimeType;
   modelConfig?: ModelModuleConfig;
   abortSignal?: AbortSignal;
-  customOverrides?: Record<string, unknown>;
+  customOverrides?: Record<string, unknown> & { contextTokenCap?: number };
 }
 
 export interface MutableContextPacket {

@@ -9,6 +9,8 @@ import {
   generationModelProfiles
 } from "../db/schema.js";
 import { testConnectionHelper } from "../Modules/moduleGate.js";
+import { redactSecrets } from "../Shared/core/redact.js";
+import { encrypt, decrypt } from "../Shared/core/secretBox.js";
 
 const providerEngineSchema = z.enum(["google", "openai", "anthropic", "ollama", "custom"]);
 
@@ -55,7 +57,7 @@ const paramIdSchema = z.object({
 });
 
 export async function providerRoutes(app: FastifyInstance) {
-  // GET /api/providers - Return all profiles aggregated
+  // GET /api/providers - Return all profiles aggregated — redact secrets (P0-2)
   app.get("/api/providers", async () => {
     const db = getDb();
     const [genList, embList, idxList] = await Promise.all([
@@ -65,9 +67,9 @@ export async function providerRoutes(app: FastifyInstance) {
     ]);
 
     return {
-      generationModelProfiles: genList,
-      embeddingModelProfiles: embList,
-      indexingModelProfiles: idxList
+      generationModelProfiles: genList.map((r) => redactSecrets(r as unknown as Record<string, unknown>)),
+      embeddingModelProfiles: embList.map((r) => redactSecrets(r as unknown as Record<string, unknown>)),
+      indexingModelProfiles: idxList.map((r) => redactSecrets(r as unknown as Record<string, unknown>)),
     };
   });
 
@@ -75,7 +77,8 @@ export async function providerRoutes(app: FastifyInstance) {
   app.get("/api/providers/generation", async (request, reply) => {
     reply.header("deprecation", "true");
     reply.header("x-deprecation-warning", "Deprecated generation profile endpoint. Use ModelModule routes (/api/modules/model) instead.");
-    return getDb().select().from(generationModelProfiles);
+    const list = await getDb().select().from(generationModelProfiles);
+    return list.map((r) => redactSecrets(r as unknown as Record<string, unknown>));
   });
 
   app.get<{ Params: { id: string } }>(
@@ -86,7 +89,7 @@ export async function providerRoutes(app: FastifyInstance) {
       reply.header("x-deprecation-warning", "Deprecated generation profile endpoint. Use ModelModule routes (/api/modules/model) instead.");
       const [res] = await getDb().select().from(generationModelProfiles).where(eq(generationModelProfiles.id, request.params.id)).limit(1);
       if (!res) return reply.status(404).send({ error: "Not Found", message: "GenerationModelProfile not found" });
-      return res;
+      return redactSecrets(res as unknown as Record<string, unknown>);
     }
   );
 
@@ -100,12 +103,12 @@ export async function providerRoutes(app: FastifyInstance) {
       const [res] = await getDb().insert(generationModelProfiles).values({
         id,
         ...request.body,
-        apiKey: request.body.apiKey ?? null,
+        apiKey: request.body.apiKey == null ? null : encrypt(request.body.apiKey),
         endpointUrl: request.body.endpointUrl ?? null,
         stopSequences: request.body.stopSequences ?? [],
         enableCompression: request.body.enableCompression ?? true
       }).returning();
-      return reply.status(201).send(res);
+      return reply.status(201).send(redactSecrets(res as unknown as Record<string, unknown>));
     }
   );
 
@@ -115,16 +118,18 @@ export async function providerRoutes(app: FastifyInstance) {
     async (request, reply) => {
       reply.header("deprecation", "true");
       reply.header("x-deprecation-warning", "Deprecated generation profile endpoint. Use ModelModule routes (/api/modules/model) instead.");
+      const updates = { ...request.body };
+      if (updates.apiKey !== undefined) updates.apiKey = updates.apiKey == null ? null : encrypt(updates.apiKey);
       const [res] = await getDb()
         .update(generationModelProfiles)
         .set({
-          ...request.body,
+          ...updates,
           updatedAt: new Date()
         })
         .where(eq(generationModelProfiles.id, request.params.id))
         .returning();
       if (!res) return reply.status(404).send({ error: "Not Found", message: "GenerationModelProfile not found" });
-      return res;
+      return redactSecrets(res as unknown as Record<string, unknown>);
     }
   );
 
@@ -147,14 +152,15 @@ export async function providerRoutes(app: FastifyInstance) {
       const [profile] = await getDb().select().from(generationModelProfiles).where(eq(generationModelProfiles.id, request.params.id)).limit(1);
       if (!profile) return reply.status(404).send({ error: "Not Found", message: "GenerationModelProfile not found" });
 
-      const result = await testConnectionHelper(profile.provider, profile.modelName, profile.apiKey, profile.endpointUrl);
+      const result = await testConnectionHelper(profile.provider, profile.modelName, profile.apiKey ? decrypt(profile.apiKey) : profile.apiKey, profile.endpointUrl);
       return result;
     }
   );
 
   // --- Embedding Model Profiles ---
   app.get("/api/providers/embedding", async () => {
-    return getDb().select().from(embeddingModelProfiles);
+    const list = await getDb().select().from(embeddingModelProfiles);
+    return list.map((r) => redactSecrets(r as unknown as Record<string, unknown>));
   });
 
   app.get<{ Params: { id: string } }>(
@@ -163,7 +169,7 @@ export async function providerRoutes(app: FastifyInstance) {
     async (request, reply) => {
       const [res] = await getDb().select().from(embeddingModelProfiles).where(eq(embeddingModelProfiles.id, request.params.id)).limit(1);
       if (!res) return reply.status(404).send({ error: "Not Found", message: "EmbeddingModelProfile not found" });
-      return res;
+      return redactSecrets(res as unknown as Record<string, unknown>);
     }
   );
 
@@ -175,10 +181,10 @@ export async function providerRoutes(app: FastifyInstance) {
       const [res] = await getDb().insert(embeddingModelProfiles).values({
         id,
         ...request.body,
-        apiKey: request.body.apiKey ?? null,
+        apiKey: request.body.apiKey == null ? null : encrypt(request.body.apiKey),
         endpointUrl: request.body.endpointUrl ?? null
       }).returning();
-      return reply.status(201).send(res);
+      return reply.status(201).send(redactSecrets(res as unknown as Record<string, unknown>));
     }
   );
 
@@ -186,16 +192,18 @@ export async function providerRoutes(app: FastifyInstance) {
     "/api/providers/embedding/:id",
     { schema: { params: paramIdSchema, body: updateEmbeddingProfileSchema } },
     async (request, reply) => {
+      const updates = { ...request.body };
+      if (updates.apiKey !== undefined) updates.apiKey = updates.apiKey == null ? null : encrypt(updates.apiKey);
       const [res] = await getDb()
         .update(embeddingModelProfiles)
         .set({
-          ...request.body,
+          ...updates,
           updatedAt: new Date()
         })
         .where(eq(embeddingModelProfiles.id, request.params.id))
         .returning();
       if (!res) return reply.status(404).send({ error: "Not Found", message: "EmbeddingModelProfile not found" });
-      return res;
+      return redactSecrets(res as unknown as Record<string, unknown>);
     }
   );
 
@@ -211,7 +219,8 @@ export async function providerRoutes(app: FastifyInstance) {
 
   // --- Indexing Model Profiles ---
   app.get("/api/providers/indexing", async () => {
-    return getDb().select().from(indexingModelProfiles);
+    const list = await getDb().select().from(indexingModelProfiles);
+    return list.map((r) => redactSecrets(r as unknown as Record<string, unknown>));
   });
 
   app.get<{ Params: { id: string } }>(
@@ -220,7 +229,7 @@ export async function providerRoutes(app: FastifyInstance) {
     async (request, reply) => {
       const [res] = await getDb().select().from(indexingModelProfiles).where(eq(indexingModelProfiles.id, request.params.id)).limit(1);
       if (!res) return reply.status(404).send({ error: "Not Found", message: "IndexingModelProfile not found" });
-      return res;
+      return redactSecrets(res as unknown as Record<string, unknown>);
     }
   );
 
@@ -232,10 +241,10 @@ export async function providerRoutes(app: FastifyInstance) {
       const [res] = await getDb().insert(indexingModelProfiles).values({
         id,
         ...request.body,
-        apiKey: request.body.apiKey ?? null,
+        apiKey: request.body.apiKey == null ? null : encrypt(request.body.apiKey),
         endpointUrl: request.body.endpointUrl ?? null
       }).returning();
-      return reply.status(201).send(res);
+      return reply.status(201).send(redactSecrets(res as unknown as Record<string, unknown>));
     }
   );
 
@@ -243,16 +252,18 @@ export async function providerRoutes(app: FastifyInstance) {
     "/api/providers/indexing/:id",
     { schema: { params: paramIdSchema, body: updateIndexingProfileSchema } },
     async (request, reply) => {
+      const updates = { ...request.body };
+      if (updates.apiKey !== undefined) updates.apiKey = updates.apiKey == null ? null : encrypt(updates.apiKey);
       const [res] = await getDb()
         .update(indexingModelProfiles)
         .set({
-          ...request.body,
+          ...updates,
           updatedAt: new Date()
         })
         .where(eq(indexingModelProfiles.id, request.params.id))
         .returning();
       if (!res) return reply.status(404).send({ error: "Not Found", message: "IndexingModelProfile not found" });
-      return res;
+      return redactSecrets(res as unknown as Record<string, unknown>);
     }
   );
 

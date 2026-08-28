@@ -14,7 +14,8 @@ export const modelModuleSchema = z.object({
   stopSequences: z.array(z.string()).optional(),
   maxRecentMessages: z.number().int(),
   enableCompression: z.boolean().optional(),
-  compressionThreshold: z.number().int()
+  compressionThreshold: z.number().int(),
+  costPer1k: z.number().nullable().optional()
 });
 export const updateModelModuleSchema = modelModuleSchema.partial();
 

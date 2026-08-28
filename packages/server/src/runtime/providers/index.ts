@@ -19,3 +19,18 @@ export { AnthropicAdapter } from './AnthropicAdapter.js'
 export { OpenAIAdapter } from './OpenAIAdapter.js'
 export { OllamaAdapter } from './OllamaAdapter.js'
 export { CustomAdapter } from './CustomAdapter.js'
+export {
+  ProviderError,
+  ProviderTimeoutError,
+  ProviderAbortError,
+  isProviderError,
+  type ProviderTimeoutPhase,
+} from './providerErrors.js'
+export {
+  providerFetch,
+  GuardedProviderCall,
+  getProviderTimeoutConfig,
+  DEFAULT_PROVIDER_CONNECT_TIMEOUT_MS,
+  DEFAULT_PROVIDER_IDLE_TIMEOUT_MS,
+  type ProviderTimeoutConfig,
+} from './providerHttp.js'

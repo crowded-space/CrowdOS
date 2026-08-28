@@ -54,17 +54,27 @@ import type {
   ModuleParams
 } from "../Modules/moduleGate.js";
 import { globalBroker } from "../Shared/sockets/registerSocketServer.js";
+import { redactSecrets } from "../Shared/core/redact.js";
 
 function emitWorkspaceSync(): void {
   globalBroker?.emit("workspace:sync", {});
 }
 
 export async function moduleRoutes(app: FastifyInstance) {
-  // GET /api/modules - Return all modules aggregated
-  app.get("/api/modules", async () => listAllModules());
+  // GET /api/modules - Return all modules aggregated — redact secrets (P0-2)
+  app.get("/api/modules", async () => {
+    const all = await listAllModules();
+    return {
+      ...all,
+      modelModules: (all.modelModules as unknown[]).map((m) => redactSecrets(m as Record<string, unknown>)),
+    };
+  });
 
   // --- Model Modules ---
-  app.get("/api/modules/model", async () => listModelModules());
+  app.get("/api/modules/model", async () => {
+    const list = await listModelModules();
+    return (list as unknown[]).map((m) => redactSecrets(m as Record<string, unknown>));
+  });
 
   app.get<{ Params: ModuleParams }>(
     "/api/modules/model/:id",
@@ -72,7 +82,7 @@ export async function moduleRoutes(app: FastifyInstance) {
     async (request, reply) => {
       const res = await getModelModule(request.params.id);
       if (!res) return reply.status(404).send({ error: "Not Found", message: "ModelModule not found" });
-      return res;
+      return redactSecrets(res as unknown as Record<string, unknown>);
     }
   );
 
@@ -82,7 +92,7 @@ export async function moduleRoutes(app: FastifyInstance) {
     async (request, reply) => {
       const res = await createModelModule(request.body);
       emitWorkspaceSync();
-      return reply.status(201).send(res);
+      return reply.status(201).send(redactSecrets(res as unknown as Record<string, unknown>));
     }
   );
 
@@ -93,7 +103,7 @@ export async function moduleRoutes(app: FastifyInstance) {
       const res = await updateModelModule(request.params.id, request.body);
       if (!res) return reply.status(404).send({ error: "Not Found", message: "ModelModule not found" });
       emitWorkspaceSync();
-      return res;
+      return redactSecrets(res as unknown as Record<string, unknown>);
     }
   );
 

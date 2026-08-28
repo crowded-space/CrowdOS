@@ -1,5 +1,30 @@
-﻿import { closeDatabaseConnection, getSqlClient } from "../Shared/config/database.js";
+﻿import { fileURLToPath } from "node:url";
 
+import { drizzle } from "drizzle-orm/postgres-js";
+import { migrate } from "drizzle-orm/postgres-js/migrator";
+import postgres from "postgres";
+
+import { closeDatabaseConnection, ensurePgVectorExtension, getSqlClient } from "../Shared/config/database.js";
+import { env } from "../Shared/config/env.js";
+import { seed } from "./seed.js";
+
+const migrationsFolder = fileURLToPath(new URL("./migrations", import.meta.url));
+
+async function applyMigrations(): Promise<void> {
+  if (!env.DATABASE_URL) {
+    throw new Error("DATABASE_URL is not set. Configure it before running migrations.");
+  }
+
+  const migrationClient = postgres(env.DATABASE_URL, { max: 1 });
+
+  try {
+    await migrate(drizzle(migrationClient), { migrationsFolder });
+  } finally {
+    await migrationClient.end();
+  }
+}
+
+// Legacy hand-rolled DDL, kept for one release behind LEGACY_BOOTSTRAP=true.
 async function ensureSchema(): Promise<void> {
   const sql = getSqlClient();
 
@@ -267,7 +292,14 @@ async function ensureSchema(): Promise<void> {
       mentions jsonb default '[]'::jsonb not null,
       is_internal_monologue boolean default false not null,
       sequence_number integer not null,
-      timestamp timestamp with time zone default now() not null
+      timestamp timestamp with time zone default now() not null,
+      metadata jsonb,
+      tool_calls jsonb
+    )`,
+    `create table if not exists channel_sequences (
+      channel_id text primary key references channels(id) on delete cascade,
+      last_seq bigint default 0 not null,
+      updated_at timestamp with time zone default now() not null
     )`,
     `create table if not exists spawn_requests (
       id text primary key,
@@ -368,7 +400,9 @@ async function ensureSchema(): Promise<void> {
       timestamp timestamp with time zone not null,
       reason text not null,
       fields_changed jsonb default '[]'::jsonb not null,
-      previous_values jsonb default '{}'::jsonb not null
+      previous_values jsonb default '{}'::jsonb not null,
+      agent_id text,
+      action text default 'update' not null
     )`,
     // ─── Modular Skills, MCP & Dynamic Tools Tables ──────────────
     `create table if not exists skills (
@@ -448,10 +482,20 @@ async function ensureSchema(): Promise<void> {
   }
 }
 
-ensureSchema()
-  .then(() => {
-    console.log("Database schema bootstrap completed.");
-  })
+async function main(): Promise<void> {
+  if (process.env.LEGACY_BOOTSTRAP === "true") {
+    await ensureSchema();
+    console.log("Database schema bootstrap completed (legacy DDL).");
+    return;
+  }
+
+  await applyMigrations();
+  await ensurePgVectorExtension();
+  await seed();
+  console.log("Database migrations applied and seed data ensured.");
+}
+
+main()
   .catch((error) => {
     console.error(error);
     process.exitCode = 1;

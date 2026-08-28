@@ -1,7 +1,17 @@
-import { and, desc, eq, gte } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { getDb } from "../Shared/config/database.js";
 import { agentMemoryNotes } from "../db/schema.js";
+import { isSuppressionActive } from "./memoryLifecycle.js";
+import { numEnv } from "./memoryEnv.js";
+import { memorySessionDiscards } from "./memorySessionDiscards.js";
 import { listMemoryPreviews, type MemoryNotePreview } from "./agentMemoryStore.js";
+import { wrapUntrusted } from "../Shared/core/untrustedWrapper.js";
+
+const DEFAULT_RETRIEVAL_WINDOW = 60;
+
+function retrievalWindowSize(): number {
+  return Math.floor(numEnv("MEM_RETRIEVAL_WINDOW", DEFAULT_RETRIEVAL_WINDOW));
+}
 
 export interface MemoryCandidate {
   noteId: string;
@@ -32,19 +42,30 @@ export interface RetrievalInput {
 /**
  * Retrieve memory candidates by running multiple lanes in parallel, then
  * merging and deduplicating results. Forked from Continuum's multi-lane
- * retrieval design. Semantic embedding lanes are stubbed and can be wired to
- * pgvector later.
+ * retrieval design. SCL-2: semantic embedding lane enabled when
+ * EMBEDDING_ENABLED=true — hybrid lane scoring blends vector cosine with
+ * heuristic lanes (weight via EMBEDDING_HYBRID_WEIGHT).
  */
 export async function retrieveMemoryCandidates(input: RetrievalInput): Promise<MemoryCandidate[]> {
   const db = getDb();
 
-  const notes = await db.query.agentMemoryNotes.findMany({
+  const discarded = new Set(memorySessionDiscards.listDiscarded(input.agentId, input.channelId));
+
+  // PERF-2: bounded hot-path window. Candidate set is capped SQL-side to the
+  // top `MEM_RETRIEVAL_WINDOW` (default 60) active notes ranked by the scored
+  // proxy (importance_score DESC, note_timestamp DESC); lane scoring and
+  // dedupe then run on that bounded set instead of the agent's full history.
+  const windowSize = retrievalWindowSize();
+  const notes = (await db.query.agentMemoryNotes.findMany({
     where: and(
       eq(agentMemoryNotes.agentId, input.agentId),
       eq(agentMemoryNotes.lifecycleStatus, "active"),
     ),
-    orderBy: (table, { desc }) => [desc(table.noteTimestamp)],
-  });
+    orderBy: (table, { desc }) => [desc(table.importanceScore), desc(table.noteTimestamp)],
+    limit: windowSize,
+  }))
+    .filter((note) => !isSuppressionActive(note))
+    .filter((note) => !discarded.has(note.id));
 
   const candidates = new Map<string, MemoryCandidate>();
 
@@ -92,6 +113,48 @@ export async function retrieveMemoryCandidates(input: RetrievalInput): Promise<M
     }
   }
 
+  // SCL-2: hybrid semantic lane — when embeddings are available, blend cosine
+  // similarity into the heuristic score. Weight 0 => heuristic only (legacy).
+  const embeddingEnabled = String(process.env.EMBEDDING_ENABLED ?? "false").trim().toLowerCase() === "true";
+  if (embeddingEnabled && input.userMessageText) {
+    try {
+      const { embedText, cosineSimilarity } = await import("./embeddings.js");
+      const queryEmbedding = (await embedText(input.userMessageText)).vector;
+      const weightRaw = process.env.EMBEDDING_HYBRID_WEIGHT?.trim();
+      const weight = weightRaw ? Math.min(1, Math.max(0, Number(weightRaw))) : 0.5;
+      if (Number.isFinite(weight) && weight > 0) {
+        for (const note of notes) {
+          const stored = (note as unknown as { embedding?: unknown }).embedding;
+          if (!stored) continue;
+          // Parse stored embedding (JSON string or array)
+          let vec: number[] | null = null;
+          if (Array.isArray(stored)) vec = stored as number[];
+          else if (typeof stored === "string") {
+            try {
+              const parsed = JSON.parse(stored);
+              if (Array.isArray(parsed)) vec = parsed as number[];
+            } catch {}
+            if (!vec && stored.startsWith("[") && stored.endsWith("]")) {
+              try { vec = stored.slice(1, -1).split(",").map((s) => Number(s.trim())).filter((n) => Number.isFinite(n)); } catch {}
+            }
+          }
+          if (!vec || vec.length !== queryEmbedding.length) continue;
+          const cosine = cosineSimilarity(queryEmbedding, vec);
+          const semanticScore = (cosine + 1) / 2; // 0..1
+          if (semanticScore > 0.3) {
+            const existing = candidates.get(note.id);
+            const heuristic = existing?.score ?? 0;
+            const hybrid = heuristic * (1 - weight) + semanticScore * weight;
+            add(note, "semantic", hybrid);
+            // Also update existing candidate's score to hybrid if semantic lane wins
+            const cand = candidates.get(note.id);
+            if (cand && hybrid > cand.score) cand.score = hybrid;
+          }
+        }
+      }
+    } catch {}
+  }
+
   return Array.from(candidates.values())
     .sort((a, b) => b.score - a.score)
     .slice(0, input.topK ?? 10);
@@ -107,7 +170,10 @@ export function buildMemoryPreviewBlock(candidates: MemoryCandidate[]): string {
 
   const lines = candidates.map((c) => {
     const hasTension = (c.contradictionFlags?.length ?? 0) > 0;
-    return `[${c.score.toFixed(2)}] "${c.hook}" — "${c.brief}" {note_id: ${c.noteId}, type: ${c.noteType}, lanes: ${c.sourceLanes.join("|")}, importance: ${c.importanceScore}, has_tension: ${hasTension}}`;
+    // CTX-2: memory hooks are untrusted — wrap hook/brief individually
+    const safeHook = wrapUntrusted("memory", c.hook);
+    const safeBrief = wrapUntrusted("memory", c.brief);
+    return `[${c.score.toFixed(2)}] "${safeHook}" — "${safeBrief}" {note_id: ${c.noteId}, type: ${c.noteType}, lanes: ${c.sourceLanes.join("|")}, importance: ${c.importanceScore}, has_tension: ${hasTension}}`;
   });
 
   return `<memory_previews>\n${lines.join("\n")}\n</memory_previews>`;

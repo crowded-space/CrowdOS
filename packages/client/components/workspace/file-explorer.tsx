@@ -73,23 +73,25 @@ const FileTreeNode: React.FC<{
   if (node.type === 'folder') {
     return (
       <div className="select-none">
-        <div 
-          className="flex items-center gap-1.5 py-1 px-2 hover:bg-zinc-900/60 rounded-md cursor-pointer transition text-zinc-300 hover:text-zinc-100"
-          style={{ paddingLeft: `${ level * 12 + 8 }px` }}
+        <button
           onClick={toggleOpen}
+          className="w-full flex items-center gap-2 py-2.5 px-2 hover:bg-zinc-900/60 rounded-xl cursor-pointer transition text-zinc-300 hover:text-zinc-100 text-left touch-manipulation active:scale-[0.99]"
+          style={{ paddingLeft: `${ level * 14 + 10 }px` }}
         >
-          {isLoading ? (
-            <Loader2 size={14} className="text-zinc-500 animate-spin" />
-          ) : isOpen ? (
-            <ChevronDown size={14} className="text-zinc-500" />
-          ) : (
-            <ChevronRight size={14} className="text-zinc-500" />
-          )}
-          {isOpen ? <FolderOpen size={14} className="text-indigo-400" /> : <Folder size={14} className="text-indigo-400/80" />}
-          <span className="text-xs font-medium tracking-tight truncate">{node.name}</span>
-        </div>
+          <span className="w-6 h-6 rounded-lg bg-zinc-900 border border-zinc-800 flex items-center justify-center shrink-0">
+            {isLoading ? (
+              <Loader2 size={11} className="text-zinc-500 animate-spin" />
+            ) : isOpen ? (
+              <ChevronDown size={11} className="text-zinc-500" />
+            ) : (
+              <ChevronRight size={11} className="text-zinc-500" />
+            )}
+          </span>
+          {isOpen ? <FolderOpen size={15} className="text-indigo-400 shrink-0" /> : <Folder size={15} className="text-indigo-400/80 shrink-0" />}
+          <span className="text-[13px] font-medium tracking-[-0.01em] truncate">{node.name}</span>
+        </button>
         {isOpen && children.length > 0 && (
-          <div className="flex flex-col">
+          <div className="flex flex-col gap-0.5 mt-0.5">
             {children.map((child, i) => (
               <FileTreeNode key={i} node={child} level={level + 1} selectedFile={selectedFile} activeWorkspaceId={activeWorkspaceId} onSelectFile={onSelectFile} />
             ))}
@@ -102,20 +104,20 @@ const FileTreeNode: React.FC<{
   const isSelected = selectedFile === node.path;
 
   return (
-    <div 
+    <button
       onClick={() => onSelectFile && onSelectFile(node)}
-      className={`group flex items-center justify-between py-1 px-2 rounded-md cursor-pointer transition select-none ${
+      className={`group w-full flex items-center gap-2.5 py-2.5 px-2 rounded-xl cursor-pointer transition select-none text-left touch-manipulation active:scale-[0.99] ${
         isSelected 
-          ? 'bg-indigo-500/15 text-zinc-200 shadow-sm' 
-          : 'hover:bg-zinc-900/60 text-zinc-400 hover:text-zinc-200'
+          ? 'bg-indigo-600 text-white shadow-md border border-indigo-500/20' 
+          : 'hover:bg-zinc-900/60 text-zinc-400 hover:text-zinc-200 border border-transparent'
       }`}
-      style={{ paddingLeft: `${ level * 12 + 28 }px` }}
+      style={{ paddingLeft: `${ level * 14 + 30 }px` }}
     >
-      <div className="flex items-center gap-2 min-w-0">
+      <span className={`w-7 h-7 rounded-lg flex items-center justify-center shrink-0 border ${isSelected ? 'bg-white/15 border-white/20' : 'bg-zinc-900 border-zinc-800'}`}>
         {getFileIcon(node.ext)}
-        <span className={`text-xs tracking-tight truncate font-sans ${isSelected ? 'font-medium' : ''}`}>{node.name}</span>
-      </div>
-    </div>
+      </span>
+      <span className={`text-[13px] tracking-[-0.01em] truncate font-sans ${isSelected ? 'font-semibold' : ''}`}>{node.name}</span>
+    </button>
   );
 };
 
@@ -161,45 +163,48 @@ export default function FileExplorer() {
   };
 
   return (
-    <div className="flex flex-col h-full bg-[#0c0c0e]/95">
+    <div className="flex flex-col h-full bg-[#0c0c0f]">
       {/* Title */}
-      <div className="p-3.5 border-b border-zinc-900 flex items-center justify-between shrink-0 select-none">
-        <h2 className="text-[10.5px] font-mono tracking-wider font-bold text-zinc-550 flex items-center gap-1.5 uppercase">
-          <Terminal size={12} className="text-zinc-550" />
-          <span>Workspace Sandbox</span>
+      <div className="px-4 py-3.5 border-b border-zinc-900 flex items-center justify-between shrink-0 select-none">
+        <h2 className="text-[11px] font-mono tracking-[0.07em] font-bold text-zinc-400 flex items-center gap-2 uppercase">
+          <span className="w-7 h-7 rounded-lg bg-zinc-900 border border-zinc-800 flex items-center justify-center">
+            <Terminal size={12} className="text-zinc-500" />
+          </span>
+          Sandbox
         </h2>
-        <div className="flex items-center gap-1">
+        <div className="flex items-center gap-1.5">
           <button 
             onClick={() => {
               fetchRoot();
               showSuccess('Refreshed', 'VFS File Tree synced.');
             }} 
-            className="text-zinc-500 hover:text-zinc-300 p-1 hover:bg-zinc-800 rounded transition cursor-pointer focus:outline-none"
+            className="w-9 h-9 rounded-xl bg-zinc-900 border border-zinc-800 hover:bg-zinc-800 text-zinc-400 hover:text-zinc-100 flex items-center justify-center transition cursor-pointer focus:outline-none active:scale-95 touch-manipulation"
             title="Refresh File Tree"
           >
-            <Search size={12} />
+            <Search size={14} />
           </button>
           <button 
             onClick={() => useCrowdOSStore.getState().setRightSidebarOpen(true)} 
-            className="text-zinc-500 hover:text-zinc-200 p-1 hover:bg-zinc-800 rounded transition cursor-pointer focus:outline-none"
+            className="w-9 h-9 rounded-xl bg-zinc-900 border border-zinc-800 hover:bg-zinc-800 text-zinc-400 hover:text-zinc-100 flex items-center justify-center transition cursor-pointer focus:outline-none active:scale-95 touch-manipulation"
             title="Close Sandbox (Back to Agent Roster)"
           >
-            <span className="text-xs font-mono font-bold px-1 text-zinc-400 hover:text-white">✕</span>
+            <span className="text-[11px] font-mono font-bold">✕</span>
           </button>
         </div>
       </div>
 
       {/* Action Bar */}
-      <div className="flex items-center gap-2 px-3 py-2 border-b border-zinc-900 bg-zinc-950/50 shrink-0">
-        <div className="flex -space-x-1">
-          <div className="w-5 h-5 rounded-full bg-indigo-500/20 border border-indigo-500/30 flex items-center justify-center z-10" title="Sparrow Runner active">
-             <Sparkles size={10} className="text-indigo-400" />
+      <div className="flex items-center gap-2.5 px-4 py-2.5 border-b border-zinc-900 bg-zinc-900/30 shrink-0">
+        <div className="flex -space-x-1.5">
+          <div className="w-6 h-6 rounded-full bg-indigo-500/20 border border-indigo-500/30 flex items-center justify-center z-10 shadow-sm" title="Sparrow Runner active">
+             <Sparkles size={11} className="text-indigo-400" />
           </div>
-          <div className="w-5 h-5 rounded-full bg-emerald-500/20 border border-emerald-500/30 flex items-center justify-center" title="Code indexing">
-             <Code2 size={10} className="text-emerald-400" />
+          <div className="w-6 h-6 rounded-full bg-emerald-500/20 border border-emerald-500/30 flex items-center justify-center shadow-sm" title="Code indexing">
+             <Code2 size={11} className="text-emerald-400" />
           </div>
         </div>
-        <span className="text-[10px] text-zinc-500 font-mono truncate">Sandbox live sync</span>
+        <span className="text-[11px] text-zinc-400 font-sans truncate font-medium">Sandbox live sync</span>
+        <span className="ml-auto w-2 h-2 rounded-full bg-emerald-500 shadow-[0_0_6px_rgba(16,185,129,0.6)] animate-pulse" />
       </div>
 
       {/* File Tree */}

@@ -1,8 +1,11 @@
-import { randomUUID } from 'node:crypto'
 import { eq } from 'drizzle-orm'
-import { getDb } from '../../Shared/config/database.js'
-import { agents, messages } from '../../db/schema.js'
+import { performance } from 'node:perf_hooks'
+import { withTransaction } from '../../Shared/config/database.js'
+import { allocateSequence } from '../../Shared/core/sequenceNumber.js'
+import { monotonicUlid } from '../../Shared/core/ulid.js'
+import { agents, messages, runtimeStates } from '../../db/schema.js'
 import type { EventBroker } from '../../EventBroker/eventBrokerGate.js'
+import type { StructuredToolCall } from '../../Messages/messageGate.js'
 import type { RuntimeStatus } from '../../types/runtime.types.js'
 import type {
   ContextPacket,
@@ -12,9 +15,59 @@ import type {
 } from '../types.js'
 import { ProviderRegistry } from '../providers/ProviderRegistry.js'
 import { ReActStreamParser } from './ReActStreamParser.js'
+import { markAgentWorking, markAgentIdle } from '../../Shared/core/agentHeartbeat.js'
+import { logMetric } from '../../Shared/core/structuredLog.js'
+import { recordTiming } from '../../Shared/core/perfMetrics.js'
+import { createChunkCoalescer, resolveStreamBatchMs, type ChunkCoalescer } from '../../Shared/core/streamCoalescer.js'
+
+/**
+ * Stream chunk batching (P1 — stream batching): coalesce per-token socket
+ * emissions into ~50ms flushes instead of one event per token. Configurable
+ * via STREAM_BATCH_MS (0 disables batching and restores per-token emission).
+ */
+const STREAM_BATCH_MS = resolveStreamBatchMs(process.env.STREAM_BATCH_MS)
+
+interface StreamBufferEntry {
+  broker: EventBroker
+  channelId: string
+  agentId: string
+  isThoughts: boolean
+  coalescer: ChunkCoalescer
+}
 
 export class RuntimeKernel {
+  private readonly streamBuffers = new Map<string, StreamBufferEntry>()
+
+  private static streamKey(channelId: string, agentId: string, isThoughts?: boolean): string {
+    return `${channelId}:${agentId}:${isThoughts ? 't' : 'c'}`
+  }
+
   async callLLM(
+    packet: ContextPacket,
+    broker?: EventBroker,
+    userPromptOverride?: string
+  ): Promise<LLMResponse> {
+    const start = performance.now()
+    // SCL-3: OTel span for llm stage keyed by runId
+    const tracing: typeof import("../../Observability/tracing.js") | null = await import("../../Observability/tracing.js").catch(() => null);
+    const runId = (packet as unknown as { runId?: string | null }).runId ?? null;
+    const span = tracing ? tracing.startSpan("llm", { runId, channelId: packet.channelId, agentId: packet.agentId, attributes: { provider: packet.metadata.provider, model: packet.metadata.modelName } }) : null;
+    try {
+      const res = await this._callLLM(packet, broker, userPromptOverride)
+      if (span && tracing) tracing.endSpan(span, { attributes: { promptTokens: res.usage?.promptTokens ?? 0, completionTokens: res.usage?.completionTokens ?? 0 } });
+      return res;
+    } catch (err) {
+      if (span && tracing) tracing.endSpan(span, { error: err });
+      throw err;
+    } finally {
+      const durationMs = Math.round(performance.now() - start)
+      recordTiming('llm.call', durationMs)
+      logMetric({ stage: 'llm.call', durationMs, provider: packet.metadata.provider, model: packet.metadata.modelName, agent: packet.agentName, runId: runId ?? undefined })
+      this.flushStreams(packet.channelId, packet.agentId)
+    }
+  }
+
+  private async _callLLM(
     packet: ContextPacket,
     broker?: EventBroker,
     userPromptOverride?: string
@@ -24,58 +77,19 @@ export class RuntimeKernel {
 
     const shouldStream = broker && packet.policies.streamOutput && adapter.supportsStreaming
 
-    if (shouldStream) {
-      let hasFinal = false
-      let buffer = ''
+    if (shouldStream && broker) {
       let thoughtsBuffer = ''
       let contentBuffer = ''
 
       const onChunk = (chunk: { content: string; thoughts?: string; isThoughts?: boolean }) => {
-        // Case A: Adapter explicitly tags thoughts vs content (native thoughts e.g. Gemini 2.0+ or o1)
-        if (chunk.isThoughts !== undefined) {
-          if (chunk.isThoughts) {
-            thoughtsBuffer += chunk.content
-            this.streamChunk(broker, packet.channelId, packet.agentId, chunk.content, true, true)
-          } else {
-            contentBuffer += chunk.content
-            this.streamChunk(broker, packet.channelId, packet.agentId, chunk.content, false, true)
-          }
-          return
-        }
+        if (!chunk.content) return
 
-        // Case B: Sentinel-based streaming demultiplexer (for non-native thoughts models)
-        buffer += chunk.content
-
-        if (hasFinal) {
+        if (chunk.isThoughts) {
+          thoughtsBuffer += chunk.content
+          this.streamChunk(broker, packet.channelId, packet.agentId, chunk.content, true, true)
+        } else {
           contentBuffer += chunk.content
           this.streamChunk(broker, packet.channelId, packet.agentId, chunk.content, false, true)
-          return
-        }
-
-        const triggerIndex = buffer.indexOf('&&FINAL_RESPONSE&&')
-        if (triggerIndex !== -1) {
-          const thoughtsPart = buffer.slice(0, triggerIndex)
-          const contentPart = buffer.slice(triggerIndex + '&&FINAL_RESPONSE&&'.length)
-
-          if (thoughtsPart) {
-            thoughtsBuffer += thoughtsPart
-            this.streamChunk(broker, packet.channelId, packet.agentId, thoughtsPart, true, true)
-          }
-          if (contentPart) {
-            contentBuffer += contentPart
-            this.streamChunk(broker, packet.channelId, packet.agentId, contentPart, false, true)
-          }
-          hasFinal = true
-          buffer = ''
-        } else {
-          const tokenLength = '&&FINAL_RESPONSE&&'.length
-          if (buffer.length > tokenLength) {
-            const safeLength = buffer.length - tokenLength
-            const safePart = buffer.slice(0, safeLength)
-            thoughtsBuffer += safePart
-            this.streamChunk(broker, packet.channelId, packet.agentId, safePart, true, true)
-            buffer = buffer.slice(safeLength)
-          }
         }
       }
 
@@ -85,32 +99,28 @@ export class RuntimeKernel {
           systemPrompt: packet.systemPrompt,
           userPrompt: buildUserPrompt(packet, userPromptOverride),
           history: packet.history,
+          tools: packet.tools,
         },
-        onChunk
+        onChunk,
+        { signal: packet.abortSignal }
       )
 
-      // Final stream cleanup after SSE ends
-      if (!hasFinal && buffer) {
-        // Fallback delimiters parsing for remaining buffer
-        const parsed = ReActStreamParser.parse(buffer)
+      let resolvedContent = rawResponse.content || contentBuffer
+      let resolvedThoughts = rawResponse.thoughts || (thoughtsBuffer.trim() || undefined)
+
+      const hasNativeToolCalls = rawResponse.toolCalls && rawResponse.toolCalls.length > 0
+      if (!resolvedThoughts && resolvedContent && !hasNativeToolCalls) {
+        const parsed = ReActStreamParser.parse(resolvedContent)
         if (parsed.thoughts) {
-          thoughtsBuffer += parsed.thoughts
-          this.streamChunk(broker, packet.channelId, packet.agentId, parsed.thoughts, true, true)
-        }
-        if (parsed.content) {
-          contentBuffer += parsed.content
-          this.streamChunk(broker, packet.channelId, packet.agentId, parsed.content, false, true)
+          resolvedThoughts = parsed.thoughts
+          resolvedContent = parsed.content
         }
       }
 
-      // Check if there were any native thoughts or sentinel-derived thoughts
-      const finalThoughts = thoughtsBuffer.trim() || rawResponse.thoughts || undefined
-      const finalContent = contentBuffer.trim() || rawResponse.content
-
       return {
         ...rawResponse,
-        content: finalContent,
-        thoughts: finalThoughts,
+        content: resolvedContent,
+        thoughts: resolvedThoughts,
       }
     }
 
@@ -118,9 +128,13 @@ export class RuntimeKernel {
       systemPrompt: packet.systemPrompt,
       userPrompt: buildUserPrompt(packet, userPromptOverride),
       history: packet.history,
-    })
+      tools: packet.tools,
+    }, undefined, { signal: packet.abortSignal })
 
-    const parsed = ReActStreamParser.parse(rawResponse.content)
+    const hasNativeToolCalls = rawResponse.toolCalls && rawResponse.toolCalls.length > 0
+    const parsed = hasNativeToolCalls
+      ? { thoughts: '', content: rawResponse.content }
+      : ReActStreamParser.parse(rawResponse.content)
 
     // For synchronous calls, if streaming is requested, we emit the completed block as a single chunk instantly (no delay)
     if (broker && packet.policies.streamOutput) {
@@ -144,32 +158,53 @@ export class RuntimeKernel {
     agentName: string,
     authorityLevel: number,
     content: string,
-    isInternalMonologue: boolean
+    isInternalMonologue: boolean,
+    metadata?: Record<string, unknown> | undefined,
+    toolCalls?: StructuredToolCall[] | undefined
   ): Promise<number> {
-    const db = getDb()
+    const start = performance.now()
+    const runId = (metadata as Record<string, unknown> | undefined)?.runId as string | undefined ?? null
+    const tracing: typeof import("../../Observability/tracing.js") | null = await import("../../Observability/tracing.js").catch(() => null);
+    const span = tracing ? tracing.startSpan("persist", { runId, channelId, agentId, attributes: { op: "persist.message" } }) : null;
 
-    const lastMessage = await db.query.messages.findFirst({
-      where: eq(messages.channelId, channelId),
-      orderBy: (table, { desc }) => [desc(table.sequenceNumber)],
-    })
-    const sequenceNumber = lastMessage ? lastMessage.sequenceNumber + 1 : 1
-
-    const msgId = randomUUID()
+    const msgId = monotonicUlid()
     const timestamp = new Date()
 
-    await db.insert(messages).values({
-      id: msgId,
-      channelId,
-      authorId: agentId,
-      authorName: agentName,
-      authorLevel: String(authorityLevel),
-      authorType: 'agent',
-      content,
-      mentions: [],
-      isInternalMonologue,
-      sequenceNumber,
-      timestamp,
-    })
+    // DB-2: sequence reservation and the dependent message insert commit
+    // atomically — a failed insert rolls the reservation back, so no 23505
+    // and no gaps under concurrent writers.
+    let sequenceNumber: number
+    let persistError: unknown = null
+    try {
+      sequenceNumber = await withTransaction(async (tx) => {
+        const seq = await allocateSequence(channelId, 1, tx)
+        await tx.insert(messages).values({
+          id: msgId,
+          channelId,
+          authorId: agentId,
+          authorName: agentName,
+          authorLevel: String(authorityLevel),
+          authorType: 'agent',
+          content,
+          mentions: [],
+          isInternalMonologue,
+          metadata,
+          toolCalls,
+          sequenceNumber: seq,
+          timestamp,
+        })
+        return seq
+      })
+    } catch (err) {
+      persistError = err
+      if (span && tracing) tracing.endSpan(span, { error: err })
+      throw err
+    }
+
+    const persistDurationMs = Math.round(performance.now() - start)
+    recordTiming('persist.message', persistDurationMs)
+    logMetric({ stage: 'persist.message', durationMs: persistDurationMs, channelId, runId: runId ?? undefined })
+    if (span && tracing && !persistError) tracing.endSpan(span, { attributes: { durationMs: persistDurationMs } })
 
     broker.emit(
       'message:new',
@@ -183,6 +218,8 @@ export class RuntimeKernel {
         content,
         mentions: [],
         isInternalMonologue,
+        metadata,
+        toolCalls,
         sequenceNumber,
         timestamp,
       },
@@ -197,8 +234,23 @@ export class RuntimeKernel {
     agentId: string,
     status: RuntimeStatus
   ): Promise<void> {
-    const db = getDb()
-    await db.update(agents).set({ status }).where(eq(agents.id, agentId))
+    // DB-2: agents.status and runtimeStates.status/heartbeat flip atomically.
+    await withTransaction(async (tx) => {
+      await tx.update(agents).set({ status }).where(eq(agents.id, agentId))
+
+      // Keep runtimeStates in sync + write an immediate heartbeat (P0-4) so
+      // zombie detection works even if the process dies mid-run.
+      await tx
+        .update(runtimeStates)
+        .set({ status, lastHeartbeat: new Date() })
+        .where(eq(runtimeStates.agentId, agentId))
+    })
+
+    // Heartbeat registration (P0-4): track working agents so the orphan sweeper
+    // can distinguish live runs from crashed zombies.
+    if (status === 'working') markAgentWorking(agentId)
+    else markAgentIdle(agentId)
+
     broker.emit('agent:status', { agentId, status })
   }
 
@@ -210,7 +262,54 @@ export class RuntimeKernel {
     isThoughts?: boolean,
     streamed?: boolean
   ): void {
-    broker.emit('message:stream', { channelId, agentId, chunk, isThoughts, streamed }, { channelId })
+    // Non-streamed single-block emissions go out immediately — batching only
+    // applies to live token streams where per-token events dominate.
+    if (!streamed || STREAM_BATCH_MS <= 0) {
+      broker.emit('message:stream', { channelId, agentId, chunk, isThoughts, streamed }, { channelId })
+      return
+    }
+
+    const key = RuntimeKernel.streamKey(channelId, agentId, isThoughts)
+    let entry = this.streamBuffers.get(key)
+    if (!entry) {
+      const thoughtFlag = !!isThoughts
+      const created: StreamBufferEntry = {
+        broker,
+        channelId,
+        agentId,
+        isThoughts: thoughtFlag,
+        coalescer: createChunkCoalescer(
+          (content) => {
+            broker.emit('message:stream', { channelId, agentId, chunk: content, isThoughts: thoughtFlag, streamed: true }, { channelId })
+          },
+          STREAM_BATCH_MS,
+          () => this.streamBuffers.delete(key)
+        ),
+      }
+      this.streamBuffers.set(key, created)
+      entry = created
+    }
+    entry.coalescer.push(chunk)
+  }
+
+  private flushStreamEntry(key: string, entry: StreamBufferEntry): void {
+    entry.coalescer.flush()
+    if (!entry.coalescer.pending && this.streamBuffers.get(key) === entry) {
+      this.streamBuffers.delete(key)
+    }
+  }
+
+  /**
+   * Force-flush any pending buffered stream chunks for a channel/agent.
+   * Called when the model stream completes so trailing tokens are not delayed
+   * by up to one batch window.
+   */
+  flushStreams(channelId?: string, agentId?: string): void {
+    for (const [key, entry] of [...this.streamBuffers]) {
+      if (channelId !== undefined && entry.channelId !== channelId) continue
+      if (agentId !== undefined && entry.agentId !== agentId) continue
+      this.flushStreamEntry(key, entry)
+    }
   }
 
   emitThinking(

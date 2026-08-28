@@ -1,6 +1,10 @@
-﻿import { eq } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import { getDb } from "../../Shared/config/database.js";
 import { modelModules } from "../../db/schema.js";
+import { TtlCache } from "../../Shared/core/ttlCache.js";
+import { timeAsync } from "../../Shared/core/perfMetrics.js";
+import { decrypt } from "../../Shared/core/secretBox.js";
+import { loadRoutingModules, resolveModelModule, routingEnabled, taskClassForRuntime } from "../../Shared/core/modelRouting.js";
 import type { ContextPacket, ModelModuleConfig } from "../types.js";
 import type {
   ContextBuildContext,
@@ -8,13 +12,26 @@ import type {
   IContextMiddleware,
 } from "./contextTypes.js";
 
+/**
+ * Middlewares at/below this priority are independent of each other (they read
+ * disjoint sources and write disjoint packet fields) and run concurrently.
+ * Middlewares above it (ContextLimit 75, HistoryCompression 80) consume the
+ * assembled history/metadata and stay sequential by design.
+ */
+const PARALLEL_LANE_MAX_PRIORITY = 70;
+
+// Hot-path cache: model module configs change rarely but were re-read per request.
+const modelModuleCache = new TtlCache<ModelModuleConfig>(30_000, 200);
+
 import { IdentityAuthorityMiddleware } from "./middlewares/IdentityAuthorityMiddleware.js";
+import { ChannelAwarenessMiddleware } from "./middlewares/ChannelAwarenessMiddleware.js";
 import { InstructionStackMiddleware } from "./middlewares/InstructionStackMiddleware.js";
 import { SkillContextMiddleware } from "./middlewares/SkillContextMiddleware.js";
 import { ToolSchemaMiddleware } from "./middlewares/ToolSchemaMiddleware.js";
 import { ConstraintSafetyMiddleware } from "./middlewares/ConstraintSafetyMiddleware.js";
 import { MemoryRetrievalMiddleware } from "./middlewares/MemoryRetrievalMiddleware.js";
 import { VisibilityMatrixMiddleware } from "./middlewares/VisibilityMatrixMiddleware.js";
+import { ContextLimitMiddleware } from "./middlewares/ContextLimitMiddleware.js";
 import { HistoryCompressionMiddleware } from "./middlewares/HistoryCompressionMiddleware.js";
 
 export class ContextPipelineManager {
@@ -26,14 +43,16 @@ export class ContextPipelineManager {
 
   registerDefaultMiddlewares(): void {
     this.middlewares = [
-      new IdentityAuthorityMiddleware(),
-      new InstructionStackMiddleware(),
-      new SkillContextMiddleware(),
-      new ToolSchemaMiddleware(),
-      new ConstraintSafetyMiddleware(),
-      new MemoryRetrievalMiddleware(),
-      new VisibilityMatrixMiddleware(),
-      new HistoryCompressionMiddleware(),
+      new ConstraintSafetyMiddleware(),        // 10 — CTX-2 precedence: constraints first
+      new InstructionStackMiddleware(),        // 15 — instructions second
+      new IdentityAuthorityMiddleware(),       // 20 — persona third (constraints > instructions > persona)
+      new ChannelAwarenessMiddleware(),        // 21
+      new SkillContextMiddleware(),            // 30
+      new ToolSchemaMiddleware(),              // 40
+      new MemoryRetrievalMiddleware(),         // 60
+      new VisibilityMatrixMiddleware(),        // 70
+      new HistoryCompressionMiddleware(),      // 80
+      new ContextLimitMiddleware(),            // 85 — must run last (accounts for summary block)
     ];
     this.sortMiddlewares();
   }
@@ -44,34 +63,78 @@ export class ContextPipelineManager {
     return this;
   }
 
+  invalidateModelModuleCache(moduleId?: string): void {
+    if (moduleId) modelModuleCache.delete(moduleId);
+    else modelModuleCache.clear();
+  }
+
   private sortMiddlewares(): void {
     this.middlewares.sort((a, b) => a.priority - b.priority);
   }
 
   async assemble(ctx: ContextBuildContext): Promise<ContextPacket & { _modelConfig: ModelModuleConfig }> {
+    return timeAsync("context.assemble", () => this._assemble(ctx));
+  }
+
+  private async _assemble(ctx: ContextBuildContext): Promise<ContextPacket & { _modelConfig: ModelModuleConfig }> {
     const db = getDb();
+    const defaultEnvApiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
     let modelConfig: ModelModuleConfig = ctx.modelConfig || {
       provider: "google",
       modelName: "gemini-2.0-flash",
+      apiKey: defaultEnvApiKey,
       temperature: 0.7,
       maxOutputTokens: 2048,
       topP: 0.95,
     };
 
     if (!ctx.modelConfig && ctx.agent.modelModuleId) {
-      const row = await db.query.modelModules.findFirst({
-        where: eq(modelModules.id, ctx.agent.modelModuleId),
-      });
-      if (row) {
-        modelConfig = {
-          provider: row.provider as any,
-          modelName: row.modelName,
-          apiKey: row.apiKey ?? undefined,
-          endpointUrl: row.endpointUrl ?? undefined,
-          temperature: row.temperature,
-          maxOutputTokens: row.maxOutputTokens,
-          topP: row.topP ?? 0.95,
-        };
+      const cached = modelModuleCache.get(ctx.agent.modelModuleId);
+      if (cached) {
+        modelConfig = cached;
+      } else {
+        const row = await db.query.modelModules.findFirst({
+          where: eq(modelModules.id, ctx.agent.modelModuleId),
+        });
+        if (row) {
+          const envApiKey =
+            row.provider === "google" ? (process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY) :
+            row.provider === "anthropic" ? process.env.ANTHROPIC_API_KEY :
+            row.provider === "openai" ? process.env.OPENAI_API_KEY :
+            undefined;
+
+          // SEC-4: api_key is stored encrypted at rest; decrypt only here,
+          // at the single resolver feeding provider adapters.
+          const storedKey = row.apiKey ? decrypt(row.apiKey) : undefined;
+
+          modelConfig = {
+            provider: row.provider as any,
+            modelName: row.modelName,
+            apiKey: storedKey || envApiKey || undefined,
+            endpointUrl: row.endpointUrl ?? undefined,
+            temperature: row.temperature,
+            maxOutputTokens: row.maxOutputTokens,
+            topP: row.topP ?? 0.95,
+          };
+          modelModuleCache.set(ctx.agent.modelModuleId, modelConfig);
+        }
+      }
+    }
+
+    // MODEL-1: routing decision at the single module resolution point. Chat,
+    // planning and coding keep the per-agent pinned module (log-only); the
+    // librarian path applies overrides inside its own runtime.
+    if (routingEnabled()) {
+      try {
+        resolveModelModule({
+          runtimeType: ctx.runtimeType,
+          taskClass: taskClassForRuntime(ctx.runtimeType),
+          availableModules: await loadRoutingModules(),
+          staticModuleId: ctx.agent.modelModuleId,
+          logOnly: true,
+        });
+      } catch (err) {
+        console.error("[ContextPipeline] model.route decision failed:", err);
       }
     }
 
@@ -97,12 +160,28 @@ export class ContextPipelineManager {
       modelConfig,
     };
 
-    // Execute each middleware in priority order
-    for (const mw of this.middlewares) {
+    // Execute middlewares: independent ones concurrently, dependent tail sequentially.
+    // Errors are isolated per middleware (logged, skipped) — same semantics as the
+    // previous serial loop, one failing stage must not abort assembly.
+    const parallelAllowed = process.env.PIPELINE_PARALLEL !== "false";
+    const runOne = async (mw: IContextMiddleware): Promise<void> => {
       try {
         await mw.process(mutablePacket, runCtx);
       } catch (err) {
         console.error(`[ContextPipeline] Error in middleware '${mw.name}':`, err);
+      }
+    };
+
+    if (parallelAllowed) {
+      const parallelLane = this.middlewares.filter((mw) => mw.priority <= PARALLEL_LANE_MAX_PRIORITY);
+      const serialTail = this.middlewares.filter((mw) => mw.priority > PARALLEL_LANE_MAX_PRIORITY);
+      await Promise.all(parallelLane.map(runOne));
+      for (const mw of serialTail) {
+        await runOne(mw);
+      }
+    } else {
+      for (const mw of this.middlewares) {
+        await runOne(mw);
       }
     }
 
@@ -123,8 +202,16 @@ export class ContextPipelineManager {
         role: h.role,
         content: h.content,
         authorName: h.authorName,
+        authorId: (h as any).authorId,
+        authorType: (h as any).authorType,
+        authorLevel: (h as any).authorLevel,
+        isSelf: (h as any).isSelf,
+        mentions: (h as any).mentions,
         isInternalMonologue: h.isInternalMonologue,
         timestamp: h.timestamp || new Date(),
+        toolCalls: h.toolCalls,
+        toolCallId: h.toolCallId,
+        toolName: h.toolName,
       })),
       tools: mutablePacket.tools,
       memoryPreviewBlock: mutablePacket.memoryPreviewBlock,

@@ -19,6 +19,11 @@ export function getSqlClient(): postgres.Sql {
   if (!sqlClient) {
     sqlClient = postgres(requireDatabaseUrl(), {
       prepare: false,
+      max: 20,
+      idle_timeout: 20,
+      connect_timeout: 10,
+      max_lifetime: 60 * 30,
+      onnotice: () => {},
     });
   }
 
@@ -33,6 +38,22 @@ export function getDb() {
   }
 
   return dbInstance;
+}
+
+type DbInstance = ReturnType<typeof getDb>;
+
+/** Transaction client handed to withTransaction callbacks. */
+export type DbTx = Parameters<Parameters<DbInstance["transaction"]>[0]>[0];
+
+/** Either the standalone pool-backed db or an in-flight transaction. */
+export type DbLike = DbInstance | DbTx;
+
+/**
+ * DB-2: run `fn` inside a single postgres transaction; any thrown error rolls
+ * back every write performed through the provided client.
+ */
+export async function withTransaction<T>(fn: (tx: DbTx) => Promise<T>): Promise<T> {
+  return getDb().transaction(fn);
 }
 
 export async function ensurePgVectorExtension(): Promise<void> {

@@ -29,6 +29,12 @@ export interface AgentEvent {
     error?: string;
     durationMs: number;
   };
+  /** Cumulative token usage reported by the model adapter (turn_complete/agent_end). */
+  usage?: {
+    promptTokens: number;
+    completionTokens: number;
+    totalTokens: number;
+  };
   error?: string;
 }
 
@@ -37,6 +43,17 @@ export interface AgentTool {
   description: string;
   parameters: PiToolSchema['parameters'];
   execute: (args: Record<string, unknown>, signal?: AbortSignal) => Promise<{ success: boolean; output: string; error?: string }>;
+}
+
+/** Typed cancellation (CAN-1): thrown by the agent loop when the run signal aborts. */
+export class AgentAbortError extends Error {
+  readonly signal?: AbortSignal;
+
+  constructor(message = 'Agent execution aborted.', signal?: AbortSignal) {
+    super(message);
+    this.name = 'AgentAbortError';
+    this.signal = signal;
+  }
 }
 
 export interface AgentLoopOptions {

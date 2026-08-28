@@ -22,12 +22,13 @@ export default function EmojiPickerPopover({ open, onSelect, onClose }: EmojiPic
           animate={{ opacity: 1, scale: 1, y: 0 }}
           exit={{ opacity: 0, scale: 0.95, y: 10 }}
           transition={{ duration: 0.15 }}
-          className="absolute bottom-12 left-8 z-50 bg-[#141416] border border-zinc-800 rounded-xl shadow-2xl p-2.5 w-64 select-none"
+          className="absolute bottom-12 right-0 sm:left-8 z-50 bg-[#1E1E22] border border-zinc-800 rounded-2xl shadow-2xl p-3 w-[min(88vw,260px)] select-none"
         >
-          <div className="text-[10px] font-mono font-bold text-zinc-500 mb-2 px-1 uppercase tracking-wider">
-            Quick Emojis
+          <div className="text-[10px] font-mono font-bold text-zinc-400 mb-2.5 px-1 uppercase tracking-widest flex items-center justify-between">
+            <span>Quick Emojis</span>
+            <button onClick={onClose} className="w-6 h-6 rounded-full bg-zinc-900 border border-zinc-800 flex items-center justify-center text-zinc-500 hover:text-zinc-200">✕</button>
           </div>
-          <div className="grid grid-cols-6 gap-1">
+          <div className="grid grid-cols-6 gap-1.5">
             {COMMON_EMOJIS.map((emoji) => (
               <button
                 key={emoji}
@@ -36,7 +37,7 @@ export default function EmojiPickerPopover({ open, onSelect, onClose }: EmojiPic
                   onSelect(emoji);
                   onClose();
                 }}
-                className="h-8 w-8 text-base rounded-md hover:bg-zinc-800 flex items-center justify-center transition cursor-pointer focus:outline-none"
+                className="h-10 w-10 text-[18px] rounded-xl hover:bg-zinc-800 active:bg-zinc-700 flex items-center justify-center transition cursor-pointer focus:outline-none active:scale-95 border border-transparent hover:border-zinc-700"
               >
                 {emoji}
               </button>

@@ -1,54 +1,110 @@
-import { Hash, MessageSquare, Sparkles, Settings2 } from 'lucide-react';
+import { Hash, Sparkles, Settings2 } from 'lucide-react';
 import { useCrowdOSStore } from '@/stores/crowd-os-store';
 
 export default function BottomNav() {
-  const { 
-    setMobileDrawerLeft, 
-    setMobileDrawerRight, 
-    setSettingsModalOpen, 
+  const {
+    workspaces,
+    activeWorkspaceId,
+    setMobileDrawerLeft,
+    setMobileDrawerRight,
+    setSettingsModalOpen,
     setWorkspaceSettingsTab,
     mobileDrawerLeft,
     mobileDrawerRight
   } = useCrowdOSStore();
 
-  return (
-    <div 
-      id="bottom-nav"
-      className="md:hidden pb-[env(safe-area-inset-bottom)] bg-[#09090b]/85 backdrop-blur-3xl border-t border-white/5 w-full flex items-center shrink-0 select-none z-40 sticky bottom-0"
+  const activeWS = workspaces.find(ws => ws.id === activeWorkspaceId);
+  const channels = [
+    ...(activeWS?.channels || []),
+    ...(activeWS?.categories.flatMap(cat => cat.channels) || [])
+  ];
+  const totalUnread = channels.reduce((acc, c) => acc + (c.unreadCount || 0), 0);
+  const hasMention = channels.some(c => c.hasMention);
+
+  const haptic = () => {
+    try { (navigator as any)?.vibrate?.(8); } catch {}
+  };
+
+  const NavButton = ({
+    active,
+    onClick,
+    label,
+    sublabel,
+    icon,
+    badge,
+  }: {
+    active?: boolean;
+    onClick: () => void;
+    label: string;
+    sublabel?: string;
+    icon: React.ReactNode;
+    badge?: React.ReactNode;
+  }) => (
+    <button
+      onClick={() => { haptic(); onClick(); }}
+      aria-label={label}
+      aria-current={active ? 'page' : undefined}
+      className={`relative flex-1 flex flex-col items-center justify-center gap-0.5 py-2.5 min-h-[62px] transition-all active:scale-[0.97] focus:outline-none select-none touch-manipulation ${
+        active
+          ? 'text-indigo-400'
+          : 'text-zinc-500 active:text-zinc-300 hover:text-zinc-300'
+      }`}
     >
-      <button
+      {active && (
+        <span className="absolute top-0 left-1/2 -translate-x-1/2 w-8 h-[2.5px] rounded-full bg-indigo-400 shadow-[0_2px_8px_rgba(99,102,241,0.6)]" />
+      )}
+      <span className={`relative flex items-center justify-center w-9 h-7 rounded-xl transition-colors ${active ? 'bg-indigo-500/12' : 'bg-transparent'}`}>
+        {icon}
+        {badge}
+      </span>
+      <span className={`text-[10px] tracking-[0.02em] leading-none ${active ? 'font-semibold' : 'font-medium'}`}>{sublabel || label}</span>
+    </button>
+  );
+
+  return (
+    <nav
+      id="bottom-nav"
+      aria-label="Primary"
+      className="lg:hidden pb-[env(safe-area-inset-bottom)] bg-[#0A0A0B]/92 backdrop-blur-2xl border-t border-white/[0.07] w-full flex items-stretch shrink-0 select-none z-40 supports-[backdrop-filter]:bg-[#08080a]/80 shadow-[0_-8px_24px_rgba(0,0,0,0.35)]"
+    >
+      <NavButton
+        active={mobileDrawerLeft}
         onClick={() => setMobileDrawerLeft(true)}
-        className={`flex-1 flex flex-col items-center justify-center gap-1 transition focus:outline-none cursor-pointer py-3 ${mobileDrawerLeft ? 'text-indigo-400' : 'text-zinc-500 hover:text-zinc-200'}`}
-        title="Channels"
-      >
-        <Hash size={20} strokeWidth={mobileDrawerLeft ? 2.5 : 2} />
-        <span className="text-[10px] font-medium tracking-wide">Channels</span>
-      </button>
+        label={`Channels${totalUnread > 0 ? `, ${totalUnread} unread` : ''}${hasMention ? ', mentions' : ''}`}
+        sublabel="Channels"
+        icon={<Hash size={20} strokeWidth={mobileDrawerLeft ? 2.5 : 2} />}
+        badge={
+          (hasMention || totalUnread > 0) ? (
+            <span
+              className={`absolute -top-0.5 -right-1 rounded-full flex items-center justify-center font-mono font-bold text-white shadow-md border border-[#0A0A0B] ${
+                hasMention
+                  ? 'w-[10px] h-[10px] bg-rose-500 shadow-[0_0_6px_rgba(239,68,68,0.6)]'
+                  : 'min-w-[16px] h-[16px] px-0.5 bg-rose-500 text-[9px]'
+              }`}
+            >
+              {!hasMention && totalUnread > 99 ? '99+' : !hasMention && totalUnread > 0 ? String(Math.min(totalUnread, 99)) : ''}
+            </span>
+          ) : undefined
+        }
+      />
 
-      <div className="w-[1px] h-8 bg-zinc-900/50 shrink-0 pointer-events-none" />
-
-      <button
+      <NavButton
+        active={mobileDrawerRight}
         onClick={() => setMobileDrawerRight(true)}
-        className={`flex-1 flex flex-col items-center justify-center gap-1 transition focus:outline-none cursor-pointer py-3 ${mobileDrawerRight ? 'text-indigo-400' : 'text-zinc-500 hover:text-zinc-200'}`}
-        title="Agent Swarm"
-      >
-        <Sparkles size={20} strokeWidth={mobileDrawerRight ? 2.5 : 2} />
-        <span className="text-[10px] font-medium tracking-wide">Agents</span>
-      </button>
+        label="Agent roster"
+        sublabel="Agents"
+        icon={<Sparkles size={20} strokeWidth={mobileDrawerRight ? 2.5 : 2} />}
+      />
 
-      <div className="w-[1px] h-8 bg-zinc-900/50 shrink-0 pointer-events-none" />
-
-      <button
+      <NavButton
         onClick={() => {
           setWorkspaceSettingsTab('overview');
           setSettingsModalOpen(true);
         }}
-        className="flex-1 flex flex-col items-center justify-center gap-1 text-zinc-500 hover:text-zinc-200 transition focus:outline-none cursor-pointer py-3"
-        title="Settings"
-      >
-        <Settings2 size={20} />
-        <span className="text-[10px] font-medium tracking-wide">Settings</span>
-      </button>
-    </div>
+        label="Settings"
+        sublabel="Settings"
+        icon={<Settings2 size={20} strokeWidth={2} />}
+      />
+    </nav>
   );
 }

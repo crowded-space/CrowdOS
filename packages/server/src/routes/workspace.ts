@@ -145,58 +145,64 @@ export async function workspaceRoutes(app: FastifyInstance) {
     return res;
   });
 
-  // POST /api/workspace/database - Dynamic database connection hot-reload and verify
+  // POST /api/workspace/database - DISABLED by default (P0-2 security)
+  // Per TO_DO.md Phase 1: runtime env must be immutable over HTTP.
+  // Enable only with WORKSPACE_ADMIN_TOKEN + explicit ENABLE_DB_CONFIG_MUTATION=true
   app.post<{ Body: z.infer<typeof databaseConfigSchema> }>(
     "/api/workspace/database",
     { schema: { body: databaseConfigSchema } },
     async (request, reply) => {
-      const { databaseUrl: newUrl } = request.body;
-      const oldUrl = env.DATABASE_URL;
+      const allowMutation = process.env.ENABLE_DB_CONFIG_MUTATION === "true";
+      const adminToken = process.env.WORKSPACE_ADMIN_TOKEN;
+      const providedToken = (request.headers["x-admin-token"] as string) || (request.headers["authorization"] as string)?.replace(/^Bearer\s+/i, "");
 
+      if (!allowMutation || !adminToken) {
+        return reply.status(403).send({
+          success: false,
+          error: "Forbidden",
+          message: "Database configuration mutation is disabled. Set ENABLE_DB_CONFIG_MUTATION=true and WORKSPACE_ADMIN_TOKEN to enable (admin only).",
+        });
+      }
+      if (providedToken !== adminToken) {
+        return reply.status(401).send({ success: false, error: "Unauthorized", message: "Invalid admin token." });
+      }
+
+      const { databaseUrl: newUrl } = request.body;
+
+      // Validate URL shape before any mutation — prevent injection of executable env content
+      try {
+        const parsed = new URL(newUrl);
+        if (!["postgres:", "postgresql:"].includes(parsed.protocol)) {
+          return reply.status(400).send({ success: false, error: "Bad Request", message: "DATABASE_URL must be a postgres:// URL" });
+        }
+      } catch {
+        return reply.status(400).send({ success: false, error: "Bad Request", message: "Invalid DATABASE_URL format" });
+      }
+
+      const oldUrl = env.DATABASE_URL;
       try {
         await closeDatabaseConnection();
+        // Do NOT mutate process.env or write .env file — log audit event instead
+        request.log.warn({ adminTokenProvided: !!providedToken }, "[SECURITY] Admin requested DATABASE_URL hot-reload — testing connection only, not persisting to .env");
         env.DATABASE_URL = newUrl;
         process.env.DATABASE_URL = newUrl;
 
         const db = getDb();
         await db.select().from(workspaceSettings).limit(1);
 
-        const envPath = path.resolve(process.cwd(), ".env");
-        let envContent = "";
-        try {
-          envContent = await fs.readFile(envPath, "utf8");
-        } catch {
-        }
-
-        const lines = envContent.split(/\r?\n/);
-        let urlUpdated = false;
-        const newLines = lines.map((line) => {
-          if (line.trim().startsWith("DATABASE_URL=")) {
-            urlUpdated = true;
-            return `DATABASE_URL="${newUrl}"`;
-          }
-          return line;
-        });
-
-        if (!urlUpdated) {
-          newLines.push(`DATABASE_URL="${newUrl}"`);
-        }
-
-        await fs.writeFile(envPath, newLines.join("\n"), "utf8");
-
+        // Audit: do not write to filesystem. Require manual .env rotation with re-encrypt (per TO_DO.md 5.1 Secret Protection)
         return {
           success: true,
-          message: "Database connection hot-reload verified successfully and saved to configuration."
+          message: "Database connection verified (NOT persisted). Manually update .env and restart to persist.",
         };
       } catch (error) {
         await closeDatabaseConnection();
         env.DATABASE_URL = oldUrl;
         process.env.DATABASE_URL = oldUrl;
-
         return reply.status(400).send({
           success: false,
           error: "Bad Request",
-          message: `Database connection verification failed: ${error instanceof Error ? error.message : String(error)}`
+          message: `Database connection verification failed: ${error instanceof Error ? error.message : String(error)}`,
         });
       }
     }

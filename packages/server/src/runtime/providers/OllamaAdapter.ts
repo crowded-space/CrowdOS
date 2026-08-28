@@ -1,4 +1,6 @@
-﻿import type { IProviderAdapter, ModelModuleConfig, LLMRequest, LLMResponse } from '../types.js'
+import type { IProviderAdapter, ModelModuleConfig, LLMRequest, LLMResponse , RawToolCall} from '../types.js'
+import { isProviderError } from './providerErrors.js'
+import { providerFetch, type GuardedProviderCall } from './providerHttp.js'
 
 export class OllamaAdapter implements IProviderAdapter {
   readonly provider = 'ollama'
@@ -8,17 +10,18 @@ export class OllamaAdapter implements IProviderAdapter {
   async call(
     config: ModelModuleConfig,
     request: LLMRequest,
-    onChunk?: (chunk: { content: string; thoughts?: string; isThoughts?: boolean }) => void
+    onChunk?: (chunk: { content: string; thoughts?: string; isThoughts?: boolean }) => void,
+    options?: { signal?: AbortSignal }
   ): Promise<LLMResponse> {
     const modelName = config.modelName || 'llama3'
-    const apiKey = config.apiKey || ''
+    const apiKey = config.apiKey || process.env.OLLAMA_API_KEY || ''
 
     let endpointUrl = config.endpointUrl || 'http://localhost:11434/v1'
     if (endpointUrl.endsWith('/')) {
       endpointUrl = endpointUrl.slice(0, -1)
     }
 
-    const messages: Array<{ role: string; content: string }> = []
+    const messages: any[] = []
 
     if (request.systemPrompt) {
       messages.push({ role: 'system', content: request.systemPrompt })
@@ -26,7 +29,23 @@ export class OllamaAdapter implements IProviderAdapter {
 
     if (request.history) {
       for (const msg of request.history) {
-        if (msg.role === 'user' || msg.role === 'assistant') {
+        if (msg.role === 'assistant' && msg.toolCalls?.length) {
+          messages.push({
+            role: 'assistant',
+            content: msg.content || null,
+            tool_calls: msg.toolCalls.map(tc => ({
+              id: tc.id,
+              type: 'function' as const,
+              function: { name: tc.name, arguments: JSON.stringify(tc.input) },
+            })),
+          } as any)
+        } else if (msg.role === 'tool') {
+          messages.push({
+            role: 'tool',
+            tool_call_id: msg.toolCallId || "call_0",
+            content: msg.content,
+          } as any)
+        } else if (msg.role === 'user' || msg.role === 'assistant') {
           messages.push({ role: msg.role, content: msg.content })
         }
       }
@@ -63,33 +82,41 @@ export class OllamaAdapter implements IProviderAdapter {
     if (onChunk) {
       body.stream = true
 
-      let response: Response
+      let guarded: GuardedProviderCall
       try {
-        response = await fetch(`${endpointUrl}/chat/completions`, {
-          method: 'POST',
-          headers,
-          body: JSON.stringify(body),
-        })
+        guarded = await providerFetch(
+          `${endpointUrl}/chat/completions`,
+          { method: 'POST', headers, body: JSON.stringify(body) },
+          { callerSignal: options?.signal, provider: 'ollama' }
+        )
       } catch (err: any) {
+        if (isProviderError(err)) throw err
         const cause = err?.cause ? ` (Cause: ${String(err.cause)})` : ''
         throw new Error(`[OllamaAdapter] Network error: ${String(err)}${cause} - tried to POST to ${endpointUrl}/chat/completions`)
       }
+      const response = guarded.response
 
       if (!response.ok) {
-        const errorText = await response.text()
+        const errorText = await guarded.text()
         throw new Error(`[OllamaAdapter] API error ${response.status}: ${errorText}`)
       }
 
       const reader = response.body
       if (!reader) {
+        guarded.finish()
         throw new Error('[OllamaAdapter] Empty response body from stream API')
       }
 
       let fullContent = ''
+      let fullThoughts = ''
       const decoder = new TextDecoder()
       let sseBuffer = ''
 
-      for await (const chunkBytes of reader as any) {
+      const toolCallAccumulator = new Map<number, { id: string; name: string; argsJson: string }>()
+      let streamFinishReason: string = 'stop'
+      let streamUsage: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number } | undefined
+
+      for await (const chunkBytes of guarded.stream(reader)) {
         sseBuffer += decoder.decode(chunkBytes, { stream: true })
         const lines = sseBuffer.split('\n')
         sseBuffer = lines.pop() || ''
@@ -101,52 +128,105 @@ export class OllamaAdapter implements IProviderAdapter {
           if (!dataStr) continue
           try {
             const json = JSON.parse(dataStr)
-            const contentChunk = json.choices?.[0]?.delta?.content || ''
-            if (contentChunk) {
-              fullContent += contentChunk
-              onChunk({ content: contentChunk })
+            // Real token accounting when the server reports usage chunks
+            if (json.usage && typeof json.usage.prompt_tokens === 'number') {
+              streamUsage = json.usage
+            }
+            const delta = json.choices?.[0]?.delta
+            if (delta) {
+              const reasoningChunk = delta.reasoning_content || delta.reasoning || delta.thinking || ''
+              const contentChunk = delta.content || ''
+
+              if (reasoningChunk) {
+                fullThoughts += reasoningChunk
+                onChunk({ content: reasoningChunk, isThoughts: true })
+              }
+              if (contentChunk) {
+                fullContent += contentChunk
+                onChunk({ content: contentChunk, isThoughts: false })
+              }
+
+              // Handle streamed tool calls
+              if (delta?.tool_calls) {
+                for (const tc of delta.tool_calls) {
+                  const idx = tc.index ?? 0
+                  if (!toolCallAccumulator.has(idx)) {
+                    toolCallAccumulator.set(idx, { id: tc.id || '', name: tc.function?.name || '', argsJson: '' })
+                  }
+                  const entry = toolCallAccumulator.get(idx)!
+                  if (tc.id) entry.id = tc.id
+                  if (tc.function?.name) entry.name = tc.function.name
+                  if (tc.function?.arguments) entry.argsJson += tc.function.arguments
+                }
+              }
             }
           } catch {
             // ignore JSON parse errors for incomplete chunk lines
           }
+          // Capture finish reason
+          try {
+            const json = JSON.parse(dataStr)
+            if (json.choices?.[0]?.finish_reason) {
+              streamFinishReason = json.choices[0].finish_reason
+            }
+          } catch {}
         }
       }
 
-      const promptTokens = Math.ceil(request.userPrompt.length / 4)
-      const completionTokens = Math.ceil(fullContent.length / 4)
+      const streamToolCalls: RawToolCall[] = []
+      for (const entry of toolCallAccumulator.values()) {
+        try {
+          streamToolCalls.push({ id: entry.id, name: entry.name, input: JSON.parse(entry.argsJson || '{}') })
+        } catch {
+          streamToolCalls.push({ id: entry.id, name: entry.name, input: {} })
+        }
+      }
+
+      const promptTokens: number = streamUsage?.prompt_tokens ?? Math.ceil(request.userPrompt.length / 4)
+      const completionTokens: number = streamUsage?.completion_tokens ?? Math.ceil((fullThoughts.length + fullContent.length) / 4)
 
       return {
         content: fullContent,
+        thoughts: fullThoughts || undefined,
+        toolCalls: streamToolCalls.length > 0 ? streamToolCalls : undefined,
         usage: {
           promptTokens,
           completionTokens,
-          totalTokens: promptTokens + completionTokens,
+          totalTokens: streamUsage?.total_tokens ?? (promptTokens + completionTokens),
         },
-        finishReason: 'stop',
+        finishReason: streamFinishReason === 'tool_calls' ? 'tool_use' : 'stop',
       }
     }
 
-    let response: Response
+    let guarded: GuardedProviderCall
     try {
-      response = await fetch(`${endpointUrl}/chat/completions`, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify(body),
-      })
+      guarded = await providerFetch(
+        `${endpointUrl}/chat/completions`,
+        { method: 'POST', headers, body: JSON.stringify(body) },
+        { callerSignal: options?.signal, provider: 'ollama' }
+      )
     } catch (err: any) {
+      if (isProviderError(err)) throw err
       const cause = err?.cause ? ` (Cause: ${String(err.cause)})` : ''
       throw new Error(`[OllamaAdapter] Network error: ${String(err)}${cause} - tried to POST to ${endpointUrl}/chat/completions`)
     }
 
-    if (!response.ok) {
-      const errorText = await response.text()
-      throw new Error(`[OllamaAdapter] API error ${response.status}: ${errorText}`)
+    if (!guarded.response.ok) {
+      const errorText = await guarded.text()
+      throw new Error(`[OllamaAdapter] API error ${guarded.response.status}: ${errorText}`)
     }
 
-    const json = await response.json()
-    const content: string = json.choices?.[0]?.message?.content || ''
+    const json = await guarded.json() as any
+    const message = json.choices?.[0]?.message
+    const content: string = message?.content || ''
+    const rawToolCalls = message?.tool_calls as any[] | undefined
+    const toolCalls: RawToolCall[] = (rawToolCalls || []).map((tc: any) => ({
+      id: tc.id,
+      name: tc.function.name,
+      input: JSON.parse(tc.function.arguments || '{}'),
+    }))
 
-    if (!content) {
+    if (!content && toolCalls.length === 0) {
       throw new Error('[OllamaAdapter] Empty response from API')
     }
 
@@ -155,12 +235,13 @@ export class OllamaAdapter implements IProviderAdapter {
 
     return {
       content,
+      toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
       usage: {
         promptTokens,
         completionTokens,
         totalTokens: promptTokens + completionTokens,
       },
-      finishReason: 'stop',
+      finishReason: json.choices?.[0]?.finish_reason === 'tool_calls' ? 'tool_use' : 'stop',
     }
   }
 }

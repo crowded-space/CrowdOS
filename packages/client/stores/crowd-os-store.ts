@@ -1,6 +1,30 @@
 import { create } from 'zustand';
-import { socket } from '../src/config/socket';
+import { socket, emitChannelJoin } from '../src/config/socket';
 import { stripToolCalls } from '@community-agent/shared';
+import {
+  encodeBeforeParam,
+  parseMessagesEnvelope,
+  prependOlderMessages,
+  capMessagesMirror,
+  MESSAGE_MIRROR_CAP_PER_CHANNEL
+} from './messagePagination';
+import type { PageCursor } from './messagePagination';
+import { apiClient } from '../src/api/client';
+
+// UX-7: DEMO_FALLBACK honesty — when false, outages show errors, not seeded demo data
+const DEMO_FALLBACK: boolean = (() => {
+  try {
+    const viteFlag = (import.meta as unknown as { env?: Record<string, string> })?.env?.VITE_DEMO_FALLBACK;
+    if (viteFlag === 'true') return true;
+    if (viteFlag === 'false') return false;
+  } catch {}
+  try {
+    const nodeFlag = (typeof process !== 'undefined' ? (process as unknown as { env?: Record<string, string> })?.env?.DEMO_FALLBACK : undefined);
+    if (nodeFlag === 'true') return true;
+    if (nodeFlag === 'false') return false;
+  } catch {}
+  return false;
+})();
 import { 
   Agent, 
   AgentStatus,
@@ -17,10 +41,75 @@ import {
   Channel,
   Category,
   ConstraintsModule,
-  CapabilitiesModule
+  CapabilitiesModule,
+  ComposerMode
 } from '../types/crowd-os';
 
+export interface ApprovalRequest {
+  id: string;
+  runId: string;
+  tool: string;
+  argsPreview: Record<string, unknown> | null;
+  riskClass: string;
+  status: 'pending' | 'approved' | 'denied' | 'expired';
+  channelId?: string | null;
+  scope?: string | null;
+  expiresAt?: string | null;
+  requestedBy?: string | null;
+}
+
+export interface ArtifactRow {
+  id: string;
+  runId: string | null;
+  workspaceId: string;
+  producerAgent: string;
+  artifactType: string;
+  path: string | null;
+  beforeHash: string | null;
+  afterHash: string | null;
+  patch: string | null;
+  contentRef: string | null;
+  createdAt: string;
+}
+
 const BACKEND_URL = '';
+
+function loadSeqCursors(): Record<string, number> {
+  if (typeof localStorage === 'undefined') return {};
+  try {
+    const raw = localStorage.getItem('crowdos_seq_cursors');
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed === 'object') return parsed as Record<string, number>;
+    }
+  } catch {}
+  return {};
+}
+
+function persistSeqCursors(map: Record<string, number>) {
+  if (typeof localStorage === 'undefined') return;
+  try { localStorage.setItem('crowdos_seq_cursors', JSON.stringify(map)); } catch {}
+}
+
+function isChannelMutedLS(channelId: string): boolean {
+  if (typeof localStorage === 'undefined' || !channelId) return false;
+  try {
+    if (localStorage.getItem(`crowdos_mute_${channelId}`) === 'true') return true;
+    const raw = localStorage.getItem('crowdos_muted_channels');
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (parsed && parsed[channelId]) return true;
+    }
+  } catch {}
+  return false;
+}
+
+function unwrapEnvelope(raw: any): { payload: any; seq: number | null; type?: string; eventId?: string } {
+  if (raw && typeof raw === 'object' && 'payload' in raw && ('eventId' in raw || 'type' in raw || 'seq' in raw)) {
+    return { payload: raw.payload, seq: raw.seq ?? null, type: raw.type, eventId: raw.eventId };
+  }
+  return { payload: raw, seq: raw?.seq ?? null, type: raw?.type, eventId: raw?.eventId };
+}
 
 async function readApiError(response: Response, fallback: string): Promise<Error> {
   try {
@@ -62,6 +151,62 @@ function mapBackendChannel(channel: any, description: string): Channel {
 
 function getFirstChannelId(workspace?: Workspace): string | null {
   return workspace?.channels?.[0]?.id || workspace?.categories.flatMap(category => category.channels)[0]?.id || null;
+}
+
+function getHashChannelId(): string | null {
+  if (typeof window === 'undefined' || !window.location.hash) return null;
+  const hash = window.location.hash.replace(/^#\/?/, '');
+  if (!hash) return null;
+  // supports #ch-xxx or #workspaceId/ch-xxx or #channel=ch-xxx
+  if (hash.includes('channel=')) {
+    const m = hash.match(/channel=([^&]+)/);
+    return m ? decodeURIComponent(m[1]) : null;
+  }
+  const parts = hash.split('/');
+  return parts[parts.length - 1] || null;
+}
+
+function pushChannelHistory(workspaceId: string | null, channelId: string | null, replace = false) {
+  if (typeof window === 'undefined') return;
+  if (!workspaceId || !channelId) return;
+  const next = `#${workspaceId}/${channelId}`;
+  if (window.location.hash === next) return;
+  try {
+    if (replace) window.history.replaceState({ workspaceId, channelId }, '', next);
+    else window.history.pushState({ workspaceId, channelId }, '', next);
+  } catch {}
+}
+
+function persistActiveChannel(channelId: string | null) {
+  if (typeof localStorage === 'undefined') return;
+  if (channelId) localStorage.setItem('crowdos_active_channel', channelId);
+  else localStorage.removeItem('crowdos_active_channel');
+}
+
+// PERF-5: localStorage mirror is capped per channel so it cannot grow unbounded.
+function writeMessagesMirror(messages: Message[]) {
+  if (typeof localStorage === 'undefined') return;
+  localStorage.setItem('crowdos_messages', JSON.stringify(capMessagesMirror(messages)));
+}
+
+function mapBackendMessage(msg: any): Message {
+  return {
+    id: msg.id,
+    type: msg.type || (msg.authorType === 'user' ? 'human' : 'agent'),
+    content: stripToolCalls(msg.content || ''),
+    authorId: msg.authorId,
+    authorName: msg.authorName,
+    authorAvatar: msg.authorType === 'user' ? undefined : '🤖',
+    channelId: msg.channelId,
+    timestamp: new Date(msg.timestamp).toISOString(),
+    metadata: msg.metadata
+      ? {
+          ...msg.metadata,
+          monologue: msg.metadata.monologue ? stripToolCalls(msg.metadata.monologue) : undefined
+        }
+      : undefined,
+    toolExecution: msg.toolExecution || undefined
+  };
 }
 
 function toBackendAgentStatus(status?: AgentStatus): 'idle' | 'working' | 'paused' | 'offline' | undefined {
@@ -112,6 +257,14 @@ interface CrowdOSState {
   // Search & Filters
   chatSearchQuery: string;
 
+  // Composer Mode State
+  selectedMode: ComposerMode;
+  isPinned: boolean;
+  modeByChannel: Record<string, ComposerMode>;
+  setMode: (mode: ComposerMode, channelId?: string) => void;
+  togglePin: () => void;
+  resetOnChannelChange: (channelId?: string) => void;
+
   // Async indicators
   isFetchingWorkspaces: boolean;
   isCreatingWorkspace: boolean;
@@ -126,8 +279,13 @@ interface CrowdOSState {
   setActiveChannel: (id: string) => Promise<void>;
   
   // Message actions
-  addMessage: (msg: Omit<Message, 'id' | 'timestamp'>) => void;
+  addMessage: (msg: Omit<Message, 'id' | 'timestamp'> & { runtimeMode?: string }) => void;
   clearChannelMessages: (channelId: string) => void;
+
+  // PERF-5 pagination state
+  channelCursors: Record<string, PageCursor | null>;
+  isLoadingOlder: boolean;
+  loadOlderMessages: () => Promise<void>;
 
   // Agent actions
   addAgent: (agent: Omit<Agent, 'id' | 'createdAt' | 'lastActive'>) => Promise<void>;
@@ -206,105 +364,33 @@ interface CrowdOSState {
   fetchBudget: () => Promise<void>;
   updateBudget: (globalSoftCap?: number, perProviderBudget?: any) => Promise<void>;
   resetBudget: () => Promise<void>;
+
+  // UX-1 cancel + UX-5 background continuity
+  channelSeq: Record<string, number>;
+  reconnectDigest: { message: string; visible: boolean } | null;
+  cancellingByAgent: Record<string, boolean>;
+  cancelRun: (channelId: string, agentId?: string) => void;
+  clearReconnectDigest: () => void;
+  emitChannelJoin: (channelId: string) => void;
+  isChannelMuted: (channelId: string) => boolean;
+
+  // UX-2 Approval cards
+  approvalRequests: ApprovalRequest[];
+  decideApproval: (approvalId: string, decision: 'approved' | 'denied', scope?: string | null) => Promise<void>;
+
+  // UX-3 Diff review
+  artifactsByRun: Record<string, ArtifactRow[]>;
+  fetchArtifacts: (runId: string) => Promise<void>;
+  applyDiff: (artifactId: string) => Promise<void>;
+  revertDiff: (artifactId: string) => Promise<void>;
+
+  // UX-4 Edit/regenerate/retry
+  editResend: (originalMessageId: string, newContent: string) => void;
+  regenerate: (messageId: string) => void;
+  retryRun: (runId: string) => Promise<void>;
 }
 
-// Pre-configured items
-const initialTools: Tool[] = [
-  { id: 'web.search', name: 'Web Search', category: 'Intelligence', description: 'Search and scrape live web pages for up-to-date context.', enabled: true, usageCount: 42 },
-  { id: 'sandbox.exec', name: 'Sandbox Code Exec', category: 'Computing', description: 'Run Python/TS files in an isolated micro-sandbox.', enabled: true, usageCount: 129 },
-  { id: 'github.read', name: 'Repo Reader', category: 'VCS', description: 'Inspect structure, branches, and code files of git repositories.', enabled: true, usageCount: 81 },
-  { id: 'db.query', name: 'Spanner Proxy', category: 'Database', description: 'Query the underlying high-performance transactional database.', enabled: false, usageCount: 0 },
-  { id: 'agent.orchestrate', name: 'Sub-Agent Spawn', category: 'Swarm', description: 'Dynamically instantiate and patch temporary L3 agents.', enabled: true, usageCount: 56 }
-];
-
-const initialRoles: Role[] = [
-  { id: 'role-l0', name: 'L0 Omniscient Monitor', color: 'oklch(0.75 0.12 180)', permissions: ['all'] },
-  { id: 'role-l1', name: 'L1 Executive Administrator', color: 'oklch(0.65 0.15 25)', permissions: ['spawn_agents', 'patch_runtime', 'manage_budgets', 'kill_switch'] },
-  { id: 'role-l2', name: 'L2 Operation Coordinator', color: 'oklch(0.62 0.15 250)', permissions: ['task_assign', 'tool_invoke', 'patch_temporary'] },
-  { id: 'role-l3', name: 'L3 Autonomic Worker', color: 'oklch(0.60 0.12 145)', permissions: ['tool_invoke', 'sandbox_exec'] }
-];
-
-const initialModelProfiles: ModelProfile[] = [
-  { id: 'prof-gemini-pro', label: 'Flagship Reasoner', provider: 'google', modelName: 'gemini-2.5-pro', apiKeyConfigured: true, createdAt: new Date().toISOString() },
-  { id: 'prof-gemini-flash', label: 'Fast Executor', provider: 'google', modelName: 'gemini-2.5-flash', apiKeyConfigured: true, createdAt: new Date().toISOString() },
-  { id: 'prof-claude-35', label: 'Complex Planner', provider: 'anthropic', modelName: 'claude-3-5-sonnet', apiKeyConfigured: false, createdAt: new Date().toISOString() }
-];
-
-const initialInstructionModules: InstructionModule[] = [
-  { id: 'mod-inst-l0', name: 'Omniscient Surveillance', systemPrompt: 'Maintain high-altitude strategic visibility. Keep tabs on budget, safety rules, logs, and trace delegation pipelines. Write simple concise summaries.', rules: ['Do not interfere directly', 'Generate weekly reports on demand', 'Trigger warning toast if tokens exceed rate limits'], createdAt: new Date().toISOString() },
-  { id: 'mod-inst-l1', name: 'Systems Architecture Admin', systemPrompt: 'Analyze client requirements, split engineering pipelines, provision modular subtask coordinates, verify code builds. Authority level 1.', rules: ['Validate design schemas thoroughly', 'Approve toolkit adjustments only if safe', 'Enforce strict structural boundaries'], createdAt: new Date().toISOString() },
-  { id: 'mod-inst-l2', name: 'Task Orchestration Loop', systemPrompt: 'Receive architectural breakdowns from L1. Map instructions to specific tasks. Spawn L3 worker drones. Review deliverables before replying.', rules: ['Delegate micro-tasks efficiently', 'Keep monologues readable and transparent', 'Monitor execution bounds'], createdAt: new Date().toISOString() },
-  { id: 'mod-inst-l3-coder', name: 'Standard React/Vite Worker', systemPrompt: 'Implement polished React components utilizing Tailwind CSS v4. Support responsiveness, accessibility, and neat animations.', rules: ['No mock styles or scripts', 'Adhere strictly to design token coordinates', 'Output code blocks with standard markdown'], createdAt: new Date().toISOString() }
-];
-
-const initialModelModules: ModelModule[] = [
-  { id: 'mod-model-heavy', name: 'Deep Reasoning Profile', modelProfileId: 'prof-gemini-pro', temperature: 0.1, maxTokens: 8192, createdAt: new Date().toISOString() },
-  { id: 'mod-model-light', name: 'Speed Runner Profile', modelProfileId: 'prof-gemini-flash', temperature: 0.7, maxTokens: 4096, createdAt: new Date().toISOString() }
-];
-
-const initialToolkitModules: ToolkitModule[] = [
-  { id: 'mod-tool-super', name: 'Full Admin Gear', enabledToolIds: ['web.search', 'sandbox.exec', 'github.read', 'db.query', 'agent.orchestrate'], createdAt: new Date().toISOString() },
-  { id: 'mod-tool-coder', name: 'Isolated Exec Deck', enabledToolIds: ['sandbox.exec', 'web.search'], createdAt: new Date().toISOString() }
-];
-
-const initialAgents: Agent[] = [
-  { id: 'agent-apex', name: 'Archon Apex', species: 'Falcon', level: 0, status: 'active', instructionModuleId: 'mod-inst-l0', modelModuleId: 'mod-model-heavy', toolkitModuleId: 'mod-tool-super', createdAt: new Date().toISOString(), lastActive: new Date().toISOString(), description: 'Strategic surveillance entity supervising cross-agent computational rates and execution rules.' },
-  { id: 'agent-raven', name: 'Raven Architect', species: payload.species || 'AI Assistant', level: 1, status: 'thinking', instructionModuleId: 'mod-inst-l1', modelModuleId: 'mod-model-heavy', toolkitModuleId: 'mod-tool-super', createdAt: new Date().toISOString(), lastActive: new Date().toISOString(), description: 'Workspace structural coordinator. Manages operational channels, delegates tasks, audits tool structures.' },
-  { id: 'agent-crow', name: 'Crow Orchestrator', species: 'Crow', level: 2, status: 'idle', instructionModuleId: 'mod-inst-l2', modelModuleId: 'mod-model-light', toolkitModuleId: 'mod-tool-super', parentId: 'agent-raven', createdAt: new Date().toISOString(), lastActive: new Date().toISOString(), description: 'Delegation and tasks router. Spawns, monitors, and validates temporary operations workers.' },
-  { id: 'agent-sparrow', name: 'Sparrow Runner', species: 'Sparrow', level: 3, status: 'executing', instructionModuleId: 'mod-inst-l3-coder', modelModuleId: 'mod-model-light', toolkitModuleId: 'mod-tool-coder', parentId: 'agent-crow', createdAt: new Date().toISOString(), lastActive: new Date().toISOString(), description: 'Rapid frontend rendering drone focused on visual styling, touch mechanics, and UI layout trees.' },
-  { id: 'agent-pigeon', name: 'Pigeon Gatherer', species: 'Pigeon', level: 3, status: 'sleeping', instructionModuleId: 'mod-inst-l3-coder', modelModuleId: 'mod-model-light', toolkitModuleId: 'mod-tool-coder', parentId: 'agent-crow', createdAt: new Date().toISOString(), lastActive: new Date().toISOString(), description: 'Asynchronous fetch/crawl operator gathering repository metadata and caching assets.' }
-];
-
-const defaultWorkspaces: Workspace[] = [
-  {
-    id: 'crowdos',
-    name: 'CrowdOS Workspace',
-    icon: 'crow-indigo-circle',
-    dbUrl: 'spanner://corp-prod.google.sql/db_148',
-    categories: [
-      {
-        id: 'cat-admin',
-        name: '[ADMIN]',
-        collapsed: false,
-        channels: [
-          { id: 'ch-admin-general', name: 'general', description: 'Admin default channel', unreadCount: 0, hasMention: false }
-        ]
-      },
-      {
-        id: 'cat-gov',
-        name: 'GOVERNANCE & AUDIT',
-        collapsed: false,
-        channels: [
-          { id: 'ch-announcements', name: 'ops-bulletins', description: 'System-wide swarm announcements, core reports, and operational logs.', unreadCount: 0, hasMention: false },
-          { id: 'ch-governance', name: 'swarm-governance', description: 'Real-time trace logs auditing agent permission exceptions.', unreadCount: 1, hasMention: true }
-        ]
-      },
-      {
-        id: 'cat-eng',
-        name: 'ENGINEERING DEPT',
-        collapsed: false,
-        channels: [
-          { id: 'ch-general', name: 'general-chat', description: 'Direct human operator messaging channel for manual system override prompts.', unreadCount: 0, hasMention: false },
-          { id: 'ch-architecture', name: 'arch-design', description: 'Where Raven Architect and Crow Orchestrator debate structural layouts.', unreadCount: 3, hasMention: false },
-          { id: 'ch-execution', name: 'execution-logs', description: 'Collapsible tracking channels for L3 tool runs and temporary script executions.', unreadCount: 0, hasMention: false }
-        ]
-      }
-    ],
-    createdAt: new Date().toISOString()
-  }
-];
-
-const initialMessages: Message[] = [
-  {
-    id: 'msg-0',
-    type: 'system',
-    content: '🔮 CrowdOS Core Swarm Online. L0, L1, and L2 nodes bound to database engine.',
-    authorId: 'system',
-    authorName: 'System Kernel',
-    channelId: 'ch-announcements',
-    timestamp: new Date(Date.now() - 3600 * 1000 * 4).toISOString()
-  }
-];
+import { initialTools, initialRoles, initialModelProfiles, initialInstructionModules, initialModelModules, initialToolkitModules, initialAgents, defaultWorkspaces, initialMessages } from './initialData';
 
 export const useCrowdOSStore = create<CrowdOSState>((set, get) => {
   // Read initial workspace state from localStorage if available
@@ -337,17 +423,138 @@ export const useCrowdOSStore = create<CrowdOSState>((set, get) => {
   const storedMessages = typeof localStorage !== 'undefined' ? localStorage.getItem('crowdos_messages') : null;
   const storedInstructionModules = typeof localStorage !== 'undefined' ? localStorage.getItem('crowdos_instruction_modules') : null;
   const storedModelModules = typeof localStorage !== 'undefined' ? localStorage.getItem('crowdos_model_modules') : null;
+const storedIsPinned = typeof localStorage !== 'undefined' ? localStorage.getItem('crowdos_is_pinned') === 'true' : false;
+const storedSelectedMode = (typeof localStorage !== 'undefined' ? localStorage.getItem('crowdos_selected_mode') : null) as ComposerMode | null;
+const initialSelectedMode: ComposerMode = (storedIsPinned && storedSelectedMode) ? storedSelectedMode : 'auto';
   const storedToolkitModules = typeof localStorage !== 'undefined' ? localStorage.getItem('crowdos_toolkit_modules') : null;
 
   const parsedActiveId = storedWorkspaceId || (parsedWorkspaces.length > 0 ? parsedWorkspaces[0].id : null);
   const parsedAgents = storedAgents ? JSON.parse(storedAgents) : initialAgents;
   const parsedProfiles = storedProfiles ? JSON.parse(storedProfiles) : initialModelProfiles;
-  const parsedMessages = storedMessages ? JSON.parse(storedMessages) : initialMessages;
+  const parsedMessages = capMessagesMirror(storedMessages ? JSON.parse(storedMessages) : initialMessages, MESSAGE_MIRROR_CAP_PER_CHANNEL);
   const parsedInstructionModules = storedInstructionModules ? JSON.parse(storedInstructionModules) : initialInstructionModules;
   const parsedModelModules = storedModelModules ? JSON.parse(storedModelModules) : initialModelModules;
-  const parsedToolkitModules = storedToolkitModules ? JSON.parse(storedToolkitModules) : initialToolkitModules;  // Resolve active channel from active workspace
+  const parsedToolkitModules = storedToolkitModules ? JSON.parse(storedToolkitModules) : initialToolkitModules;
+  // Resolve active channel — hash > persisted > first channel
   const currentWS = parsedWorkspaces.find((w: Workspace) => w.id === parsedActiveId);
-  const initialChannelId = currentWS?.categories[0]?.channels[0]?.id || null;
+  const storedChannelId = typeof localStorage !== 'undefined' ? localStorage.getItem('crowdos_active_channel') : null;
+  const hashChannelId = getHashChannelId();
+  const allChannelIdsForInit = new Set([
+    ...((currentWS as any)?.channels?.map((c: Channel) => c.id) || []),
+    ...((currentWS?.categories.flatMap(category => category.channels.map(ch => ch.id)) || []) as string[])
+  ]);
+  const initialChannelId = (() => {
+    if (hashChannelId && allChannelIdsForInit.has(hashChannelId)) return hashChannelId;
+    if (storedChannelId && allChannelIdsForInit.has(storedChannelId)) return storedChannelId;
+    return getFirstChannelId(currentWS as Workspace | undefined);
+  })();
+  if (parsedActiveId && initialChannelId) {
+    persistActiveChannel(initialChannelId);
+    // seed history without pushing duplicate entry
+    if (typeof window !== 'undefined' && !window.location.hash) {
+      pushChannelHistory(parsedActiveId, initialChannelId, true);
+    }
+  }
+
+  const seqCursors: Record<string, number> = loadSeqCursors();
+  let wasDisconnected = false;
+
+  function persistSeq(channelId: string, seq: number) {
+    if (!channelId || typeof seq !== 'number' || Number.isNaN(seq)) return;
+    const cur = seqCursors[channelId] ?? 0;
+    if (seq > cur) {
+      seqCursors[channelId] = seq;
+      persistSeqCursors(seqCursors);
+      set((s: any) => ({ channelSeq: { ...s.channelSeq, [channelId]: seq } }));
+    }
+  }
+
+  function emitChannelJoinDebounced(channelId: string) {
+    if (!channelId) return;
+    try { emitChannelJoin(channelId); } catch {}
+  }
+
+  async function fetchGapAndDigest(channelId: string, afterSeq: number) {
+    try {
+      const res = await fetch(`${BACKEND_URL}/api/events/recent?channelId=${encodeURIComponent(channelId)}&afterSeq=${afterSeq}&limit=100`);
+      if (!res.ok) return;
+      const data = await res.json() as { events: Array<{ seq: number; type: string; agentId?: string; payload: any; createdAt: string }>; lastSeq: number; channelId: string };
+      const events = data.events || [];
+      if (events.length === 0) return;
+      let runsFinished = 0;
+      let runsFailed = 0;
+      let newMessages = 0;
+      const msgsToAdd: Message[] = [];
+      for (const ev of events) {
+        if (typeof ev.seq === 'number') persistSeq(channelId, ev.seq);
+        const type = ev.type;
+        const payload = ev.payload;
+        if (type === 'run.status_changed') {
+          const st = payload?.status;
+          if (st === 'completed') runsFinished++;
+          else if (st === 'failed') runsFailed++;
+        }
+        if (type === 'message:new' && payload) {
+          const p = payload as any;
+          if (!p.isInternalMonologue) {
+            newMessages++;
+            try {
+              const mapped = mapBackendMessage({
+                ...p,
+                timestamp: p.timestamp || ev.createdAt || new Date().toISOString(),
+              });
+              msgsToAdd.push(mapped);
+            } catch {}
+          }
+        }
+      }
+      if (msgsToAdd.length > 0) {
+        set((state: any) => {
+          const existingIds = new Set(state.messages.map((m: Message) => m.id));
+          const fresh = msgsToAdd.filter(m => !existingIds.has(m.id));
+          if (fresh.length === 0) return state;
+          let updated = [...state.messages, ...fresh];
+          updated = capMessagesMirror(updated);
+          writeMessagesMirror(updated);
+          return { messages: updated };
+        });
+      }
+      if (runsFinished > 0 || runsFailed > 0 || newMessages > 0) {
+        const parts: string[] = [];
+        if (runsFinished > 0) parts.push(`${runsFinished} run${runsFinished === 1 ? '' : 's'} finished`);
+        if (runsFailed > 0) parts.push(`${runsFailed} failed`);
+        if (newMessages > 0 && runsFinished === 0 && runsFailed === 0) parts.push(`${newMessages} new message${newMessages === 1 ? '' : 's'}`);
+        else if (newMessages > 0) parts.push(`${newMessages} new message${newMessages === 1 ? '' : 's'}`);
+        const digest = `While you were away: ${parts.join(', ')}`;
+        set({ reconnectDigest: { message: digest, visible: true } } as any);
+        setTimeout(() => {
+          const cur = (get() as any).reconnectDigest;
+          if (cur && cur.message === digest) set({ reconnectDigest: null } as any);
+        }, 9000);
+      }
+    } catch {}
+  }
+
+  socket.on('connect', async () => {
+    const activeCh = get().activeChannelId;
+    if (!activeCh) {
+      wasDisconnected = false;
+      return;
+    }
+    if (wasDisconnected) {
+      const afterSeq = seqCursors[activeCh] ?? 0;
+      await fetchGapAndDigest(activeCh, afterSeq);
+      emitChannelJoinDebounced(activeCh);
+      wasDisconnected = false;
+    } else {
+      emitChannelJoinDebounced(activeCh);
+      wasDisconnected = false;
+    }
+  });
+
+  socket.on('disconnect', () => {
+    wasDisconnected = true;
+  });
 
   // Establish socket connection event registers for real-time live synchronization
   // Per-agent monologue buffer to prevent race conditions when multiple agents respond simultaneously
@@ -362,28 +569,27 @@ export const useCrowdOSStore = create<CrowdOSState>((set, get) => {
     toolInputBuffer: string;    // Captured content inside <call_tool>...</call_tool>
   }
   const streamParsers: Record<string, StreamParserState> = {};
+  const lastTurnFinishedAt: Record<string, number> = {};
   const activeToolMessageIds: Record<string, string> = {};
 
-  socket.on('message:new', (msg: any) => {
-    // Reset active stream parser states when a message completes
-    if (msg.authorType === 'agent') {
-      if (streamParsers[msg.authorId]) {
-        delete streamParsers[msg.authorId];
-      }
-    }
-
-    // If the message is an internal monologue, buffer its text per-agent and DO NOT render a chat bubble
+  socket.on('message:new', (raw: any) => {
+    const { payload: msg, seq } = unwrapEnvelope(raw);
+    if (!msg) return;
+    if (typeof seq === 'number' && msg.channelId) persistSeq(msg.channelId, seq);
     if (msg.isInternalMonologue) {
       pendingMonologueBuffers[msg.authorId] = msg.content;
       return;
     }
-
+    if (msg.authorType === 'agent') {
+      if (streamParsers[msg.authorId]) {
+        delete streamParsers[msg.authorId];
+      }
+      lastTurnFinishedAt[msg.authorId] = Date.now();
+    }
     const activeCh = get().activeChannelId;
-    // Map backend ChannelMessage type into frontend client Message representation
     const monologue = msg.authorType === 'agent' && pendingMonologueBuffers[msg.authorId]
       ? stripToolCalls(pendingMonologueBuffers[msg.authorId])
       : undefined;
-
     const mapped: Message = {
       id: msg.id,
       type: msg.authorType === 'user' ? 'human' : 'agent',
@@ -398,7 +604,8 @@ export const useCrowdOSStore = create<CrowdOSState>((set, get) => {
         ? { monologue }
         : (msg.metadata
             ? { ...msg.metadata, monologue: msg.metadata.monologue ? stripToolCalls(msg.metadata.monologue) : undefined }
-            : undefined)
+            : undefined),
+      turnStatus: (msg as any).turnStatus || (msg as any).metadata?.turnStatus || undefined
     };
 
     // Reset per-agent buffer after consumption
@@ -414,9 +621,7 @@ export const useCrowdOSStore = create<CrowdOSState>((set, get) => {
       const updatedMessages = state.messages
         .filter(m => m.id !== `stream-${mapped.authorId}` && m.id !== `stream-tool-${mapped.authorId}`)
         .concat(mapped);
-      if (typeof localStorage !== 'undefined') {
-        localStorage.setItem('crowdos_messages', JSON.stringify(updatedMessages));
-      }
+      writeMessagesMirror(updatedMessages);
 
       // Also trigger notification increment if not active channel
       let updatedWorkspaces = state.workspaces;
@@ -446,12 +651,23 @@ export const useCrowdOSStore = create<CrowdOSState>((set, get) => {
     });
   });
 
-  socket.on('message:stream', (payload: any) => {
+  socket.on('message:stream', (raw: any) => {
+    const { payload, seq } = unwrapEnvelope(raw);
+    if (!payload) return;
+    if (typeof seq === 'number' && payload.channelId) persistSeq(payload.channelId, seq);
     const activeCh = get().activeChannelId;
     if (payload.channelId !== activeCh) return;
 
     const agentId = payload.agentId;
+
+    // Guard: ignore stream chunks that arrive after the final message has already
+    // replaced the stream virtual message (trailing/late chunks from a completed turn).
+    if (!streamParsers[agentId] && lastTurnFinishedAt[agentId] && (Date.now() - lastTurnFinishedAt[agentId] < 2000)) {
+      return;
+    }
+
     if (!streamParsers[agentId]) {
+      delete lastTurnFinishedAt[agentId];
       streamParsers[agentId] = {
         thoughtsBuffer: '',
         contentBuffer: '',
@@ -560,7 +776,10 @@ export const useCrowdOSStore = create<CrowdOSState>((set, get) => {
     });
   });
 
-  socket.on('tool:start', (payload: any) => {
+  socket.on('tool:start', (raw: any) => {
+    const { payload, seq } = unwrapEnvelope(raw);
+    if (!payload) return;
+    if (typeof seq === 'number' && payload.channelId) persistSeq(payload.channelId, seq);
     const activeCh = get().activeChannelId;
     if (payload.channelId !== activeCh) return;
  
@@ -596,7 +815,10 @@ export const useCrowdOSStore = create<CrowdOSState>((set, get) => {
     });
   });
  
-  socket.on('tool:complete', (payload: any) => {
+  socket.on('tool:complete', (raw: any) => {
+    const { payload, seq } = unwrapEnvelope(raw);
+    if (!payload) return;
+    if (typeof seq === 'number' && payload.channelId) persistSeq(payload.channelId, seq);
     const activeCh = get().activeChannelId;
     if (payload.channelId !== activeCh) return;
  
@@ -632,7 +854,14 @@ export const useCrowdOSStore = create<CrowdOSState>((set, get) => {
     });
   });
 
-  socket.on('agent:status', (payload: any) => {
+  socket.on('agent:status', (raw: any) => {
+    const { payload, seq } = unwrapEnvelope(raw);
+    if (!payload) return;
+    if (typeof seq === 'number' && payload.channelId) persistSeq(payload.channelId, seq);
+    else if (typeof seq === 'number' && (payload as any).channelId == null) {
+      const ch = get().activeChannelId;
+      if (ch) persistSeq(ch, seq);
+    }
     set(state => ({
       agents: state.agents.map(ag => {
         if (ag.id === payload.agentId || ag.name.toLowerCase() === payload.agentId.toLowerCase()) {
@@ -647,8 +876,22 @@ export const useCrowdOSStore = create<CrowdOSState>((set, get) => {
     }));
   });
 
-  socket.on('agent:thinking', (payload: any) => {
-    // Show active thinking status
+  socket.on('agent:thinking', (raw: any) => {
+    const { payload, seq } = unwrapEnvelope(raw);
+    if (!payload) return;
+    if (typeof seq === 'number' && payload.channelId) persistSeq(payload.channelId, seq);
+    if (payload.agentId) {
+      delete lastTurnFinishedAt[payload.agentId];
+      if (!streamParsers[payload.agentId]) {
+        streamParsers[payload.agentId] = {
+          thoughtsBuffer: '',
+          contentBuffer: '',
+          inToolCall: false,
+          toolName: '',
+          toolInputBuffer: ''
+        };
+      }
+    }
     set(state => ({
       agents: state.agents.map(ag => {
         if (ag.id === payload.agentId || ag.name.toLowerCase() === payload.agentId.toLowerCase()) {
@@ -663,30 +906,69 @@ export const useCrowdOSStore = create<CrowdOSState>((set, get) => {
     }));
   });
 
-  socket.on('workspace:sync', () => {
+  socket.on('workspace:sync', (raw: any) => {
+    const { seq } = unwrapEnvelope(raw);
+    if (typeof seq === 'number') {
+      const ch = get().activeChannelId;
+      if (ch) persistSeq(ch, seq);
+    }
     get().fetchWorkspaces();
   });
 
-  socket.on('budget:exceeded', (payload: any) => {
-    console.warn('[Socket] Swarm safety budget exceeded!', payload);
+  socket.on('budget:exceeded', (raw: any) => {
+    const { payload, seq } = unwrapEnvelope(raw);
+    if (typeof seq === 'number' && payload?.channelId) persistSeq(payload.channelId, seq);
+    console.warn('[Socket] Swarm safety budget exceeded!', payload ?? raw);
     get().fetchBudget();
   });
 
-  socket.on('budget:warning', (payload: any) => {
-    console.warn('[Socket] Swarm safety budget warning!', payload);
+  socket.on('budget:warning', (raw: any) => {
+    const { payload, seq } = unwrapEnvelope(raw);
+    if (typeof seq === 'number' && payload?.channelId) persistSeq(payload.channelId, seq);
+    console.warn('[Socket] Swarm safety budget warning!', payload ?? raw);
     get().fetchBudget();
   });
 
-  socket.on('agent:spawned', (payload: any) => {
+  // UX-6: typed contracts + fixed payload — handle both legacy (agentId/name) and new (pairs) shapes
+  socket.on('agent:spawned', (raw: any) => {
+    const { payload, seq } = unwrapEnvelope(raw);
+    if (!payload) return;
+    if (typeof seq === 'number' && payload.channelId) persistSeq(payload.channelId, seq);
+    // New shape: { pairs: string[], channelId, batchNum } — do NOT create garbage roster rows
+    if (Array.isArray((payload as any).pairs)) {
+      const pairs = (payload as any).pairs as string[];
+      const batchNum = (payload as any).batchNum;
+      const channelId = payload.channelId;
+      if (pairs.length > 0 && channelId) {
+        const msg: Message = {
+          id: `spawn-${Date.now()}-${Math.random().toString(36).slice(2,6)}`,
+          type: 'system',
+          content: `Swarm spawn batch ${batchNum ?? '?'}: ${pairs.length} worker(s) — ${pairs.slice(0,3).join(', ')}${pairs.length>3?'…':''}`,
+          authorId: 'system',
+          authorName: 'Swarm',
+          channelId,
+          timestamp: new Date().toISOString(),
+          metadata: { pairs, batchNum }
+        };
+        set(state => {
+          const updated = [...state.messages, msg];
+          writeMessagesMirror(capMessagesMirror(updated));
+          return { messages: updated };
+        });
+      }
+      return;
+    }
+    // Legacy single-agent shape
+    if (!(payload as any).agentId) return;
     set(state => {
-      if (state.agents.some(a => a.id === payload.agentId)) return state;
+      if (state.agents.some(a => a.id === (payload as any).agentId)) return state;
       const newAgent: Agent = {
-        id: payload.agentId,
-        name: payload.name,
-        species: payload.species || 'AI Assistant',
-        level: payload.level as AgentLevel,
+        id: (payload as any).agentId,
+        name: (payload as any).name,
+        species: (payload as any).species || 'AI Assistant',
+        level: (payload as any).level as AgentLevel,
         status: 'active',
-        createdAt: payload.timestamp || new Date().toISOString(),
+        createdAt: (payload as any).timestamp || new Date().toISOString(),
         lastActive: new Date().toISOString(),
         description: 'Dynamically spawned agent'
       };
@@ -698,22 +980,122 @@ export const useCrowdOSStore = create<CrowdOSState>((set, get) => {
     });
   });
 
-  socket.on('agent:paused', (payload: any) => {
+  // UX-6: delegation tree/timeline from SW-2 events — typed via shared contracts
+  socket.on('delegation:start' as any, (raw: any) => {
+    const { payload, seq } = unwrapEnvelope(raw);
+    if (!payload) return;
+    const channelId = (payload as any).channelId || get().activeChannelId;
+    if (typeof seq === 'number' && channelId) persistSeq(channelId, seq);
+    if (!channelId) return;
+    const msg: Message = {
+      id: `delegation-${(payload as any).childRunId || Date.now()}`,
+      type: 'delegation',
+      content: '',
+      authorId: (payload as any).parentRunId || 'system',
+      authorName: 'Delegation',
+      channelId,
+      timestamp: new Date().toISOString(),
+      delegationInfo: {
+        id: (payload as any).childRunId || `del-${Date.now()}`,
+        fromAgentId: (payload as any).parentRunId || 'parent',
+        fromAgentName: 'Parent',
+        toAgentId: (payload as any).childRunId || 'child',
+        toAgentName: (payload as any).taskId ? `Task ${ (payload as any).taskId}` : 'Child',
+        task: (payload as any).taskId ? `Delegating task ${(payload as any).taskId} (depth ${(payload as any).depth ?? '?'})` : `Delegation depth ${(payload as any).depth ?? '?'}`,
+        status: 'executing',
+        tokens: 0,
+        cost: 0
+      }
+    };
+    set(state => {
+      const updated = [...state.messages, msg];
+      writeMessagesMirror(capMessagesMirror(updated));
+      return { messages: updated };
+    });
+  });
+
+  socket.on('delegation:completed' as any, (raw: any) => {
+    const { payload, seq } = unwrapEnvelope(raw);
+    if (!payload) return;
+    const channelId = (payload as any).channelId || get().activeChannelId;
+    if (typeof seq === 'number' && channelId) persistSeq(channelId, seq);
+    const childRunId = (payload as any).childRunId;
+    if (!childRunId) return;
+    set(state => {
+      let found = false;
+      const updated = state.messages.map(m => {
+        if (m.delegationInfo && m.delegationInfo.id === childRunId) {
+          found = true;
+          return {
+            ...m,
+            delegationInfo: {
+              ...m.delegationInfo,
+              status: 'completed' as const,
+              task: (payload as any).summary ? `${m.delegationInfo.task} — ${(payload as any).summary.slice(0,120)}` : m.delegationInfo.task
+            },
+            content: (payload as any).summary || m.content
+          };
+        }
+        return m;
+      });
+      if (!found && channelId) {
+        const msg: Message = {
+          id: `delegation-${childRunId}`,
+          type: 'delegation',
+          content: (payload as any).summary || '',
+          authorId: (payload as any).parentRunId || 'system',
+          authorName: 'Delegation',
+          channelId,
+          timestamp: new Date().toISOString(),
+          delegationInfo: {
+            id: childRunId,
+            fromAgentId: (payload as any).parentRunId || 'parent',
+            fromAgentName: 'Parent',
+            toAgentId: childRunId,
+            toAgentName: 'Child',
+            task: (payload as any).summary ? (payload as any).summary.slice(0,200) : 'Delegation completed',
+            status: 'completed',
+            tokens: 0,
+            cost: 0
+          }
+        };
+        const withNew = [...updated, msg];
+        writeMessagesMirror(capMessagesMirror(withNew));
+        return { messages: withNew };
+      }
+      writeMessagesMirror(capMessagesMirror(updated));
+      return { messages: updated };
+    });
+  });
+
+  socket.on('agent:paused', (raw: any) => {
+    const { payload, seq } = unwrapEnvelope(raw);
+    if (!payload) return;
+    if (typeof seq === 'number' && payload.channelId) persistSeq(payload.channelId, seq);
     set(state => ({
       agents: state.agents.map(ag => ag.id === payload.agentId ? { ...ag, status: 'paused', lastActive: new Date().toISOString() } : ag)
     }));
   });
 
-  socket.on('agent:resumed', (payload: any) => {
+  socket.on('agent:resumed', (raw: any) => {
+    const { payload, seq } = unwrapEnvelope(raw);
+    if (!payload) return;
+    if (typeof seq === 'number' && payload.channelId) persistSeq(payload.channelId, seq);
     set(state => ({
       agents: state.agents.map(ag => ag.id === payload.agentId ? { ...ag, status: 'idle', lastActive: new Date().toISOString() } : ag)
     }));
   });
 
-  socket.on('runtime:snapshot', (payload: any) => {
-    console.log('[Socket] Authoritative runtime snapshot received:', payload);
+  socket.on('runtime:snapshot', (raw: any) => {
+    const { payload, seq } = unwrapEnvelope(raw);
+    const snap = payload ?? raw;
+    if (typeof seq === 'number') {
+      const ch = get().activeChannelId;
+      if (ch) persistSeq(ch, seq);
+    }
+    console.log('[Socket] Authoritative runtime snapshot received:', snap);
     set(state => {
-      const mappedAgents: Agent[] = (payload.agents || []).map((ag: any) => ({
+      const mappedAgents: Agent[] = (snap.agents || []).map((ag: any) => ({
         id: ag.id,
         name: ag.name,
         species: ag.species || 'AI Assistant',
@@ -729,7 +1111,7 @@ export const useCrowdOSStore = create<CrowdOSState>((set, get) => {
         lastActive: ag.updatedAt || new Date().toISOString()
       }));
 
-      const mappedOverrides: RuntimeOverride[] = (payload.overrides || []).map((ov: any) => ({
+      const mappedOverrides: RuntimeOverride[] = (snap.overrides || []).map((ov: any) => ({
         id: ov.id,
         agentId: ov.agentId,
         type: ov.type as any,
@@ -750,51 +1132,55 @@ export const useCrowdOSStore = create<CrowdOSState>((set, get) => {
     });
   });
 
-  socket.on('escalation:created', (payload: any) => {
-    console.warn('[Socket] Swarm escalation received:', payload);
+  socket.on('escalation:created', (raw: any) => {
+    const { payload, seq } = unwrapEnvelope(raw);
+    const data = payload ?? raw;
+    if (typeof seq === 'number' && data.channelId) persistSeq(data.channelId, seq);
+    console.warn('[Socket] Swarm escalation received:', data);
     const activeCh = get().activeChannelId;
     if (!activeCh) return;
 
     const escMsg: Message = {
       id: `esc-${Date.now()}-${Math.random()}`,
       type: 'governance',
-      content: `⚠️ [Escalation: ${payload.type}] Agent @${payload.agentId} triggered: ${payload.message}`,
+      content: `⚠️ [Escalation: ${data.type}] Agent @${data.agentId} triggered: ${data.message}`,
       authorId: 'system',
       authorName: 'Governance Escalator',
       authorAvatar: '⚖️',
       channelId: activeCh,
-      timestamp: payload.timestamp || new Date().toISOString(),
-      metadata: payload.details || {}
+      timestamp: data.timestamp || new Date().toISOString(),
+      metadata: data.details || {}
     };
 
     set(state => {
       const updated = [...state.messages, escMsg];
-      if (typeof localStorage !== 'undefined') {
-        localStorage.setItem('crowdos_messages', JSON.stringify(updated));
-      }
+      writeMessagesMirror(updated);
       return { messages: updated };
     });
   });
 
-  socket.on('strike:initiated', (payload: any) => {
-    console.warn('[Socket] Strike initiated received:', payload);
+  socket.on('strike:initiated', (raw: any) => {
+    const { payload, seq } = unwrapEnvelope(raw);
+    const data = payload ?? raw;
+    if (typeof seq === 'number' && data.channelId) persistSeq(data.channelId, seq);
+    console.warn('[Socket] Strike initiated received:', data);
     const activeCh = get().activeChannelId;
     if (!activeCh) return;
 
     const strikeMsg: Message = {
       id: `strike-${Date.now()}-${Math.random()}`,
       type: 'governance',
-      content: payload.reason,
+      content: data.reason,
       authorId: 'system',
       authorName: 'Safety Arbiter',
       authorAvatar: '⚖️',
       channelId: activeCh,
-      timestamp: payload.timestamp || new Date().toISOString(),
+      timestamp: data.timestamp || new Date().toISOString(),
       metadata: {
         subtype: 'strike',
-        agentId: payload.agentId,
-        strikeCount: payload.strikeCount,
-        maxStrikes: payload.maxStrikes || 3
+        agentId: data.agentId,
+        strikeCount: data.strikeCount,
+        maxStrikes: data.maxStrikes || 3
       }
     };
 
@@ -804,61 +1190,161 @@ export const useCrowdOSStore = create<CrowdOSState>((set, get) => {
     });
   });
 
-  socket.on('parliament:convened', (payload: any) => {
-    console.warn('[Socket] Parliament convened received:', payload);
-    const activeCh = get().activeChannelId;
-    if (!activeCh) return;
-
-    const parlMsg: Message = {
-      id: payload.parliamentId,
-      type: 'governance',
-      content: payload.topic,
-      authorId: 'system',
-      authorName: 'Swarm Parliament',
-      authorAvatar: '🏛️',
-      channelId: activeCh,
-      timestamp: payload.timestamp || new Date().toISOString(),
-      metadata: {
-        subtype: 'parliament',
-        parliamentId: payload.parliamentId,
-        topic: payload.topic,
-        status: payload.status,
-        votes: payload.votes
-      }
-    };
-
-    set(state => {
-      const updated = [...state.messages, parlMsg];
-      return { messages: updated };
-    });
-  });
-
-  socket.on('parliament:updated', (payload: any) => {
-    console.warn('[Socket] Parliament updated received:', payload);
-    set(state => {
-      const updated = state.messages.map(msg => {
-        if (msg.id === payload.parliamentId) {
-          return {
-            ...msg,
-            metadata: {
-              ...msg.metadata,
-              subtype: 'parliament',
-              parliamentId: payload.parliamentId,
-              topic: msg.metadata?.topic || payload.topic || msg.content,
-              status: payload.status,
-              votes: payload.votes
-            }
-          };
-        }
-        return msg;
-      });
-      return { messages: updated };
-    });
-  });
-
-  socket.on('sandbox:updated', (payload: any) => {
-    console.log('[Socket] Sandbox updated event:', payload);
+  socket.on('sandbox:updated', (raw: any) => {
+    const { payload, seq } = unwrapEnvelope(raw);
+    const data = payload ?? raw;
+    if (typeof seq === 'number' && data.workspaceId) {
+      const ch = get().activeChannelId;
+      if (ch) persistSeq(ch, seq);
+    }
+    console.log('[Socket] Sandbox updated event:', data);
     get().incrementVfsRevision();
+  });
+
+  function handleApprovalRequested(raw: any) {
+    const { payload, seq } = unwrapEnvelope(raw);
+    const data = payload ?? raw;
+    if (typeof seq === 'number' && data.channelId) persistSeq(data.channelId, seq);
+    const approvalId = data.approvalId || data.id;
+    const runId = data.runId;
+    const tool = data.tool || data.toolName || 'unknown';
+    if (!approvalId || !runId) return;
+    const channelId = (data.channelId as string) || get().activeChannelId;
+    const req: ApprovalRequest = {
+      id: approvalId,
+      runId,
+      tool,
+      argsPreview: (data.argsPreview as Record<string, unknown> | null) ?? null,
+      riskClass: (data.riskClass as string) || 'general',
+      status: 'pending',
+      channelId: channelId || null,
+      scope: (data.scope as string | null) ?? null,
+      expiresAt: (data.expiresAt as string | null) ?? null,
+      requestedBy: (data.requestedBy as string | null) ?? null,
+    };
+    set((state: any) => {
+      if (state.approvalRequests.some((r: ApprovalRequest) => r.id === req.id)) return state;
+      return { approvalRequests: [...state.approvalRequests, req] };
+    });
+  }
+
+  function handleApprovalDecided(raw: any) {
+    const { payload, seq } = unwrapEnvelope(raw);
+    const data = payload ?? raw;
+    if (typeof seq === 'number' && data.channelId) persistSeq(data.channelId, seq);
+    const approvalId = data.approvalId || data.id;
+    const decision = (data.decision as string) || 'approved';
+    if (!approvalId) return;
+    set((state: any) => ({
+      approvalRequests: state.approvalRequests.map((r: ApprovalRequest) =>
+        r.id === approvalId ? { ...r, status: decision as ApprovalRequest['status'] } : r
+      ),
+    }));
+  }
+
+  function handleArtifactCreated(raw: any) {
+    const { payload, seq } = unwrapEnvelope(raw);
+    const data = payload ?? raw;
+    if (typeof seq === 'number' && (data.channelId as string)) persistSeq(data.channelId as string, seq);
+    const runId = (data.runId as string) || (data.artifact as any)?.runId;
+    if (runId) {
+      void get().fetchArtifacts(runId);
+    }
+  }
+
+  socket.on('approval.requested' as any, handleApprovalRequested);
+  socket.on('approval.decided' as any, handleApprovalDecided);
+  socket.on('artifact.created' as any, handleArtifactCreated);
+  socket.on('diff.created' as any, handleArtifactCreated);
+  socket.on('artifact.updated' as any, handleArtifactCreated);
+
+  socket.on('run.status_changed' as any, (raw: any) => {
+    const { payload, seq } = unwrapEnvelope(raw);
+    if (!payload) return;
+    const channelId = payload.channelId as string | undefined;
+    const agentId = payload.agentId as string | undefined;
+    const status = (payload.status ?? payload.to) as string | undefined;
+    if (typeof seq === 'number' && channelId) persistSeq(channelId, seq);
+    if (!channelId || !status) return;
+    const st = String(status).toLowerCase();
+    if (st === 'cancelled') {
+      if (agentId) {
+        if (streamParsers[agentId]) delete streamParsers[agentId];
+        lastTurnFinishedAt[agentId] = Date.now();
+      }
+      set((state: any) => {
+        const nextCancelling = { ...state.cancellingByAgent };
+        if (agentId) delete nextCancelling[`${channelId}:${agentId}`];
+        delete nextCancelling[`${channelId}:*`];
+        let updated = [...state.messages] as Message[];
+        let bufferedContent = '';
+        let bufferedMonologue: string | undefined;
+        const streamIdx = agentId ? updated.findIndex(m => m.id === `stream-${agentId}` && m.channelId === channelId) : -1;
+        if (streamIdx !== -1) {
+          bufferedContent = updated[streamIdx].content || '';
+          bufferedMonologue = (updated[streamIdx].metadata as any)?.monologue;
+        }
+        updated = updated.filter(m => {
+          if (m.channelId !== channelId) return true;
+          if (agentId && (m.id === `stream-${agentId}` || m.id === `stream-tool-${agentId}`)) return false;
+          if (!agentId && (m.id.startsWith('stream-') || m.id.startsWith('stream-tool-'))) return false;
+          return true;
+        });
+        const targetAgentId = agentId || 'system';
+        const agentName = state.agents.find((a: Agent) => a.id === targetAgentId)?.name || (agentId ? 'Agent' : 'Run');
+        const cancelledMsg: Message = {
+          id: `cancelled-${targetAgentId}-${Date.now()}`,
+          type: 'agent',
+          content: bufferedContent || 'Run cancelled by user.',
+          authorId: targetAgentId,
+          authorName: agentName,
+          authorAvatar: '🤖',
+          channelId,
+          timestamp: new Date().toISOString(),
+          turnStatus: 'cancelled' as any,
+          metadata: bufferedMonologue ? { monologue: bufferedMonologue, cancelled: true } : { cancelled: true }
+        } as Message;
+        updated.push(cancelledMsg);
+        writeMessagesMirror(updated);
+        return { messages: updated, cancellingByAgent: nextCancelling, agents: state.agents.map((ag: Agent) => ag.id === agentId ? { ...ag, status: 'idle' as any, lastActive: new Date().toISOString() } : ag) };
+      });
+    } else if (st === 'completed' || st === 'failed') {
+      set((state: any) => {
+        const next = { ...state.cancellingByAgent };
+        if (agentId) delete next[`${channelId}:${agentId}`];
+        return { cancellingByAgent: next };
+      });
+      if (agentId && streamParsers[agentId]) delete streamParsers[agentId];
+      if (agentId) lastTurnFinishedAt[agentId] = Date.now();
+      // UX-3: fetch diff artifacts on completion
+      if (st === 'completed' && (payload as any).runId) {
+        void get().fetchArtifacts((payload as any).runId);
+      }
+      if (typeof document !== 'undefined' && typeof Notification !== 'undefined') {
+        try {
+          if (!isChannelMutedLS(channelId) && (document.hidden || (typeof document.hasFocus === 'function' && !document.hasFocus()))) {
+            if (Notification.permission === 'default') {
+              Notification.requestPermission().catch(() => {});
+            }
+            if (Notification.permission === 'granted') {
+              const agentName = get().agents.find((a: Agent) => a.id === agentId)?.name || 'Agent';
+              const title = st === 'completed' ? `Run completed — ${agentName}` : `Run failed — ${agentName}`;
+              const body = `Channel #${channelId} • ${st}`;
+              try { new Notification(title, { body }); } catch {}
+            }
+          }
+        } catch {}
+      }
+    } else {
+      if (st === 'running' || st === 'starting' || st === 'queued') {
+        const cur = get().activeChannelId;
+        if (cur === channelId && agentId) {
+          set((state: any) => ({
+            agents: state.agents.map((ag: Agent) => ag.id === agentId ? { ...ag, status: 'executing' as any, lastActive: new Date().toISOString() } : ag)
+          }));
+        }
+      }
+    }
   });
 
   return {
@@ -901,6 +1387,98 @@ export const useCrowdOSStore = create<CrowdOSState>((set, get) => {
 
     // Search query
     chatSearchQuery: '',
+    selectedMode: initialSelectedMode,
+    isPinned: storedIsPinned,
+    modeByChannel: {},
+
+    // PERF-5 pagination
+    channelCursors: {},
+    isLoadingOlder: false,
+
+    // UX-5 + UX-1
+    channelSeq: seqCursors,
+    reconnectDigest: null,
+    cancellingByAgent: {},
+
+    // UX-2 Approval cards + UX-3 Diff review
+    approvalRequests: [] as ApprovalRequest[],
+    artifactsByRun: {} as Record<string, ArtifactRow[]>,
+
+    cancelRun: (channelId: string, agentId?: string) => {
+      const targetChannel = channelId || get().activeChannelId;
+      if (!targetChannel) return;
+      if (agentId) {
+        set((s: any) => ({ cancellingByAgent: { ...s.cancellingByAgent, [`${targetChannel}:${agentId}`]: true } }));
+      } else {
+        const streamingAgents = new Set<string>();
+        const msgs = get().messages;
+        for (const m of msgs) {
+          if (m.id.startsWith('stream-') && m.channelId === targetChannel) streamingAgents.add(m.authorId);
+        }
+        if (streamingAgents.size === 0) {
+          for (const ag of get().agents) {
+            if (ag.status === 'executing' || (ag.status as string) === 'thinking' || ag.status === 'working') streamingAgents.add(ag.id);
+          }
+        }
+        const updates: Record<string, boolean> = {};
+        if (streamingAgents.size > 0) {
+          for (const aid of streamingAgents) updates[`${targetChannel}:${aid}`] = true;
+        } else {
+          updates[`${targetChannel}:*`] = true;
+        }
+        set((s: any) => ({ cancellingByAgent: { ...s.cancellingByAgent, ...updates } }));
+      }
+      try { socket.emit('user:cancel' as any, { channelId: targetChannel, agentId }); } catch {}
+      setTimeout(() => {
+        set((s: any) => {
+          const next = { ...s.cancellingByAgent };
+          if (agentId) delete next[`${targetChannel}:${agentId}`];
+          else Object.keys(next).forEach(k => { if (k.startsWith(`${targetChannel}:`)) delete next[k]; });
+          return { cancellingByAgent: next };
+        });
+      }, 5000);
+    },
+
+    clearReconnectDigest: () => set({ reconnectDigest: null } as any),
+
+    emitChannelJoin: (channelId: string) => emitChannelJoinDebounced(channelId),
+
+    isChannelMuted: (channelId: string) => isChannelMutedLS(channelId),
+
+    setMode: (mode, channelId) => {
+      set(s => {
+        const nextModeByChannel = channelId
+          ? { ...s.modeByChannel, [channelId]: mode }
+          : s.modeByChannel;
+        if (s.isPinned && typeof localStorage !== 'undefined') {
+          localStorage.setItem('crowdos_selected_mode', mode);
+        }
+        return { selectedMode: mode, modeByChannel: nextModeByChannel };
+      });
+    },
+
+    togglePin: () => {
+      set(s => {
+        const nextIsPinned = !s.isPinned;
+        if (typeof localStorage !== 'undefined') {
+          localStorage.setItem('crowdos_is_pinned', String(nextIsPinned));
+          if (nextIsPinned) {
+            localStorage.setItem('crowdos_selected_mode', s.selectedMode);
+          } else {
+            localStorage.removeItem('crowdos_selected_mode');
+          }
+        }
+        return { isPinned: nextIsPinned };
+      });
+    },
+
+    resetOnChannelChange: (channelId) => {
+      set(s => {
+        if (s.isPinned) return {};
+        const channelMode = channelId ? s.modeByChannel[channelId] || 'auto' : 'auto';
+        return { selectedMode: channelMode };
+      });
+    },
 
     // Async state flags
     isFetchingWorkspaces: false,
@@ -1087,8 +1665,15 @@ export const useCrowdOSStore = create<CrowdOSState>((set, get) => {
         }
 
       } catch (err) {
-        console.error("Failed to connect to CrowdOS Live Backend, falling back to local simulation mode.", err);
-        set({ isFetchingWorkspaces: false });
+        console.error("Failed to connect to CrowdOS Live Backend.", err);
+        if (!DEMO_FALLBACK) {
+          set({ isFetchingWorkspaces: false, workspaceError: err instanceof Error ? err.message : 'Backend unavailable — DEMO_FALLBACK is off' });
+          // Honesty: do not keep showing seeded demo workspaces/agents when DEMO_FALLBACK is off
+          // (outage shows error, not demo). Keep current state but surface error; empty fallback only if no localStorage.
+        } else {
+          console.warn("DEMO_FALLBACK=true — using seeded demo data as fallback (honest demo mode)");
+          set({ isFetchingWorkspaces: false });
+        }
       }
     },
 
@@ -1146,11 +1731,17 @@ export const useCrowdOSStore = create<CrowdOSState>((set, get) => {
         localStorage.setItem('crowdos_workspaces', JSON.stringify(updatedWorkspaces));
       }
 
+      const newChannelId = newWS.categories[0].channels[0].id;
+      if (typeof localStorage !== 'undefined') {
+        localStorage.setItem('crowdos_active_workspace', newWS.id);
+        persistActiveChannel(newChannelId);
+      }
+      pushChannelHistory(newWS.id, newChannelId, false);
       set({ 
         workspaces: updatedWorkspaces, 
         isCreatingWorkspace: false,
         activeWorkspaceId: newWS.id,
-        activeChannelId: newWS.categories[0].channels[0].id
+        activeChannelId: newChannelId
       });
 
       // Reload database workspaces lists
@@ -1180,19 +1771,37 @@ export const useCrowdOSStore = create<CrowdOSState>((set, get) => {
       if (typeof localStorage !== 'undefined') {
         if (nextActiveWorkspaceId) {
           localStorage.setItem('crowdos_active_workspace', nextActiveWorkspaceId);
+          persistActiveChannel(nextActiveChannelId);
+          if (nextActiveChannelId) pushChannelHistory(nextActiveWorkspaceId, nextActiveChannelId, true);
         } else {
           localStorage.removeItem('crowdos_active_workspace');
+          localStorage.removeItem('crowdos_active_channel');
+          if (typeof window !== 'undefined') {
+            try { window.history.pushState({}, '', window.location.pathname); } catch {}
+          }
         }
       }
     },
 
     enterWorkspace: async (id) => {
       const currentWS = get().workspaces.find(ws => ws.id === id);
-      const chId = currentWS?.categories[0]?.channels[0]?.id || null;
+      // Prefer persisted or hash channel if valid for this workspace
+      const storedChannelId = typeof localStorage !== 'undefined' ? localStorage.getItem('crowdos_active_channel') : null;
+      const hashChannelId = getHashChannelId();
+      const validIds = new Set([
+        ...(currentWS?.channels?.map(c => c.id) || []),
+        ...(currentWS?.categories.flatMap(c => c.channels.map(ch => ch.id)) || [])
+      ]);
+      let chId: string | null = null;
+      if (hashChannelId && validIds.has(hashChannelId)) chId = hashChannelId;
+      else if (storedChannelId && validIds.has(storedChannelId)) chId = storedChannelId;
+      else chId = currentWS?.categories[0]?.channels[0]?.id || getFirstChannelId(currentWS as Workspace | undefined);
       
       if (typeof localStorage !== 'undefined') {
         localStorage.setItem('crowdos_active_workspace', id);
+        persistActiveChannel(chId);
       }
+      if (chId) pushChannelHistory(id, chId, false);
 
       set({ 
         activeWorkspaceId: id, 
@@ -1208,6 +1817,10 @@ export const useCrowdOSStore = create<CrowdOSState>((set, get) => {
     leaveWorkspace: () => {
       if (typeof localStorage !== 'undefined') {
         localStorage.removeItem('crowdos_active_workspace');
+        localStorage.removeItem('crowdos_active_channel');
+      }
+      if (typeof window !== 'undefined') {
+        try { window.history.pushState({}, '', window.location.pathname); } catch {}
       }
       set({ 
         activeWorkspaceId: null, 
@@ -1248,58 +1861,99 @@ export const useCrowdOSStore = create<CrowdOSState>((set, get) => {
         localStorage.setItem('crowdos_workspaces', JSON.stringify(updatedWorkspaces));
       }
 
-      set({ 
-        activeChannelId: id, 
+      if (!get().isPinned) {
+        get().resetOnChannelChange(id);
+      }
+
+      persistActiveChannel(id);
+      pushChannelHistory(get().activeWorkspaceId, id, false);
+
+      set({
+        activeChannelId: id,
         workspaces: updatedWorkspaces,
-        mobileDrawerLeft: false 
+        mobileDrawerLeft: false
       });
 
-      // Pull live message history logs from backend!
+      emitChannelJoinDebounced(id);
+
       try {
         const msgRes = await fetch(`${BACKEND_URL}/api/channels/${id}/messages`);
         if (msgRes.ok) {
-          const backendMessages = await msgRes.json();
-          const mappedMessages = backendMessages.map((msg: any) => ({
-            id: msg.id,
-            type: msg.type || (msg.authorType === 'user' ? 'human' : 'agent'),
-            content: stripToolCalls(msg.content || ''),
-            authorId: msg.authorId,
-            authorName: msg.authorName,
-            authorAvatar: msg.authorType === 'user' ? undefined : '🤖',
-            channelId: msg.channelId,
-            timestamp: new Date(msg.timestamp).toISOString(),
-            metadata: msg.metadata
-              ? {
-                  ...msg.metadata,
-                  monologue: msg.metadata.monologue ? stripToolCalls(msg.metadata.monologue) : undefined
-                }
-              : undefined,
-            toolExecution: msg.toolExecution || undefined
-          }));
-          set({ messages: mappedMessages });
+          const payload = await msgRes.json();
+          const { chronological, cursor } = parseMessagesEnvelope(payload);
+          const mappedMessages = chronological.map(mapBackendMessage);
+          set({
+            messages: mappedMessages,
+            channelCursors: { ...get().channelCursors, [id]: cursor }
+          });
+          const maxSeq = chronological.reduce((m: number, r: any) => Math.max(m, r.sequenceNumber ?? 0), 0);
+          if (maxSeq > 0) persistSeq(id, maxSeq);
         }
       } catch {
         console.warn("Failed to fetch live message logs from backend, local store logs active.");
+      }
+
+      try {
+        const afterSeq = seqCursors[id] ?? 0;
+        if (afterSeq > 0) {
+          await fetchGapAndDigest(id, afterSeq);
+        }
+      } catch {}
+
+      const pendingDigest = (get() as any).reconnectDigest;
+      if (pendingDigest?.visible) {
+        setTimeout(() => {
+          const cur = (get() as any).reconnectDigest;
+          if (cur?.message === pendingDigest.message) set({ reconnectDigest: null } as any);
+        }, 9000);
+      }
+    },
+
+    // PERF-5: fetch the previous page via the keyset cursor and prepend it.
+    loadOlderMessages: async () => {
+      const channelId = get().activeChannelId;
+      if (!channelId || get().isLoadingOlder) return;
+      const cursor = get().channelCursors[channelId];
+      if (!cursor) return;
+
+      set({ isLoadingOlder: true });
+      try {
+        const msgRes = await fetch(
+          `${BACKEND_URL}/api/channels/${channelId}/messages?before=${encodeURIComponent(encodeBeforeParam(cursor))}`
+        );
+        if (!msgRes.ok) return;
+        const payload = await msgRes.json();
+        const { chronological, cursor: nextCursor } = parseMessagesEnvelope(payload);
+        const olderPage = chronological.map(mapBackendMessage);
+
+        set(state => {
+          const merged = prependOlderMessages(state.messages, olderPage);
+          return {
+            messages: merged,
+            channelCursors: { ...state.channelCursors, [channelId]: nextCursor },
+            isLoadingOlder: false
+          };
+        });
+      } catch {
+        set({ isLoadingOlder: false });
       }
     },
 
     addMessage: (msg) => {
       const activeCh = get().activeChannelId;
       if (!activeCh) return;
-
-      // Always emit user:message directly to the server
       socket.emit('user:message', {
         channelId: activeCh,
         content: msg.content,
-        mentions: msg.mentions || []
+        mentions: msg.mentions || [],
+       mode: (msg as any).mode || (msg as any).runtimeMode || get().selectedMode,
+        runtimeMode: (msg as any).mode || (msg as any).runtimeMode || get().selectedMode,
       });
     },
 
     clearChannelMessages: (channelId) => {
       const updated = get().messages.filter(msg => msg.channelId !== channelId);
-      if (typeof localStorage !== 'undefined') {
-        localStorage.setItem('crowdos_messages', JSON.stringify(updated));
-      }
+      writeMessagesMirror(updated);
       set({ messages: updated });
     },
 
@@ -2124,6 +2778,115 @@ export const useCrowdOSStore = create<CrowdOSState>((set, get) => {
       } catch (err) {
         console.error("Failed to reset budget logs", err);
       }
-    }
+    },
+
+    decideApproval: async (approvalId, decision, scope) => {
+      set((state: any) => ({
+        approvalRequests: state.approvalRequests.map((r: ApprovalRequest) =>
+          r.id === approvalId ? { ...r, status: decision } : r
+        ),
+      }));
+      try {
+        await apiClient.decideApproval(approvalId, decision, scope ?? null);
+      } catch (err) {
+        console.error('[store] decideApproval failed', err);
+        throw err;
+      }
+    },
+
+    fetchArtifacts: async (runId) => {
+      try {
+        const data = await apiClient.getArtifacts(runId);
+        const rows: ArtifactRow[] = ((data as any).artifacts || data || []) as ArtifactRow[];
+        const mapped = rows.map((r: any) => ({
+          ...r,
+          createdAt: r.createdAt ? new Date(r.createdAt).toISOString() : new Date().toISOString(),
+        }));
+        set((state: any) => ({
+          artifactsByRun: { ...state.artifactsByRun, [runId]: mapped },
+        }));
+      } catch {}
+    },
+
+    applyDiff: async (artifactId) => {
+      const all = Object.values(get().artifactsByRun as Record<string, ArtifactRow[]>).flat() as ArtifactRow[];
+      const art = all.find((a) => a.id === artifactId);
+      if (!art || !art.path) return;
+      const workspaceId = get().activeWorkspaceId || art.workspaceId || 'default';
+      const content = art.contentRef ?? '';
+      await apiClient.applyFileContent(art.path, content, workspaceId);
+      get().incrementVfsRevision();
+    },
+
+    revertDiff: async (artifactId) => {
+      const all = Object.values(get().artifactsByRun as Record<string, ArtifactRow[]>).flat() as ArtifactRow[];
+      const art = all.find((a) => a.id === artifactId);
+      if (!art || !art.path) return;
+      const workspaceId = get().activeWorkspaceId || art.workspaceId || 'default';
+      if (!art.beforeHash) {
+        await apiClient.deleteFile(art.path, workspaceId);
+      } else {
+        let before = '';
+        if (art.patch) {
+          const lines = art.patch.split('\n');
+          const beforeLines: string[] = [];
+          for (const line of lines) {
+            if (line.startsWith('---') || line.startsWith('+++') || line.startsWith('@@')) continue;
+            if (line.startsWith('-') || line.startsWith(' ')) beforeLines.push(line.slice(1));
+          }
+          before = beforeLines.join('\n');
+        }
+        if (before) {
+          await apiClient.applyFileContent(art.path, before, workspaceId);
+        } else {
+          await apiClient.deleteFile(art.path, workspaceId);
+        }
+      }
+      get().incrementVfsRevision();
+    },
+
+    editResend: (originalMessageId, newContent) => {
+      const state = get();
+      const orig = state.messages.find((m: Message) => m.id === originalMessageId);
+      const channelId = orig?.channelId || state.activeChannelId;
+      if (!channelId || !newContent.trim()) return;
+      socket.emit('user:message' as any, {
+        channelId,
+        content: newContent,
+        mentions: orig?.mentions || [],
+        mode: (state as any).selectedMode,
+        runtimeMode: (state as any).selectedMode,
+        originalMessageId,
+      } as any);
+    },
+
+    regenerate: (messageId) => {
+      const state = get();
+      const target = state.messages.find((m: Message) => m.id === messageId);
+      if (!target) return;
+      const idx = state.messages.findIndex((m: Message) => m.id === messageId);
+      let human: Message | undefined;
+      for (let i = idx; i >= 0; i--) {
+        const cand = state.messages[i];
+        if (cand.type === 'human' && cand.channelId === target.channelId) {
+          human = cand;
+          break;
+        }
+      }
+      const content = human?.content || target.content;
+      const channelId = target.channelId;
+      socket.emit('user:message' as any, {
+        channelId,
+        content,
+        mentions: human?.mentions || [],
+        mode: (state as any).selectedMode,
+        runtimeMode: (state as any).selectedMode,
+        regenerateFrom: messageId,
+      } as any);
+    },
+
+    retryRun: async (runId) => {
+      await apiClient.retryRun(runId);
+    },
   };
 });

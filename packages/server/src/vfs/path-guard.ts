@@ -2,6 +2,8 @@
 // Prevents path traversal attacks and normalizes workspace-relative paths.
 
 import { posix } from "node:path";
+import { realpathSync } from "node:fs";
+import { dirname as nativeDirname, resolve as nativeResolve } from "node:path";
 
 /**
  * Normalize a workspace-relative path to POSIX format.
@@ -52,21 +54,80 @@ export function isPathSafe(inputPath: string): boolean {
   return true;
 }
 
+function toSlashed(p: string): string {
+  return p.replace(/\\/g, "/");
+}
+
+/**
+ * Anchored containment check (SEC-3): candidate must equal root or live
+ * strictly under root + separator. Case-insensitive on Windows.
+ */
+export function isInsideRoot(candidate: string, root: string): boolean {
+  const norm = (p: string): string => {
+    const slashed = toSlashed(p).replace(/\/+$/, "");
+    return process.platform === "win32" ? slashed.toLowerCase() : slashed;
+  };
+  const c = norm(candidate);
+  const r = norm(root);
+  if (!r) return false;
+  if (c === r) return true;
+  return c.startsWith(r + "/");
+}
+
+/**
+ * Realpath-resolve a path that may not exist yet: realpath the deepest
+ * existing ancestor, then rejoin the remaining segments lexically.
+ */
+function resolveRealDeep(target: string): string {
+  try {
+    return realpathSync(target);
+  } catch (err: any) {
+    if (err && err.code !== "ENOENT" && err.code !== "ENOTDIR") throw err;
+  }
+  const segments: string[] = [];
+  let current = nativeResolve(target);
+  for (;;) {
+    const parent = nativeDirname(current);
+    if (parent === current) return toSlashed(nativeResolve(current, ...segments));
+    segments.unshift(posix.basename(toSlashed(current)));
+    try {
+      const base = realpathSync(parent);
+      return toSlashed(nativeResolve(base, ...segments));
+    } catch (err: any) {
+      if (err && err.code !== "ENOENT" && err.code !== "ENOTDIR") throw err;
+      current = parent;
+    }
+  }
+}
+
 /**
  * Resolve a workspace-relative path to an absolute filesystem path.
  * Throws if the resolved path escapes the workspace root.
+ * SEC-3 hardened: anchored prefix + symlink (realpath) escape rejection.
  */
 export function resolveWorkspacePath(workspaceRoot: string, relativePath: string): string {
   if (!isPathSafe(relativePath)) {
     throw new Error(`Unsafe path detected: ${relativePath}`);
   }
 
-  const normalized = normalizePath(relativePath);
-  const resolved = posix.join(workspaceRoot.replace(/\\/g, "/"), normalized);
+  let rootReal = toSlashed(workspaceRoot).replace(/\/+$/, "");
+  try {
+    rootReal = toSlashed(realpathSync(workspaceRoot)).replace(/\/+$/, "");
+  } catch {
+    /* fall back to lexical root */
+  }
 
-  // Double-check: resolved path must start with workspace root
-  const normalizedRoot = workspaceRoot.replace(/\\/g, "/").replace(/\/+$/, "");
-  if (!resolved.startsWith(normalizedRoot)) {
+  const normalized = normalizePath(relativePath);
+  const joined = normalized === "." ? rootReal : posix.join(rootReal, normalized);
+
+  let resolved: string;
+  try {
+    resolved = resolveRealDeep(joined);
+  } catch {
+    resolved = joined;
+  }
+
+  if (!isInsideRoot(resolved, rootReal)) {
     throw new Error(`Path traversal blocked: ${relativePath}`);
   }
 

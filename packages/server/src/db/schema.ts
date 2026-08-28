@@ -1,6 +1,7 @@
 ﻿import { relations, sql } from "drizzle-orm";
 import {
   bigint,
+  bigserial,
   boolean,
   integer,
   real,
@@ -12,33 +13,58 @@ import {
   timestamp,
   uniqueIndex,
   index,
+  uuid,
 } from "drizzle-orm/pg-core";
 
 import type { MentionMetadata } from "../types/mention.types.js";
 import type { SubtaskDefinition } from "../types/task.types.js";
 import type { InstructionPatch, PermissionPatch } from "../types/runtime.types.js";
+import type { StructuredToolCall } from "../Messages/messageGate.js";
 
-const runtimeOverrideTypeEnum = pgEnum("runtime_override_type", ["runtime_patch", "temp_permission", "context_inject"]);
-const runtimeStatusEnum = pgEnum("runtime_status", ["idle", "working", "paused", "offline"]);
+export const runtimeOverrideTypeEnum = pgEnum("runtime_override_type", ["runtime_patch", "temp_permission", "context_inject"]);
+export const runtimeStatusEnum = pgEnum("runtime_status", ["idle", "working", "paused", "offline"]);
 
-const providerEngineEnum = pgEnum("provider_engine", ["google", "openai", "anthropic", "ollama", "custom"]);
-const agentStatusEnum = pgEnum("agent_status", ["idle", "working", "paused", "offline"]);
-const memorySharingPolicyEnum = pgEnum("memory_sharing_policy", ["none", "horizontal", "vertical", "full"]);
-const l3SubtypeEnum = pgEnum("l3_subtype", ["worker", "supervisor"]);
-const channelTypeEnum = pgEnum("channel_type", ["standard", "pair_private", "archived"]);
-const messageAuthorTypeEnum = pgEnum("message_author_type", ["user", "agent", "system"]);
-const spawnFailurePolicyEnum = pgEnum("spawn_failure_policy", ["retry", "escalate"]);
-const spawnStatusEnum = pgEnum("spawn_status", ["pending", "in_progress", "completed", "failed"]);
-const toolDangerLevelEnum = pgEnum("tool_danger_level", ["low", "medium", "high"]);
-const workspaceStatusEnum = pgEnum("workspace_status", ["CREATED", "INITIALIZING", "ACTIVE", "PAUSED", "TERMINATED", "ARCHIVED"]);
-const workspaceScopeEnum = pgEnum("workspace_scope", ["private", "shared", "readonly", "ephemeral"]);
-const artifactTypeEnum = pgEnum("artifact_type", ["reasoning_trace", "execution_log", "analysis_report", "generated_component", "task_result", "runtime_snapshot"]);
-const workspaceNodeTypeEnum = pgEnum("workspace_node_type", ["file", "directory"]);
-const memoryNoteTypeEnum = pgEnum("memory_note_type", ["episodic", "semantic", "reflection", "journal", "tool_result", "correspondence", "tension"]);
-const memoryConfidenceEnum = pgEnum("memory_confidence", ["low", "medium", "high"]);
-const memorySourceTypeEnum = pgEnum("memory_source_type", ["direct_experience", "self_reflection", "tool_result", "channel_observation", "entity_testimony"]);
-const memoryValenceEnum = pgEnum("memory_valence", ["positive", "neutral", "negative", "mixed", "unknown"]);
-const memoryLifecycleStatusEnum = pgEnum("memory_lifecycle_status", ["active", "archived", "suppressed"]);
+export const providerEngineEnum = pgEnum("provider_engine", ["google", "openai", "anthropic", "ollama", "custom"]);
+export const agentStatusEnum = pgEnum("agent_status", ["idle", "working", "paused", "offline"]);
+export const memorySharingPolicyEnum = pgEnum("memory_sharing_policy", ["none", "horizontal", "vertical", "full"]);
+export const l3SubtypeEnum = pgEnum("l3_subtype", ["worker", "supervisor"]);
+export const channelTypeEnum = pgEnum("channel_type", ["standard", "pair_private", "archived"]);
+export const messageAuthorTypeEnum = pgEnum("message_author_type", ["user", "agent", "system"]);
+export const spawnFailurePolicyEnum = pgEnum("spawn_failure_policy", ["retry", "escalate"]);
+export const spawnStatusEnum = pgEnum("spawn_status", ["pending", "in_progress", "completed", "failed"]);
+export const toolDangerLevelEnum = pgEnum("tool_danger_level", ["low", "medium", "high"]);
+export const workspaceStatusEnum = pgEnum("workspace_status", ["CREATED", "INITIALIZING", "ACTIVE", "PAUSED", "TERMINATED", "ARCHIVED"]);
+export const workspaceScopeEnum = pgEnum("workspace_scope", ["private", "shared", "readonly", "ephemeral"]);
+export const artifactTypeEnum = pgEnum("artifact_type", ["reasoning_trace", "execution_log", "analysis_report", "generated_component", "task_result", "runtime_snapshot", "file", "diff", "report", "citations"]);
+export const swarmTaskStatusEnum = pgEnum("swarm_task_status", ["pending", "running", "completed", "failed", "blocked"]);
+export const approvalStatusEnum = pgEnum("approval_status", ["pending", "approved", "denied", "expired"]);
+export const approvalRiskClassEnum = pgEnum("approval_risk_class", ["install", "network", "destructive", "git_push", "db_write", "general"]);
+export const workspaceNodeTypeEnum = pgEnum("workspace_node_type", ["file", "directory"]);
+export const memoryNoteTypeEnum = pgEnum("memory_note_type", ["episodic", "semantic", "reflection", "journal", "tool_result", "correspondence", "tension"]);
+export const memoryConfidenceEnum = pgEnum("memory_confidence", ["low", "medium", "high"]);
+export const memorySourceTypeEnum = pgEnum("memory_source_type", ["direct_experience", "self_reflection", "tool_result", "channel_observation", "entity_testimony"]);
+export const memoryValenceEnum = pgEnum("memory_valence", ["positive", "neutral", "negative", "mixed", "unknown"]);
+export const memoryLifecycleStatusEnum = pgEnum("memory_lifecycle_status", ["active", "archived", "suppressed"]);
+export const runStatusEnum = pgEnum("run_status", [
+  "created",
+  "queued",
+  "starting",
+  "running",
+  "waiting_for_tool",
+  "waiting_for_approval",
+  "retrying",
+  "compacting",
+  "completing",
+  "verifying",
+  "completed",
+  "failed",
+  "cancelled",
+  "cancelling",
+  "orphaned",
+  "resumable",
+]);
+
+export type RunStatus = (typeof runStatusEnum.enumValues)[number];
 
 const jsonbArrayDefault = sql`'[]'::jsonb`;
 const jsonbObjectDefault = sql`'{}'::jsonb`;
@@ -57,6 +83,7 @@ export const modelModules = pgTable("model_modules", {
   maxRecentMessages: integer("max_recent_messages").notNull(),
   enableCompression: boolean("enable_compression").notNull().default(true),
   compressionThreshold: integer("compression_threshold").notNull(),
+  costPer1k: real("cost_per_1k"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });
@@ -197,6 +224,8 @@ export const agents = pgTable("agents", {
   permissions: jsonb("permissions").$type<{ spawnAgents: boolean; patchRuntime: boolean; accessAllChannels: boolean }>().notNull().default(sql`'{"spawnAgents":false,"patchRuntime":false,"accessAllChannels":false}'::jsonb`),
   status: agentStatusEnum("status").notNull().default("offline"),
   isTemplate: boolean("is_template").notNull().default(false),
+  archivedAt: timestamp("archived_at", { withTimezone: true }),
+  archivedReason: text("archived_reason"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 }, (table) => ({
@@ -229,6 +258,7 @@ export const channels = pgTable("channels", {
   position: integer("position").notNull(),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   archivedAt: timestamp("archived_at", { withTimezone: true }),
+  archivedReason: text("archived_reason"),
 });
 
 export const messages = pgTable("messages", {
@@ -240,12 +270,23 @@ export const messages = pgTable("messages", {
   authorType: messageAuthorTypeEnum("author_type").notNull(),
   content: text("content").notNull(),
   mentions: jsonb("mentions").$type<MentionMetadata[]>().notNull().default(jsonbArrayDefault),
+  metadata: jsonb("metadata").$type<Record<string, unknown>>(),
+  toolCalls: jsonb("tool_calls").$type<StructuredToolCall[]>(),
   isInternalMonologue: boolean("is_internal_monologue").notNull().default(false),
   sequenceNumber: integer("sequence_number").notNull(),
   timestamp: timestamp("timestamp", { withTimezone: true }).notNull().defaultNow(),
 }, (table) => ({
   channelSequenceIndex: uniqueIndex("messages_channel_sequence_idx").on(table.channelId, table.sequenceNumber),
+  channelTimestampIndex: index("messages_channel_timestamp_idx").on(table.channelId, table.timestamp.desc()),
 }));
+
+// DB-2: per-channel sequence counter advanced atomically via
+// INSERT ... ON CONFLICT DO UPDATE RETURNING (Shared/core/sequenceNumber.ts).
+export const channelSequences = pgTable("channel_sequences", {
+  channelId: text("channel_id").primaryKey().references(() => channels.id, { onDelete: "cascade" }),
+  lastSeq: bigint("last_seq", { mode: "number" }).notNull().default(0),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+});
 
 export const spawnRequests = pgTable("spawn_requests", {
   id: text("id").primaryKey(),
@@ -258,7 +299,9 @@ export const spawnRequests = pgTable("spawn_requests", {
   subtasks: jsonb("subtasks").$type<SubtaskDefinition[]>().notNull().default(jsonbArrayDefault),
   status: spawnStatusEnum("status").notNull().default("pending"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-});
+}, (table) => ({
+  statusIndex: index("spawn_requests_status_idx").on(table.status),
+}));
 
 export const taskFiles = pgTable("task_files", {
   id: text("id").primaryKey(),
@@ -269,6 +312,8 @@ export const taskFiles = pgTable("task_files", {
   workerAgentId: text("worker_agent_id").notNull().references(() => agents.id, { onDelete: "cascade" }),
   supervisorAgentId: text("spv_agent_id").notNull().references(() => agents.id, { onDelete: "cascade" }),
   status: spawnStatusEnum("status").notNull().default("pending"),
+  archivedAt: timestamp("archived_at", { withTimezone: true }),
+  archivedReason: text("archived_reason"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
@@ -288,18 +333,25 @@ export const tokenUsageLog = pgTable("token_usage_log", {
   agentId: text("agent_id").notNull().references(() => agents.id, { onDelete: "cascade" }),
   channelId: text("channel_id").notNull().references(() => channels.id, { onDelete: "cascade" }),
   modelModuleId: text("model_module_id").references(() => modelModules.id, { onDelete: "set null" }),
+  runId: text("run_id").references(() => runs.id, { onDelete: "set null" }),
   promptTokens: integer("prompt_tokens").notNull(),
   completionTokens: integer("completion_tokens").notNull(),
   totalTokens: integer("total_tokens").notNull(),
   timestamp: timestamp("timestamp", { withTimezone: true }).notNull().defaultNow(),
-});
+}, (table) => ({
+  timestampIndex: index("token_usage_log_timestamp_idx").on(table.timestamp),
+  runIdx: index("token_usage_log_run_idx").on(table.runId),
+}));
 
 export const channelIndex = pgTable("channel_index", {
   channelId: text("channel_id").primaryKey().references(() => channels.id, { onDelete: "cascade" }),
   channelPath: text("channel_path").notNull(),
   topicSummary: text("topic_summary").notNull(),
   lastIndexedAt: timestamp("last_indexed_at", { withTimezone: true }).notNull(),
+  lastSeq: integer("last_seq"),
   messageCountSinceIndex: integer("msg_count_since_index").notNull(),
+  status: text("status").notNull().default("ok"),
+  lastError: text("last_error"),
 });
 
 export const compressedSummaries = pgTable("compressed_summaries", {
@@ -354,12 +406,20 @@ export const agentMemoryNotes = pgTable("agent_memory_notes", {
   uncertainty: text("uncertainty").notNull().default(""),
   detailed: text("detailed").notNull().default(""),
 
+  embedding: text("embedding"),
+  embeddingModel: text("embedding_model"),
+  embeddingUpdatedAt: timestamp("embedding_updated_at", { withTimezone: true }),
+
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
-});
+}, (table) => ({
+  agentLifecycleIdx: index("agent_memory_notes_agent_lifecycle_idx").on(table.agentId, table.lifecycleStatus, table.noteTimestamp.desc()),
+}));
 
 export const memoryUpdateLog = pgTable("memory_update_log", {
   id: text("id").primaryKey(),
+  agentId: text("agent_id"),
+  action: text("action").notNull().default("update"),
   noteId: text("note_id").notNull()
     .references(() => agentMemoryNotes.id, { onDelete: "cascade" }),
   timestamp: timestamp("timestamp", { withTimezone: true }).notNull(),
@@ -444,6 +504,46 @@ export const artifacts = pgTable("artifacts", {
   semanticTags: text("semantic_tags").array().notNull().default(sql`'{}'::text[]`),
   metadata: jsonb("metadata").$type<Record<string, unknown>>().notNull().default(jsonbObjectDefault),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  runId: text("run_id").references(() => runs.id, { onDelete: "cascade" }),
+  beforeHash: text("before_hash"),
+  afterHash: text("after_hash"),
+  patch: text("patch"),
+  contentRef: text("content_ref"),
+});
+
+export const swarmTasks = pgTable("swarm_tasks", {
+  id: text("id").primaryKey(),
+  runId: text("run_id").notNull().references(() => runs.id, { onDelete: "cascade" }),
+  dependsOn: jsonb("depends_on").$type<string[]>().notNull().default(jsonbArrayDefault),
+  assigneeTemplate: text("assignee_template").notNull(),
+  status: swarmTaskStatusEnum("status").notNull().default("pending"),
+  outputRef: text("output_ref"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+export const delegations = pgTable("delegations", {
+  id: text("id").primaryKey(),
+  parentRunId: text("parent_run_id").notNull().references(() => runs.id, { onDelete: "cascade" }),
+  childRunId: text("child_run_id").notNull().references(() => runs.id, { onDelete: "cascade" }),
+  depth: integer("depth").notNull(),
+  summary: text("summary"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+export const approvalRequests = pgTable("approval_requests", {
+  id: text("id").primaryKey(),
+  runId: text("run_id").notNull().references(() => runs.id, { onDelete: "cascade" }),
+  toolName: text("tool_name").notNull(),
+  argsPreview: jsonb("args_preview").$type<Record<string, unknown>>(),
+  riskClass: approvalRiskClassEnum("risk_class").notNull(),
+  status: approvalStatusEnum("status").notNull().default("pending"),
+  requestedBy: text("requested_by").notNull(),
+  decidedBy: text("decided_by"),
+  expiresAt: timestamp("expires_at", { withTimezone: true }),
+  scope: text("scope"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  decidedAt: timestamp("decided_at", { withTimezone: true }),
 });
 
 // â”€â”€â”€ Relations â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -767,23 +867,6 @@ export const mcpServers = pgTable("mcp_servers", {
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
-export const dynamicTools = pgTable("dynamic_tools", {
-  id: text("id").primaryKey(),
-  name: text("name").notNull().unique(),
-  displayName: text("display_name").notNull(),
-  description: text("description").notNull(),
-  parameters: jsonb("parameters").notNull().default(jsonbObjectDefault),
-  scriptContent: text("script_content"),
-  httpConfig: jsonb("http_config").$type<{
-    method: "GET" | "POST" | "PUT" | "DELETE";
-    url: string;
-    headers: Record<string, string>;
-  }>(),
-  createdBy: text("created_by").notNull(),
-  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
-});
-
 export const agentInstructionStacks = pgTable("agent_instruction_stacks", {
   id: text("id").primaryKey(),
   agentId: text("agent_id").notNull().references(() => agents.id, { onDelete: "cascade" }),
@@ -818,5 +901,87 @@ export const agentInstructionStacksRelations = relations(agentInstructionStacks,
     fields: [agentInstructionStacks.instructionModuleId],
     references: [instructionModules.id],
   }),
+}));
+
+/**
+ * Durable event log (HM3): ordered, replayable record of non-ephemeral broker
+ * events. Ephemeral streams (message:stream, typing) are never persisted.
+ * Replay via seq cursor: WHERE channel_id = ? AND seq > ? ORDER BY seq.
+ */
+export const durableEvents = pgTable("durable_events", {
+  seq: bigserial("seq", { mode: "number" }).primaryKey(),
+  eventId: text("event_id").notNull(),
+  type: text("type").notNull(),
+  channelId: text("channel_id"),
+  agentId: text("agent_id"),
+  payload: jsonb("payload").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => ({
+  channelSeqIdx: index("durable_events_channel_seq_idx").on(table.channelId, table.seq),
+}));
+
+// â”€â”€â”€ Runs (RUN-0): one row per runtime execution â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// agentId/channelId/workspaceId are text to match the id domains used by
+// agents/channels/workspaces in this schema (e.g. "default-assistant",
+// "default"); they are correlation columns, not enforced foreign keys.
+
+export const apiKeyRoleEnum = pgEnum("api_key_role", ["admin", "operator", "viewer"]);
+
+export type ApiKeyRole = (typeof apiKeyRoleEnum.enumValues)[number];
+
+// SEC-1: key-based authentication. Only scrypt hashes are stored; plaintext
+// keys exist solely in the bootstrap emission and the operator's secret store.
+export const apiKeys = pgTable("api_keys", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  keyHash: text("key_hash").notNull().unique(),
+  label: text("label"),
+  role: apiKeyRoleEnum("role").notNull().default("viewer"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  lastUsedAt: timestamp("last_used_at", { withTimezone: true }),
+  revokedAt: timestamp("revoked_at", { withTimezone: true }),
+});
+
+export interface RunCheckpoint {
+  watermarkSeq: number;
+  completedCallIds: string[];
+  historyRef?: string;
+  updatedAt: string;
+}
+
+export interface CompensationInverseOp {
+  op: "delete" | "restore";
+  path: string;
+  priorHash?: string;
+  priorContentRef?: string;
+}
+
+export const runs = pgTable("runs", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  parentRunId: uuid("parent_run_id").references((): any => runs.id, { onDelete: "set null" }),
+  agentId: text("agent_id").notNull(),
+  channelId: text("channel_id").notNull(),
+  workspaceId: text("workspace_id"),
+  runtimeType: text("runtime_type").notNull(),
+  status: runStatusEnum("status").notNull().default("running"),
+  errorCode: text("error_code"),
+  checkpointSeq: bigint("checkpoint_seq", { mode: "number" }),
+  checkpoint: jsonb("checkpoint").$type<RunCheckpoint>(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => ({
+  runsChannelIdx: index("runs_channel_idx").on(table.channelId),
+}));
+
+export const runsCompensation = pgTable("runs_compensation", {
+  id: text("id").primaryKey(),
+  runId: uuid("run_id").notNull().references(() => runs.id, { onDelete: "cascade" }),
+  seq: integer("seq").notNull(),
+  toolName: text("tool_name").notNull(),
+  targetPath: text("target_path").notNull(),
+  inverseOp: jsonb("inverse_op").$type<CompensationInverseOp>().notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => ({
+  runSeqIdx: uniqueIndex("runs_compensation_run_seq_idx").on(table.runId, table.seq),
+  runIdx: index("runs_compensation_run_idx").on(table.runId),
 }));
 

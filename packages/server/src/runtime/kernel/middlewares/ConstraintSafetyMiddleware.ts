@@ -2,10 +2,11 @@
 import { getDb } from "../../../Shared/config/database.js";
 import { constraintsModules } from "../../../db/schema.js";
 import type { IContextMiddleware, MutableContextPacket, ContextBuildContext } from "../contextTypes.js";
+import { SOURCE_INTEGRITY_POINTER } from "./IdentityAuthorityMiddleware.js";
 
 export class ConstraintSafetyMiddleware implements IContextMiddleware {
   readonly name = "ConstraintSafetyMiddleware";
-  readonly priority = 50;
+  readonly priority = 10;
 
   async process(packet: MutableContextPacket, ctx: ContextBuildContext): Promise<void> {
     const { agent } = ctx;
@@ -13,6 +14,8 @@ export class ConstraintSafetyMiddleware implements IContextMiddleware {
       "Strict Invariant: You are prohibited from accessing or disclosing .env, credentials, or core server files.",
       "Strict Invariant: You must not execute unwhitelisted destructive commands.",
       "Operational Rule: Never fabricate tool outputs; inspect actual outputs returned by tools.",
+      SOURCE_INTEGRITY_POINTER,
+      "Lock Discipline: When locked in via lock_in, you are in isolated SELF-only view; do NOT hallucinate other agents' presence. When locked out, respect full roster visibility.",
     ];
 
     if (agent.constraintsModuleId) {
@@ -29,7 +32,7 @@ export class ConstraintSafetyMiddleware implements IContextMiddleware {
 
     packet.systemPromptBlocks.push({
       id: "safety_constraints",
-      priority: 50,
+      priority: 10,
       content: `[SAFETY INVARIANTS & CONSTRAINTS]\n${safetyRules.map(r => `- ${r}`).join("\n")}`,
     });
   }

@@ -16,3 +16,24 @@ export interface ChannelMessage {
   sequenceNumber: number;
   timestamp: Date;
 }
+
+export interface StructuredToolCall {
+  name: string;
+  args: unknown;
+  result: string | unknown;
+  truncated: boolean;
+  durationMs: number | null;
+  callId: string | null;
+}
+
+export interface MessagePageCursor {
+  before: {
+    timestamp: string;
+    seq: number;
+  };
+}
+
+export interface ChannelMessagesPage {
+  messages: any[];
+  cursor: MessagePageCursor | null;
+}

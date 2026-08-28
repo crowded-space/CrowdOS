@@ -1,6 +1,7 @@
 ﻿import { randomUUID } from "node:crypto";
 import { eq, and } from "drizzle-orm";
 import { getDb } from "../Shared/config/database.js";
+import { TtlCache } from "../Shared/core/ttlCache.js";
 import { skills, agentSkills, agents, toolkitModules } from "../db/schema.js";
 import type { SkillDefinition, CreateSkillInput, UpdateSkillInput } from "./skillTypes.js";
 
@@ -22,6 +23,22 @@ function mapSkill(row: any): SkillDefinition {
 }
 
 export class SkillService {
+  // Hot-path caches: these reads run multiple times per agent turn (context
+  // assembly + every tool authorization). Short TTL + explicit invalidation on
+  // any mutation keeps authorization fresh.
+  private readonly agentSkillsCache = new TtlCache<SkillDefinition[]>(30_000, 500);
+  private readonly resolvedToolsCache = new TtlCache<string[]>(30_000, 500);
+
+  invalidateAgentCaches(agentId?: string): void {
+    if (agentId) {
+      this.agentSkillsCache.delete(agentId);
+      this.resolvedToolsCache.delete(agentId);
+    } else {
+      this.agentSkillsCache.clear();
+      this.resolvedToolsCache.clear();
+    }
+  }
+
   async list(filters?: { category?: string }): Promise<SkillDefinition[]> {
     const db = getDb();
     let whereClause = undefined;
@@ -65,6 +82,7 @@ export class SkillService {
       updatedAt: now,
     }).returning();
 
+    this.invalidateAgentCaches();
     return mapSkill(inserted);
   }
 
@@ -93,28 +111,38 @@ export class SkillService {
       .where(eq(skills.id, id))
       .returning();
 
+    this.invalidateAgentCaches();
     return updated ? mapSkill(updated) : null;
   }
 
   async delete(id: string): Promise<boolean> {
     const db = getDb();
     const result = await db.delete(skills).where(eq(skills.id, id)).returning({ id: skills.id });
+    this.invalidateAgentCaches();
     return result.length > 0;
   }
 
   async getAgentSkills(agentId: string): Promise<SkillDefinition[]> {
+    const cached = this.agentSkillsCache.get(agentId);
+    if (cached) return cached;
+
     const db = getDb();
     const links = await db.query.agentSkills.findMany({
       where: and(eq(agentSkills.agentId, agentId), eq(agentSkills.isEnabled, true)),
     });
-    if (links.length === 0) return [];
+    if (links.length === 0) {
+      this.agentSkillsCache.set(agentId, []);
+      return [];
+    }
 
     const skillIds = links.map(l => l.skillId);
     const skillRows = await db.query.skills.findMany({
       where: (table, { inArray }) => inArray(table.id, skillIds),
     });
 
-    return skillRows.map(mapSkill);
+    const result = skillRows.map(mapSkill);
+    this.agentSkillsCache.set(agentId, result);
+    return result;
   }
 
   async assignSkill(agentId: string, skillId: string): Promise<void> {
@@ -131,14 +159,19 @@ export class SkillService {
         isEnabled: true,
       });
     }
+    this.invalidateAgentCaches(agentId);
   }
 
   async removeSkill(agentId: string, skillId: string): Promise<void> {
     const db = getDb();
     await db.delete(agentSkills).where(and(eq(agentSkills.agentId, agentId), eq(agentSkills.skillId, skillId)));
+    this.invalidateAgentCaches(agentId);
   }
 
   async getResolvedToolsForAgent(agentId: string): Promise<string[]> {
+    const cached = this.resolvedToolsCache.get(agentId);
+    if (cached) return cached;
+
     const db = getDb();
     const toolIds = new Set<string>();
 
@@ -164,7 +197,13 @@ export class SkillService {
     toolIds.add("discard_memory_from_context");
     toolIds.add("remember");
 
-    return Array.from(toolIds);
+    // 4. Universal context-awareness tools (always available for tool-capable runtimes)
+    toolIds.add("lock_in");
+    toolIds.add("lock_out");
+
+    const result = Array.from(toolIds);
+    this.resolvedToolsCache.set(agentId, result);
+    return result;
   }
 }
 

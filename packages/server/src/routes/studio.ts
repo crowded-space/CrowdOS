@@ -11,10 +11,15 @@ import {
 } from "../db/schema.js";
 import { skillsGate } from "../Skills/skillsGate.js";
 import { toolsGate } from "../tools/toolsGate.js";
-import { contextPipeline } from "../runtime/contextGate.js";
+import { contextPipeline, runtimeGate } from "../runtime/contextGate.js";
 import { globalBroker } from "../Shared/sockets/registerSocketServer.js";
+import { redactSecrets, redactApiKeyFields } from "../Shared/core/redact.js";
+import { authGate } from "../Shared/auth/authGate.js";
 
 export async function studioRoutes(app: FastifyInstance) {
+  // SEC-1: every /api/studio/* route requires an admin API key (strict mode).
+  app.addHook("preHandler", authGate.requireAdmin);
+
   // GET /api/studio/agents/:id/manifest
   app.get<{ Params: { id: string } }>(
     "/api/studio/agents/:id/manifest",
@@ -28,12 +33,13 @@ export async function studioRoutes(app: FastifyInstance) {
         return reply.status(404).send({ statusCode: 404, error: "Not Found", message: "Agent not found" });
       }
 
-      // 1. Model Slot
-      let modelModule = null;
+      // 1. Model Slot — redact apiKey before returning (P0-2)
+      let modelModule: any = null;
       if (agent.modelModuleId) {
-        modelModule = await db.query.modelModules.findFirst({
+        const raw = await db.query.modelModules.findFirst({
           where: eq(modelModules.id, agent.modelModuleId),
         });
+        modelModule = raw ? redactApiKeyFields(raw as Record<string, unknown>) : null;
       }
 
       // 2. Instruction Stack
@@ -159,6 +165,10 @@ export async function studioRoutes(app: FastifyInstance) {
         }
       }
 
+      // Invalidate hot-path caches after direct manifest mutation (toolkit/skill/model refs)
+      skillsGate.invalidateAgentCaches(agentId);
+      runtimeGate.invalidateModelModuleCache();
+
       globalBroker?.emit("workspace:sync", {});
       return { success: true, message: "Agent manifest updated successfully." };
     }
@@ -174,6 +184,9 @@ export async function studioRoutes(app: FastifyInstance) {
     };
   }>(
     "/api/studio/inspect-prompt",
+    {
+      config: { rateLimit: { max: 10, timeWindow: 60_000 } },
+    },
     async (request, reply) => {
       const db = getDb();
       const { agentId, channelId = "general", userInput = "Hello, what is your current plan?", runtimeType = "agentic" } = request.body;
@@ -194,6 +207,8 @@ export async function studioRoutes(app: FastifyInstance) {
       const totalChars = (compiled.systemPrompt?.length || 0) + (compiled.userInput?.length || 0);
       const tokenEstimate = Math.ceil(totalChars / 4);
 
+      // Redact secrets from modelConfig and any leaked tokens (P0-2)
+      const safeModelConfig = redactSecrets(compiled._modelConfig as unknown as Record<string, unknown>);
       return {
         agentName: agent.name,
         systemPrompt: compiled.systemPrompt,
@@ -201,7 +216,7 @@ export async function studioRoutes(app: FastifyInstance) {
         history: compiled.history,
         tools: compiled.tools,
         memoryPreviewBlock: compiled.memoryPreviewBlock,
-        modelConfig: compiled._modelConfig,
+        modelConfig: safeModelConfig,
         tokenEstimate,
       };
     }

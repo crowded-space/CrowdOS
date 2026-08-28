@@ -1,5 +1,6 @@
 ﻿import type { FastifyError, FastifyInstance } from "fastify";
 import { ZodError, type ZodIssue } from "zod";
+import { redactLogPayload } from "./redact.js";
 
 export function setupErrorHandler(app: FastifyInstance) {
   app.setErrorHandler((error: FastifyError, request, reply) => {
@@ -26,8 +27,9 @@ export function setupErrorHandler(app: FastifyInstance) {
       });
     }
 
-    // Handle all other errors
-    request.log.error({ err: error }, `Unhandled request error: ${error.message}`);
+    // Handle all other errors — redact secrets before logging (P0-2)
+    const safeErr = redactLogPayload({ message: error.message, stack: error.stack, statusCode: error.statusCode }) as any;
+    request.log.error({ err: safeErr }, `Unhandled request error: ${safeErr.message || error.message}`);
     
     return reply.status(error.statusCode || 500).send({
       statusCode: error.statusCode || 500,

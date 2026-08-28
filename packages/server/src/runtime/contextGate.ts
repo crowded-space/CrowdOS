@@ -1,12 +1,17 @@
-﻿export { contextPipeline, ContextPipelineManager } from "./kernel/ContextPipelineManager.js";
-export { ContextAssembler } from "./kernel/ContextAssembler.js";
+export {
+  contextPipeline,
+  ContextPipelineManager,
+  ContextAssembler,
+  runtimeGate,
+} from "./runtimeGate.js";
+
 export type {
   ContextBuildContext,
   MutableContextPacket,
   IContextMiddleware,
   HistoryMessage,
   LLMToolDefinition,
-} from "./kernel/contextTypes.js";
+} from "./runtimeGate.js";
 
 export const contextGate = {
   assemble: (ctx: any) => import("./kernel/ContextPipelineManager.js").then(m => m.contextPipeline.assemble(ctx)),

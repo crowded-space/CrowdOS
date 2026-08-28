@@ -88,14 +88,17 @@ export default function WorkspacePortal() {
 
   return (
     <div
-      className="fixed inset-0 bg-brand-bg flex items-center justify-center p-4 font-sans select-none overflow-y-auto"
+      className="fixed inset-0 bg-[#060608] flex items-center justify-center p-4 sm:p-6 font-sans select-none overflow-y-auto overscroll-contain"
       id="workspace-portal"
     >
       {/* Background ambient glow */}
-      <div className="absolute top-1/4 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[350px] h-[350px] bg-indigo-500/10 blur-[130px] rounded-full shrink-0 pointer-events-none" />
+      <div className="absolute inset-0 pointer-events-none">
+        <div className="absolute top-1/4 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[520px] h-[520px] bg-indigo-600/10 blur-[140px] rounded-full" />
+        <div className="absolute bottom-1/4 right-1/4 w-[360px] h-[360px] bg-violet-600/06 blur-[120px] rounded-full" />
+      </div>
 
       {/* Main card */}
-      <div className="w-full max-w-md bg-brand-card border border-brand-border-muted rounded-xl overflow-hidden shadow-2xl p-6 space-y-5 relative flex flex-col items-center">
+      <div className="w-full max-w-[440px] bg-[#141416] border border-zinc-800 rounded-[20px] overflow-hidden shadow-[0_24px_64px_rgba(0,0,0,0.6)] p-6 sm:p-7 space-y-6 relative flex flex-col items-center my-auto">
 
         {/* Logo */}
         <div className="text-center space-y-3 select-none flex flex-col items-center">
@@ -114,10 +117,11 @@ export default function WorkspacePortal() {
         <form onSubmit={handleTestAndSave} className="w-full space-y-4 text-xs font-sans leading-snug select-text">
 
           {/* Step 1 — DB URL */}
-          <div className="space-y-1.5 text-left">
-            <label className="text-zinc-500 font-bold font-mono text-[10px] uppercase tracking-wide flex items-center gap-1.5">
-              <Database size={10} className="text-indigo-400" />
+          <div className="space-y-2 text-left">
+            <label className="text-zinc-400 font-semibold font-sans text-[13px] flex items-center gap-2">
+              <span className="w-6 h-6 rounded-full bg-indigo-500 text-white flex items-center justify-center text-[11px] font-bold shrink-0">1</span>
               PostgreSQL Connection URL
+              <Database size={13} className="text-zinc-500 ml-auto" />
             </label>
             <div className="relative">
               <input
@@ -128,13 +132,20 @@ export default function WorkspacePortal() {
                 placeholder="postgresql://user:password@host:5432/dbname"
                 spellCheck={false}
                 autoComplete="off"
-                className="w-full bg-brand-sidebar border border-brand-border focus:border-brand-border-muted focus:ring-1 focus:ring-brand-border-muted/40 rounded px-2.5 py-2 text-xs font-mono text-zinc-100 focus:outline-none placeholder-zinc-700 pr-8"
+                autoCapitalize="off"
+                autoCorrect="off"
+                inputMode="url"
+                className="w-full bg-zinc-900 border border-zinc-800 focus:border-zinc-700 focus:ring-2 focus:ring-indigo-500/20 rounded-xl px-3.5 py-3.5 min-h-[48px] text-[15px] sm:text-[13px] font-mono text-zinc-100 focus:outline-none placeholder-zinc-600 pr-10 shadow-inner"
               />
               {testStatus === 'success' && (
-                <CheckCircle2 size={13} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-emerald-400 shrink-0" />
+                <span className="absolute right-2.5 top-1/2 -translate-y-1/2 w-7 h-7 rounded-full bg-emerald-500/15 border border-emerald-500/20 flex items-center justify-center">
+                  <CheckCircle2 size={14} className="text-emerald-400 shrink-0" />
+                </span>
               )}
               {testStatus === 'failed' && (
-                <XCircle size={13} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-red-400 shrink-0" />
+                <span className="absolute right-2.5 top-1/2 -translate-y-1/2 w-7 h-7 rounded-full bg-rose-500/15 border border-rose-500/20 flex items-center justify-center">
+                  <XCircle size={14} className="text-rose-400 shrink-0" />
+                </span>
               )}
             </div>
           </div>
@@ -143,7 +154,7 @@ export default function WorkspacePortal() {
           <button
             type="submit"
             disabled={!canTest}
-            className={`w-full py-2 rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 transition select-none leading-none tracking-tight ${
+            className={`w-full py-2.5 min-h-[44px] rounded-lg text-sm font-semibold flex items-center justify-center gap-1.5 transition select-none leading-none tracking-tight active:scale-[0.99] ${
               canTest
                 ? testStatus === 'success'
                   ? 'bg-emerald-600/20 border border-emerald-600/40 text-emerald-300 cursor-default'
@@ -153,17 +164,17 @@ export default function WorkspacePortal() {
           >
             {testStatus === 'testing' ? (
               <>
-                <Loader2 size={11} className="animate-spin" />
+                <Loader2 size={13} className="animate-spin" />
                 <span>Testing Connection...</span>
               </>
             ) : testStatus === 'success' ? (
               <>
-                <CheckCircle2 size={11} />
+                <CheckCircle2 size={13} />
                 <span>Connection Verified</span>
               </>
             ) : (
               <>
-                <Plug size={11} />
+                <Plug size={13} />
                 <span>Test Connection</span>
               </>
             )}
@@ -200,14 +211,18 @@ export default function WorkspacePortal() {
 
             {/* Workspace name */}
             <div className="space-y-1.5 text-left">
-              <label className="text-zinc-500 font-bold font-mono text-[10px] uppercase tracking-wide">Workspace Name</label>
+              <label className="text-zinc-500 font-bold font-mono text-[10px] uppercase tracking-wide flex items-center gap-1.5">
+                <span className="w-4 h-4 rounded-full bg-indigo-500/15 border border-indigo-500/30 text-indigo-400 flex items-center justify-center text-[9px] font-bold shrink-0">2</span>
+                Workspace Name
+              </label>
               <input
                 type="text"
                 value={workspaceName}
                 onChange={(e) => setWorkspaceName(e.target.value)}
                 placeholder="e.g. Swarm Research Core"
                 autoFocus
-                className="w-full bg-brand-sidebar border border-brand-border focus:border-brand-border-muted focus:ring-1 focus:ring-brand-border-muted/40 rounded px-2.5 py-2 text-xs text-zinc-100 focus:outline-none placeholder-zinc-650"
+                autoComplete="off"
+                className="w-full bg-brand-sidebar border border-brand-border focus:border-brand-border-muted focus:ring-1 focus:ring-brand-border-muted/40 rounded px-2.5 py-2.5 min-h-[44px] text-[16px] sm:text-sm text-zinc-100 focus:outline-none placeholder-zinc-650"
               />
             </div>
 
@@ -237,13 +252,13 @@ export default function WorkspacePortal() {
               type="button"
               onClick={handleCreate}
               disabled={!canCreate}
-              className={`w-full py-2 rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 transition select-none tracking-tight leading-none ${
+              className={`w-full py-2.5 min-h-[44px] rounded-lg text-sm font-semibold flex items-center justify-center gap-1.5 transition select-none tracking-tight leading-none active:scale-[0.99] ${
                 canCreate
                   ? 'bg-indigo-500 text-white hover:bg-indigo-600 shadow-[0_4px_12px_rgba(99,102,241,0.3)]'
                   : 'bg-brand-sidebar text-zinc-600 border border-brand-border-muted/45 cursor-not-allowed'
               }`}
             >
-              <Play size={11} />
+              <Play size={13} />
               <span>Launch Workspace</span>
             </button>
           </div>
@@ -255,12 +270,12 @@ export default function WorkspacePortal() {
             <h3 className="text-[9px] font-mono tracking-wider font-bold text-zinc-550 text-left uppercase">
               Or Choose Active Local Session ({workspaces.length})
             </h3>
-            <div className="space-y-1 max-h-28 overflow-y-auto pr-1">
+            <div className="space-y-1.5 max-h-32 overflow-y-auto scrollbar-thin pr-1">
               {workspaces.map(ws => (
                 <button
                   key={ws.id}
                   onClick={() => enterWorkspace(ws.id)}
-                  className="w-full flex items-center justify-between p-2 hover:bg-brand-sidebar border border-brand-border rounded-lg text-zinc-300 text-left transition text-xs font-sans cursor-pointer focus:outline-none"
+                  className="w-full flex items-center justify-between p-2.5 min-h-[48px] hover:bg-brand-sidebar active:bg-brand-card border border-brand-border rounded-lg text-zinc-300 text-left transition-colors text-xs font-sans cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500/40"
                 >
                   <div className="flex items-center gap-2 truncate">
                     <CrowIcon variant={ws.icon} className="w-6 h-6 rounded bg-transparent border-0 shrink-0" iconSize={65} />

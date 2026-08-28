@@ -11,13 +11,15 @@ interface MessageRouterProps {
   message: Message;
   agentLevel?: AgentLevel;
   key?: string;
+  toolExecutions?: import('@/types/crowd-os').ToolExecution[];
 }
 
-export default function MessageRouter({ message, agentLevel = 3 }: MessageRouterProps) {
+export function MessageRouter({ message, agentLevel = 3, toolExecutions }: MessageRouterProps) {
   switch (message.type) {
     case 'human':
       return (
         <HumanMessage 
+          id={message.id}
           authorName={message.authorName} 
           content={message.content} 
           timestamp={message.timestamp} 
@@ -38,6 +40,9 @@ export default function MessageRouter({ message, agentLevel = 3 }: MessageRouter
           metadata={message.metadata}
           level={agentLevel}
           attachments={message.attachments}
+          turnSteps={message.turnSteps}
+          turnStatus={message.turnStatus}
+          toolExecutions={toolExecutions}
         />
       );
       
@@ -221,3 +226,7 @@ export default function MessageRouter({ message, agentLevel = 3 }: MessageRouter
       return null;
   }
 }
+
+// Memoized: message objects come from the store with stable references, so
+// composer keystrokes / unrelated store updates skip re-rendering history.
+export default React.memo(MessageRouter);

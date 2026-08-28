@@ -1,5 +1,6 @@
 ﻿import type { AgentLoopOptions, AgentEvent } from './types.js';
-import type { PiMessage, PiToolSchema } from '../ai/types.js';
+import { AgentAbortError } from './types.js';
+import type { PiMessage, PiToolSchema, PiLLMResponse } from '../ai/types.js';
 import { EventStream } from './event-stream.js';
 
 export function runAgentLoop(options: AgentLoopOptions): EventStream {
@@ -46,11 +47,19 @@ export function runAgentLoop(options: AgentLoopOptions): EventStream {
     let step = 0;
     let finalContent = '';
     let finalThoughts = '';
+    let totalUsage = { promptTokens: 0, completionTokens: 0, totalTokens: 0 };
+
+    const accumulateUsage = (usage?: PiLLMResponse['usage']): void => {
+      if (!usage) return;
+      totalUsage.promptTokens += usage.promptTokens || 0;
+      totalUsage.completionTokens += usage.completionTokens || 0;
+      totalUsage.totalTokens += usage.totalTokens || (usage.promptTokens || 0) + (usage.completionTokens || 0);
+    };
 
     try {
       while (step < maxSteps) {
         if (abortSignal?.aborted) {
-          throw new Error('Agent execution aborted by user or timeout.');
+          throw new AgentAbortError('Agent execution aborted by user or timeout.', abortSignal);
         }
 
         step++;
@@ -85,6 +94,7 @@ export function runAgentLoop(options: AgentLoopOptions): EventStream {
 
         finalContent = response.content || stepContent;
         if (response.thoughts) finalThoughts = response.thoughts;
+        accumulateUsage(response.usage);
 
         // Check if there are tool calls
         if (response.toolCalls && response.toolCalls.length > 0) {
@@ -98,7 +108,7 @@ export function runAgentLoop(options: AgentLoopOptions): EventStream {
 
           for (const call of response.toolCalls) {
             if (abortSignal?.aborted) {
-              throw new Error('Agent execution aborted during tool execution.');
+              throw new AgentAbortError('Agent execution aborted during tool execution.', abortSignal);
             }
 
             stream.emit({
@@ -122,6 +132,7 @@ export function runAgentLoop(options: AgentLoopOptions): EventStream {
               try {
                 toolResult = await tool.execute(call.arguments, abortSignal);
               } catch (err: any) {
+                if (err instanceof AgentAbortError) throw err;
                 toolResult = {
                   success: false,
                   output: '',
@@ -164,6 +175,7 @@ export function runAgentLoop(options: AgentLoopOptions): EventStream {
           timestamp: Date.now(),
           content: finalContent,
           thoughts: finalThoughts,
+          usage: { ...totalUsage },
         });
 
         break;
@@ -174,6 +186,7 @@ export function runAgentLoop(options: AgentLoopOptions): EventStream {
         timestamp: Date.now(),
         content: finalContent,
         thoughts: finalThoughts,
+        usage: { ...totalUsage },
       });
     } catch (err: any) {
       stream.emit({

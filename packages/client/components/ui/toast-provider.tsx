@@ -58,8 +58,8 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
   return (
     <ToastContext.Provider value={{ toast, showSuccess, showError, showInfo }}>
       {children}
-      {/* Toast Render Container */}
-      <div className="fixed bottom-5 right-5 z-[9999] flex flex-col gap-2 pointer-events-none select-none max-w-sm w-full px-4">
+      {/* Toast Render Container — safe area aware, thumb offset */}
+      <div className="fixed bottom-[max(1rem,env(safe-area-inset-bottom))] right-0 sm:right-5 z-[9999] flex flex-col gap-2 pointer-events-none select-none max-w-[min(92vw,360px)] w-full px-4 sm:px-0 left-1/2 -translate-x-1/2 sm:left-auto sm:translate-x-0">
         <AnimatePresence>
           {toasts.map(t => (
             <motion.div

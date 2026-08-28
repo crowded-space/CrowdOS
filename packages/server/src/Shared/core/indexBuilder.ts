@@ -1,10 +1,12 @@
-import { eq, sql } from "drizzle-orm";
+import { eq, and, gt, sql } from "drizzle-orm";
 import { getDb } from "../config/database.js";
-import { channelIndex, agents, channels } from "../../db/schema.js";
+import { channelIndex, agents, channels, messages } from "../../db/schema.js";
 import type { EventBroker } from "../../EventBroker/eventBrokerGate.js";
-import { LibrarianRuntime } from "./librarianRuntime.js";
+import { LibrarianRuntime, deltaIndexEnabled } from "./librarianRuntime.js";
 
 const librarianRuntime = new LibrarianRuntime();
+
+const STALE_DRIFT_THRESHOLD = 10;
 
 export class IndexBuilder {
   /**
@@ -13,7 +15,7 @@ export class IndexBuilder {
    */
   static async incrementMessageCount(channelId: string): Promise<void> {
     const db = getDb();
-    
+
     // Validate that the channel exists to satisfy foreign key constraints
     const chan = await db.query.channels.findFirst({
       where: eq(channels.id, channelId),
@@ -41,11 +43,34 @@ export class IndexBuilder {
   }
 
   /**
-   * Background task to reindex stale channels where drift exceeds 10 messages.
+   * PERF-4: count of messages beyond the index cursor (pending delta), bounded
+   * at the stale threshold so large channels cost a handful of rows to scan.
+   */
+  private static async pendingDeltaCount(channelId: string, lastSeq: number | null | undefined): Promise<number> {
+    const db = getDb();
+    const rows = await db.query.messages.findMany({
+      where:
+        lastSeq == null
+          ? and(eq(messages.channelId, channelId), eq(messages.isInternalMonologue, false))
+          : and(
+              eq(messages.channelId, channelId),
+              eq(messages.isInternalMonologue, false),
+              gt(messages.sequenceNumber, lastSeq),
+            ),
+      limit: STALE_DRIFT_THRESHOLD,
+    });
+    return rows.length;
+  }
+
+  /**
+   * Background task to reindex stale channels.
+   * PERF-4 drift rule: pending-delta size (messages past last_seq) >= threshold,
+   * plus degraded entries retry promptly (DB-3). DELTA_INDEX=false keeps the
+   * legacy messageCountSinceIndex drift counter.
    */
   static async reindexStaleChannels(broker: EventBroker): Promise<void> {
     const db = getDb();
-    
+
     // Find Librarian Agent profile
     const librarianAgent = await db.query.agents.findFirst({
       where: eq(agents.id, "agent-librarian"),
@@ -55,17 +80,30 @@ export class IndexBuilder {
       return;
     }
 
-    // Find all stale channels
-    const staleIndices = await db.select().from(channelIndex).where(
-      sql`${channelIndex.messageCountSinceIndex} >= 10`
-    );
+    const indices = await db.select().from(channelIndex);
+
+    const staleIndices = [];
+    if (deltaIndexEnabled()) {
+      for (const idx of indices) {
+        if (idx.status === "degraded" || (await this.pendingDeltaCount(idx.channelId, idx.lastSeq)) >= STALE_DRIFT_THRESHOLD) {
+          staleIndices.push(idx);
+        }
+      }
+    } else {
+      for (const idx of indices) {
+        if (idx.status === "degraded" || idx.messageCountSinceIndex >= STALE_DRIFT_THRESHOLD) {
+          staleIndices.push(idx);
+        }
+      }
+    }
 
     if (staleIndices.length === 0) {
       console.log("[IndexBuilder] All channels index are up-to-date.");
       return;
     }
 
-    console.log(`[IndexBuilder] Re-indexing ${staleIndices.length} stale channels...`);
+    const degradedCount = staleIndices.filter((idx) => idx.status === "degraded").length;
+    console.log(`[IndexBuilder] Re-indexing ${staleIndices.length} stale channels (${degradedCount} degraded)...`);
 
     const profile = {
       ...librarianAgent,

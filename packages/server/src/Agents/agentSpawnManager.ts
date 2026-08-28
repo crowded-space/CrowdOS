@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { eq, and } from "drizzle-orm";
+import { eq, inArray } from "drizzle-orm";
 
 import { getDb } from "../Shared/config/database.js";
 import {
@@ -18,7 +18,14 @@ import type { AgentProfile } from "./agentTypes.js";
 import type { SubtaskDefinition, SpawnFailurePolicy, TaskPriority } from "../types/task.types.js";
 import type { ChannelMessage } from "../Messages/messageGate.js";
 
-const WORKSPACE_DIR = "c:/Users/Asus/Documents/GitHub/.ThisCrowd";
+function getWorkspaceDir(): string {
+  // Resolve workspace dir via env or sandbox fallback (P0-5, HQ5) — never hard-coded Windows path
+  const fromEnv = process.env.WORKSPACE_DIR?.trim();
+  if (fromEnv) return path.resolve(fromEnv);
+  const sandboxRoot = path.join(process.cwd(), "sandbox");
+  return path.resolve(sandboxRoot, "default");
+}
+const WORKSPACE_DIR = getWorkspaceDir();
 
 export interface AggregationReportItem {
   subtaskId: string;
@@ -38,6 +45,7 @@ export interface AggregationReport {
 }
 
 import { getNextSequenceNumber } from "../Shared/core/sequenceNumber.js";
+import { monotonicUlid } from "../Shared/core/ulid.js";
 
 export class AgentSpawnManager {
   /**
@@ -55,6 +63,9 @@ export class AgentSpawnManager {
       maxRetries: number;
     }
   ): Promise<AggregationReport> {
+    if (process.env.SWARM_LEGACY !== "true") {
+      throw new Error("[AgentSpawnManager] Legacy swarm retired. Use Swarm gate (SWARM_V1). Set SWARM_LEGACY=true to re-enable legacy for one release.");
+    }
     const db = getDb();
     const spawnRequestId = `spawn-${Date.now()}-${randomUUID().slice(0, 8)}`;
 
@@ -112,9 +123,23 @@ export class AgentSpawnManager {
         );
       });
 
-      // Concurrency Barrier: Wait for all pairs in the current batch to complete
-      const batchResults = await Promise.all(batchPromises);
-      reportItems.push(...batchResults);
+      // Concurrency Barrier: Use allSettled so one failed worker doesn't destroy sibling work (TO_DO Phase 6)
+      const batchResults = await Promise.allSettled(batchPromises);
+      for (const r of batchResults) {
+        if (r.status === "fulfilled") reportItems.push(r.value);
+        else {
+          console.error(`[AgentSpawnManager] Batch worker failed:`, r.reason);
+          reportItems.push({
+            subtaskId: "unknown",
+            title: "failed",
+            status: "failed",
+            workerOutput: `Worker crashed: ${r.reason instanceof Error ? r.reason.message : String(r.reason)}`,
+            supervisorEvaluation: "Worker execution threw before supervisor could evaluate.",
+            retryCount: 0,
+            verdict: "failed",
+          });
+        }
+      }
     }
 
     const overallStatus = reportItems.every((item) => item.status === "completed") ? "completed" : "failed";
@@ -192,7 +217,7 @@ export class AgentSpawnManager {
       id: pairChannelId,
       categoryId,
       name: pairChannelName,
-      type: "standard",
+      type: "pair_private",
       createdBy: "system",
       position: 99,
       createdAt: new Date(),
@@ -292,8 +317,9 @@ export class AgentSpawnManager {
     // Welcome greeting in the private channel
     const welcomeMsgContent = `[SYSTEM] Welcome to private processing channel **#${pairChannelName}**. \nSpawning coordinates:\n* L3 Worker: @${uniqueWorkerName}\n* L3 Supervisor: @${uniqueSpvName}\n* Subtask: ${subtask.title}`;
     const startSeq = await getNextSequenceNumber(pairChannelId);
+    const welcomeMsgId = monotonicUlid();
     await db.insert(messages).values({
-      id: `msg-${Date.now()}-welcome-${subtask.id}`,
+      id: welcomeMsgId,
       channelId: pairChannelId,
       authorId: "system",
       authorName: "System Coordinator",
@@ -306,7 +332,7 @@ export class AgentSpawnManager {
       timestamp: new Date(),
     });
     broker.emit("message:new", {
-      id: `msg-${Date.now()}-welcome-${subtask.id}`,
+      id: welcomeMsgId,
       channelId: pairChannelId,
       authorId: "system",
       authorName: "System Coordinator",
@@ -324,8 +350,9 @@ export class AgentSpawnManager {
       if (retryCount > 0) {
         const retryMsgContent = `[SYSTEM] Initiating retry cycle **${retryCount}** of ${maxRetries} due to Supervisor failure feedback.`;
         const retrySeq = await getNextSequenceNumber(pairChannelId);
+        const retryMsgId = monotonicUlid();
         await db.insert(messages).values({
-          id: `msg-${Date.now()}-retry-${retryCount}-${subtask.id}`,
+          id: retryMsgId,
           channelId: pairChannelId,
           authorId: "system",
           authorName: "System Coordinator",
@@ -338,7 +365,7 @@ export class AgentSpawnManager {
           timestamp: new Date(),
         });
         broker.emit("message:new", {
-          id: `msg-${Date.now()}-retry-${retryCount}-${subtask.id}`,
+          id: retryMsgId,
           channelId: pairChannelId,
           authorId: "system",
           authorName: "System Coordinator",
@@ -360,11 +387,11 @@ export class AgentSpawnManager {
       broker.emit("agent:status", { agentId: workerId, status: "working" });
       broker.emit("agent:thinking", { agentId: workerId, channelId: pairChannelId }, { channelId: pairChannelId });
 
-      // Simulate execution time
-      await new Promise((resolve) => setTimeout(resolve, 800));
+      // Legacy path: simulated execution (retired) — gated by SWARM_LEGACY, honest delay noted
+      await new Promise((resolve) => setTimeout(resolve, 50));
 
-      const generatedCode = `// Task Output for ${subtask.title}\n// Priority: ${subtask.priority}\n// Execution Timestamp: ${new Date().toISOString()}\n\nexport function runTask() {\n  console.log("Subtask processed successfully.");\n  return { success: true, payload: "\${subtask.title} output logic" };\n}`;
-      workerOutput = `Completed Worker code artifact for "${subtask.title}". Produced file output:\n\`\`\`javascript\n${generatedCode}\n\`\`\``;
+      const generatedCode = `// Legacy output retired — use SwarmGate (SWARM_V1) for real execution\n// Original subtask: ${subtask.title}\n// Priority: ${subtask.priority}\n// Timestamp: ${new Date().toISOString()}\n\nexport function executeLegacyTask() {\n  console.log("Legacy subtask stub.");\n  return { success: true, payload: "\${subtask.title} legacy" };\n}`;
+      workerOutput = `Legacy worker stub for "${subtask.title}" — retired path. Produced file output:\n\`\`\`javascript\n${generatedCode}\n\`\`\``;
 
       // Write worker output file to sandboxed workspace
       try {
@@ -381,7 +408,7 @@ export class AgentSpawnManager {
 
       const wSeq = await getNextSequenceNumber(pairChannelId);
       const workerMsg: ChannelMessage = {
-        id: `msg-${Date.now()}-worker-run-${subtask.id}-${retryCount}`,
+        id: monotonicUlid(),
         channelId: pairChannelId,
         authorId: workerId,
         authorName: uniqueWorkerName,
@@ -408,24 +435,25 @@ export class AgentSpawnManager {
       broker.emit("agent:status", { agentId: spvId, status: "working" });
       broker.emit("agent:thinking", { agentId: spvId, channelId: pairChannelId }, { channelId: pairChannelId });
 
-      await new Promise((resolve) => setTimeout(resolve, 800));
+      await new Promise((resolve) => setTimeout(resolve, 50));
 
-      // Elegant Demonstration: If the instructions contain the word "fail" or "error" and it's our first try, supervisor fails the worker to trigger retry policy!
-      const shouldFail = (subtask.instructions.toLowerCase().includes("fail") || subtask.instructions.toLowerCase().includes("error")) && retryCount === 0;
+      // Legacy keyword verdict retired — deterministic honest check (no keyword injection)
+      const shouldFail = false;
 
       if (shouldFail) {
         finalVerdict = "failed";
-        supervisorEvaluation = `[Evaluation] Worker output failed standard verification checklist. \n* Issue: Code syntax is structurally sound, but instructions explicitly requested an error injection simulation.\n* Action: Emitted failure verdict to trigger retry policy logic.`;
+        supervisorEvaluation = `Legacy supervisor: stub evaluation (retired) — no check performed.`;
       } else {
         finalVerdict = "success";
-        supervisorEvaluation = `[Evaluation] Worker output matches requirements. \n* Quality: 100% compliant with instructions.\n* Sandbox execution: Clean compilation and verify successful.\n* Verdict: APPROVED.`;
+        supervisorEvaluation = `Legacy supervisor: stub approved (retired path — use Swarm verifier).`;
       }
+      void subtask;
 
       broker.emit("message:stream", { channelId: pairChannelId, agentId: spvId, chunk: supervisorEvaluation }, { channelId: pairChannelId });
 
       const sSeq = await getNextSequenceNumber(pairChannelId);
       const spvMsg: ChannelMessage = {
-        id: `msg-${Date.now()}-spv-run-${subtask.id}-${retryCount}`,
+        id: monotonicUlid(),
         channelId: pairChannelId,
         authorId: spvId,
         authorName: uniqueSpvName,
@@ -465,25 +493,27 @@ export class AgentSpawnManager {
     broker.emit("agent:despawned", { agentId: workerId }, { channelId: pairChannelId });
     broker.emit("agent:despawned", { agentId: spvId }, { channelId: pairChannelId });
 
-    // --- AUTO-CLEANUP STAGE ---
+    // --- AUTO-CLEANUP STAGE (DB-3: archive spawn evidence, never destroy it) ---
     console.log(`[AgentSpawnManager] Initiating cleanup for pair ${subtask.id}...`);
 
     // Let's sleep a moment so user can witness the private channel stream results
     await new Promise((resolve) => setTimeout(resolve, 1000));
 
-    // 1. Delete runtime states
+    const archivedAt = new Date();
+    const archivePatch = { archivedAt, archivedReason: "spawn_verdict" };
+
+    // 1. Drop transient runtime sessions (ephemeral state — not audit evidence)
     await db.delete(runtimeStates).where(eq(runtimeStates.agentId, workerId));
     await db.delete(runtimeStates).where(eq(runtimeStates.agentId, spvId));
 
-    // 2. Delete task_files record (deletes foreign keys FIRST!)
-    await db.delete(taskFiles).where(eq(taskFiles.id, taskFileId));
+    // 2. Archive task_files record
+    await db.update(taskFiles).set(archivePatch).where(eq(taskFiles.id, taskFileId));
 
-    // 3. Delete agent instances
-    await db.delete(agents).where(eq(agents.id, workerId));
-    await db.delete(agents).where(eq(agents.id, spvId));
+    // 3. Archive agent instances
+    await db.update(agents).set(archivePatch).where(inArray(agents.id, [workerId, spvId]));
 
-    // 4. Delete the temporary channel
-    await db.delete(channels).where(eq(channels.id, pairChannelId));
+    // 4. Archive the temporary channel (row + its message history remain queryable)
+    await db.update(channels).set(archivePatch).where(eq(channels.id, pairChannelId));
 
     // Notify client store of the deleted channel
     broker.emit("workspace:sync", {}, { channelId: pairChannelId });

@@ -1,6 +1,7 @@
 import { agentRegistry, AgentRegistry } from "./agentService";
 import { AgentSpawnManager } from "./agentSpawnManager";
 import { EscalationChain, AgentError } from "./agentErrors";
+import { startSpawnRetentionSweeper } from "./spawnRetentionSweeper";
 import type {
   AgentProfile,
   AuthorityLevel,
@@ -26,6 +27,7 @@ import type {
 } from "./agentValidators";
 
 export { AgentRegistry, agentRegistry, AgentSpawnManager, EscalationChain, AgentError };
+export { startSpawnRetentionSweeper };
 export type {
   AgentProfile,
   AuthorityLevel,

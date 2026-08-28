@@ -8,7 +8,7 @@ import { eq, and } from "drizzle-orm";
 
 import { getDb } from "../Shared/config/database.js";
 import { workspaces, workspaceAgents, workspaceEvents } from "../db/schema.js";
-import { LocalVFS } from "../vfs/local-vfs.js";
+import { LocalVFS } from "../vfs/vfsGate.js";
 import type { EventBroker } from "../EventBroker/eventBrokerGate.js";
 import type {
   Workspace,

@@ -1,5 +1,13 @@
 ﻿export type ToolSourceType = 'native' | 'dynamic' | 'mcp' | 'openapi';
 export type ToolDangerLevel = 'safe' | 'moderate' | 'dangerous';
+export type ToolEffectClass = 'read' | 'write' | 'side-effect';
+
+export class ToolTimeoutError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'ToolTimeoutError';
+  }
+}
 
 export interface ToolParameterSchema {
   type: 'object';
@@ -22,6 +30,7 @@ export interface ToolExecutionContext {
   actorId?: string;
   authorityLevel?: number;
   abortSignal?: AbortSignal;
+  runId?: string | null;
   logger?: {
     info: (msg: string, meta?: unknown) => void;
     warn: (msg: string, meta?: unknown) => void;
@@ -52,6 +61,8 @@ export interface ToolDefinition {
   sourceId?: string;
   parameters: ToolParameterSchema;
   dangerLevel: ToolDangerLevel;
+  /** PERF-8 static read/write classifier: omit to fall back to the name-based map (unknown → 'write'). */
+  effectClass?: ToolEffectClass;
   authLevelRequired?: number;
   timeoutMs?: number;
   handler: (args: Record<string, any>, ctx: ToolExecutionContext) => Promise<ToolResult>;

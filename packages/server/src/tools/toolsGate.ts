@@ -7,6 +7,7 @@ export { ToolExecutor } from "./ToolExecutor.js";
 export { toolRegistry, activeSchedules } from "./toolRegistry.js";
 export { mcpClientManager } from "./mcp/mcpClientManager.js";
 export { Guard } from "./safety/Guard.js";
+export { ToolTimeoutError } from "./toolTypes.js";
 export type {
   ToolDefinition,
   ToolResult,
@@ -20,6 +21,7 @@ export type {
   McpServerStatus,
   McpRawTool,
   McpTransport,
+  McpFraming,
 } from "./mcp/mcpTypes.js";
 
 export const toolsGate = {
@@ -29,6 +31,8 @@ export const toolsGate = {
   register: (def: any) => toolRegistry.register(def),
   unregister: (toolName: string) => toolRegistry.unregister(toolName),
   execute: (agentId: string, toolId: string, args: any, ctx?: any) => ToolExecutor.execute(agentId, toolId, args, ctx),
+  executeBatch: (agentId: string, calls: Array<{ toolId: string; args: Record<string, unknown> }>, ctx?: any) =>
+    ToolExecutor.executeBatch(agentId, calls, ctx),
   connectMcp: (serverId: string) => mcpClientManager.connect(serverId),
   disconnectMcp: (serverId: string) => mcpClientManager.disconnect(serverId),
   getMcpStatus: (serverId: string) => mcpClientManager.getStatus(serverId),

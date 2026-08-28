@@ -35,4 +35,5 @@ export const skillsGate = {
   assignSkill: (agentId: string, skillId: string) => skillService.assignSkill(agentId, skillId),
   removeSkill: (agentId: string, skillId: string) => skillService.removeSkill(agentId, skillId),
   getResolvedToolsForAgent: (agentId: string) => skillService.getResolvedToolsForAgent(agentId),
+  invalidateAgentCaches: (agentId?: string) => skillService.invalidateAgentCaches(agentId),
 };

@@ -1,5 +1,6 @@
 ﻿import type { FastifyInstance } from "fastify";
 import { toolsGate } from "../tools/toolsGate.js";
+import { authGate } from "../Shared/auth/authGate.js";
 
 export async function toolRoutes(app: FastifyInstance) {
   // GET /api/tools
@@ -49,6 +50,10 @@ export async function toolRoutes(app: FastifyInstance) {
   // POST /api/tools/execute-test
   app.post<{ Body: { agentId?: string; toolName: string; args: Record<string, any> } }>(
     "/api/tools/execute-test",
+    {
+      preHandler: authGate.requireAdmin,
+      config: { rateLimit: { max: 10, timeWindow: 60_000 } },
+    },
     async (request) => {
       const { agentId = "agent-l1", toolName, args } = request.body;
       const result = await toolsGate.execute(agentId, toolName, args, {

@@ -55,7 +55,10 @@ export default function ModelCardsTab() {
       open: true,
       title: opts.title,
       description: opts.description,
-      onConfirm: opts.onConfirm
+      onConfirm: () => {
+        opts.onConfirm();
+        setConfirmModal(prev => ({ ...prev, open: false }));
+      }
     });
   };
 

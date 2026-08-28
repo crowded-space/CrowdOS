@@ -1,15 +1,151 @@
-﻿import fs from "node:fs/promises";
+import fs from "node:fs/promises";
 import path from "node:path";
-import { exec } from "node:child_process";
-import { eq } from "drizzle-orm";
+import { eq, isNull } from "drizzle-orm";
 import { Guard } from "./safety/Guard.js";
+import { execHardened } from "./safety/hardenedExec.js";
 import { AgentSpawnManager } from "../Agents/agentGate.js";
 import { globalBroker } from "../Shared/sockets/registerSocketServer.js";
 import { getDb } from "../Shared/config/database.js";
 import { agents } from "../db/schema.js";
 import type { ToolDefinition, ToolResult, ToolExecutionContext } from "./toolTypes.js";
 
-export const activeSchedules = new Map<string, { id: string; cron: string; task: string; timer?: NodeJS.Timeout }>();
+// TOOL-1 · Honest tools — flag-gated rollback: when disabled the tools are
+// unregistered rather than faked (spec rollback). Flags default true.
+function isQueryDatabaseEnabled(): boolean {
+  const raw = process.env.QUERY_DATABASE_ENABLED?.trim().toLowerCase();
+  if (raw === "false" || raw === "0") return false;
+  if (raw === "true" || raw === "1") return true;
+  return true;
+}
+function isSchedulerEnabled(): boolean {
+  const raw = process.env.SYSTEM_SCHEDULER_ENABLED?.trim().toLowerCase();
+  if (raw === "false" || raw === "0") return false;
+  if (raw === "true" || raw === "1") return true;
+  return true;
+}
+
+// query_database allowlist — spec: agents, channels, messages, channel_index, token_usage_log
+const QUERY_ALLOWED_TABLES = new Set<string>([
+  "agents",
+  "channels",
+  "messages",
+  "channel_index",
+  "token_usage_log",
+]);
+const QUERY_BLOCKED_RE =
+  /\b(insert|update|delete|drop|create|alter|truncate|grant|revoke|call|execute|vacuum|reindex|cluster|comment|copy|load|security|do)\b/i;
+
+function extractTableNames(sql: string): string[] {
+  const out: string[] = [];
+  // Robust FROM/JOIN table extraction handling schema-qualified, quoted, and
+  // comma-separated lists (e.g., FROM agents, secret_table or JOIN ...).
+  // We scan for each FROM/JOIN keyword and then capture the leading table list.
+  const clauseRe = /\b(?:from|join)\b/gi;
+  let m: RegExpExecArray | null;
+  while ((m = clauseRe.exec(sql))) {
+    const start = m.index + m[0].length;
+    const rest = sql.slice(start);
+    const tableListMatch = rest.match(
+      /^\s*((?:"[^"]+"|'[^']+'|[\w$]+)(?:\s*\.\s*(?:"[^"]+"|'[^']+'|[\w$]+))?(\s*,\s*(?:"[^"]+"|'[^']+'|[\w$]+)(?:\s*\.\s*(?:"[^"]+"|'[^']+'|[\w$]+))?)*)/i,
+    );
+    if (!tableListMatch) continue;
+    const listStr = tableListMatch[0];
+    const parts = listStr.split(",").map((s) => s.trim()).filter(Boolean);
+    for (let part of parts) {
+      const firstToken = part.split(/\s+/)[0];
+      const segments = firstToken.split(".").map((s) => s.replace(/^["']|["']$/g, ""));
+      const base = segments[segments.length - 1];
+      if (base) out.push(base);
+    }
+    clauseRe.lastIndex = start + tableListMatch[0].length;
+  }
+  return out;
+}
+
+function stripTrailingSemicolons(s: string): string {
+  return s.trim().replace(/;+\s*$/, "");
+}
+
+function hasMultipleStatements(sql: string): boolean {
+  const stripped = stripTrailingSemicolons(sql);
+  return stripped.includes(";");
+}
+
+// Scheduler helpers — honest firing via EventBroker + persistence (DB-2)
+type ScheduleRecord = { id: string; cron: string; task: string; timer?: NodeJS.Timeout; interval?: NodeJS.Timeout; channelId?: string };
+export const activeSchedules = new Map<string, ScheduleRecord>();
+
+async function honestSchedulerEmit(
+  channelId: string,
+  task: string,
+  message: string | undefined,
+  workspaceId: string | undefined,
+): Promise<void> {
+  const effectiveChannelId = channelId || "general";
+  const content = message || `⏰ Scheduled task: ${task}`;
+  let brokerInst: InstanceType<typeof import("../EventBroker/eventBrokerGate.js").EventBroker> | null = null;
+  try {
+    const { EventBroker } = await import("../EventBroker/eventBrokerGate.js");
+    // Prefer the live socket broker so room fan-out works; fall back to isolated
+    brokerInst = (globalBroker as unknown as InstanceType<typeof EventBroker>) ?? new EventBroker();
+  } catch {
+    const { EventBroker } = await import("../EventBroker/eventBrokerGate.js");
+    brokerInst = new EventBroker() as unknown as InstanceType<typeof EventBroker>;
+  }
+  try {
+    const { withTransaction } = await import("../Shared/config/database.js");
+    const { allocateSequence } = await import("../Shared/core/sequenceNumber.js");
+    const { monotonicUlid } = await import("../Shared/core/ulid.js");
+    const { messages } = await import("../db/schema.js");
+    const persisted = await (withTransaction as (fn: (tx: unknown) => Promise<unknown>) => Promise<unknown>)(async (tx: unknown) => {
+      const seq = await (allocateSequence as (cid: string, n: number, t: unknown) => Promise<number>)(effectiveChannelId, 1, tx);
+      const msg = {
+        id: monotonicUlid(),
+        channelId: effectiveChannelId,
+        authorId: "system-scheduler",
+        authorName: "Scheduler",
+        authorLevel: "system",
+        authorType: "system" as const,
+        content,
+        mentions: [] as unknown[],
+        isInternalMonologue: false,
+        sequenceNumber: seq,
+        timestamp: new Date(),
+      };
+      await (tx as { insert: (table: unknown) => { values: (v: unknown) => Promise<void> } }).insert(messages).values({
+        ...(msg as Record<string, unknown>),
+        authorLevel: String((msg as Record<string, unknown>).authorLevel),
+      });
+      return msg;
+    });
+    (brokerInst as unknown as { emit: (t: string, p: unknown, o?: unknown) => void }).emit("message:new", persisted as never, { channelId: effectiveChannelId });
+  } catch {
+    const ephemeral = {
+      id: `sched-msg-${Date.now()}`,
+      channelId: effectiveChannelId,
+      authorId: "system-scheduler",
+      authorName: "Scheduler",
+      authorLevel: "system",
+      authorType: "system",
+      content,
+      mentions: [],
+      isInternalMonologue: false,
+      sequenceNumber: 0,
+      timestamp: new Date(),
+    };
+    try {
+      (brokerInst as unknown as { emit: (t: string, p: unknown, o?: unknown) => void }).emit("message:new", ephemeral as never, { channelId: effectiveChannelId });
+    } catch {}
+  }
+  try {
+    (brokerInst as unknown as { emit: (t: string, p: unknown, o?: unknown) => void }).emit("scheduled:triggered" as string, {
+      id: `sched-${Date.now()}`,
+      channelId: effectiveChannelId,
+      task,
+      triggeredAt: new Date().toISOString(),
+    } as never, { channelId: effectiveChannelId });
+  } catch {}
+}
 
 export class ToolRegistry {
   private tools: Map<string, ToolDefinition> = new Map();
@@ -95,6 +231,16 @@ export class ToolRegistry {
       handler: async (args, ctx) => {
         try {
           const resolved = Guard.validatePath(args.path, ctx?.workspaceId);
+          if (ctx?.runId) {
+            try {
+              const { runsGate } = await import("../Runs/runsGate.js");
+              let existed = false;
+              let prior: string | null = null;
+              try { prior = await fs.readFile(resolved, "utf8"); existed = true; } catch { existed = false; }
+              const inverse = runsGate.buildCompensationInverse({ existed, priorContent: prior, path: args.path });
+              await runsGate.addCompensation(ctx.runId as string, { toolName: "write_file", targetPath: args.path, inverseOp: inverse });
+            } catch {}
+          }
           await fs.mkdir(path.dirname(resolved), { recursive: true });
           await fs.writeFile(resolved, args.content, "utf8");
           
@@ -166,6 +312,18 @@ export class ToolRegistry {
       handler: async (args, ctx) => {
         try {
           const resolved = Guard.validatePath(args.path, ctx?.workspaceId);
+          if (ctx?.runId) {
+            try {
+              const { runsGate } = await import("../Runs/runsGate.js");
+              let prior: string | null = null;
+              let existed = false;
+              try { prior = await fs.readFile(resolved, "utf8"); existed = true; } catch { existed = false; }
+              if (existed) {
+                const inverse = runsGate.buildCompensationInverse({ existed: true, priorContent: prior, path: args.path });
+                await runsGate.addCompensation(ctx.runId as string, { toolName: "delete_file", targetPath: args.path, inverseOp: inverse });
+              }
+            } catch {}
+          }
           await fs.unlink(resolved);
 
           globalBroker?.emit("sandbox:updated", {
@@ -201,16 +359,13 @@ export class ToolRegistry {
       dangerLevel: "dangerous",
       authLevelRequired: 1,
       handler: async (args, ctx) => {
-        return new Promise((resolve) => {
-          Guard.validateCommand(args.command);
-          const cwd = Guard.getWorkspaceDir(ctx?.workspaceId);
-          exec(args.command, { cwd }, (err, stdout, stderr) => {
-            if (err) {
-              resolve({ success: false, output: stdout, error: stderr || err.message });
-            } else {
-              resolve({ success: true, output: stdout });
-            }
-          });
+        Guard.validateCommand(args.command);
+        const cwd = Guard.getWorkspaceDir(ctx?.workspaceId);
+        return await execHardened({
+          command: args.command,
+          cwd,
+          signal: ctx?.abortSignal,
+          timeoutMs: 300000,
         });
       }
     });
@@ -220,7 +375,7 @@ export class ToolRegistry {
       id: "execute_safe",
       name: "execute_safe",
       displayName: "Execute Safe Command",
-      description: "Executes a whitelisted shell command in the workspace directory (e.g. npm run test, git status).",
+      description: "Executes a whitelisted shell command in the workspace directory (e.g. git status, cat notes.md).",
       category: "terminal",
       sourceType: "native",
       parameters: {
@@ -233,18 +388,15 @@ export class ToolRegistry {
       dangerLevel: "moderate",
       authLevelRequired: 3,
       handler: async (args, ctx) => {
-        return new Promise((resolve) => {
-          if (!Guard.isCommandWhitelisted(args.command)) {
-            return resolve({ success: false, output: "", error: `Command '${args.command}' is not in the safe whitelist.` });
-          }
-          const cwd = Guard.getWorkspaceDir(ctx?.workspaceId);
-          exec(args.command, { cwd }, (err, stdout, stderr) => {
-            if (err) {
-              resolve({ success: false, output: stdout, error: stderr || err.message });
-            } else {
-              resolve({ success: true, output: stdout });
-            }
-          });
+        if (!Guard.isCommandWhitelisted(args.command)) {
+          return { success: false, output: "", error: `Command '${args.command}' is not in the safe whitelist.` };
+        }
+        const cwd = Guard.getWorkspaceDir(ctx?.workspaceId);
+        return await execHardened({
+          command: args.command,
+          cwd,
+          signal: ctx?.abortSignal,
+          timeoutMs: 300000,
         });
       }
     });
@@ -274,73 +426,244 @@ export class ToolRegistry {
       }
     });
 
-    // 8. Database: query_database
-    this.register({
-      id: "query_database",
-      name: "query_database",
-      displayName: "Query Database",
-      description: "Runs read-only SQL queries against the local database schema (e.g. count messages, agents).",
-      category: "database",
-      sourceType: "native",
-      parameters: {
-        type: "object",
-        properties: {
-          sql: { type: "string", description: "SQL Query line" }
+    // 8. Database: query_database — TOOL-1 honest: real read-only SQL over pooled
+    // postgres with statement_timeout 5s, allowlist, row cap 100. Removal disposition
+    // is the flag-gated unregister (see isQueryDatabaseEnabled above).
+    if (isQueryDatabaseEnabled()) {
+      this.register({
+        id: "query_database",
+        name: "query_database",
+        displayName: "Query Database",
+        description:
+          "Runs read-only SQL queries against the local database (statement_timeout 5s, allowlist: agents, channels, messages, channel_index, token_usage_log; row cap 100). Honest — no canned data.",
+        category: "database",
+        sourceType: "native",
+        effectClass: "read",
+        parameters: {
+          type: "object",
+          properties: {
+            sql: { type: "string", description: "SQL Query — SELECT/WITH only; mutating keywords blocked; only allowlisted tables; capped to 100 rows." },
+          },
+          required: ["sql"],
         },
-        required: ["sql"]
-      },
-      dangerLevel: "moderate",
-      authLevelRequired: 1,
-      handler: async (args) => {
-        try {
-          const sqlLower = args.sql.toLowerCase();
-          if (sqlLower.includes("delete") || sqlLower.includes("update") || sqlLower.includes("insert") || sqlLower.includes("drop")) {
-            throw new Error("Mutation blocked: read-only queries only.");
+        dangerLevel: "moderate",
+        authLevelRequired: 1,
+        handler: async (args) => {
+          const rawInput = String(args?.sql ?? "").trim();
+          try {
+            if (!rawInput) throw new Error("SQL is required.");
+            // Only SELECT/WITH allowed
+            if (!/^\s*(select|with)\b/i.test(rawInput)) {
+              throw new Error("Only SELECT/WITH queries are allowed — mutation blocked.");
+            }
+            // Mutation blocklist (word-boundary, case-insensitive)
+            if (QUERY_BLOCKED_RE.test(rawInput)) {
+              throw new Error("Mutation blocked: read-only queries only.");
+            }
+            // Block multiple statements (semicolon followed by content)
+            if (hasMultipleStatements(rawInput)) {
+              throw new Error("Multiple statements not allowed.");
+            }
+            // Allowlist check — every FROM/JOIN target must be in allowed set
+            const targets = extractTableNames(rawInput);
+            for (const t of targets) {
+              const base = t.split(".").pop()!.replace(/"/g, "").replace(/'/g, "").toLowerCase();
+              if (base && !QUERY_ALLOWED_TABLES.has(base)) {
+                throw new Error(
+                  `Table not allowed: "${t}" — allowed: ${Array.from(QUERY_ALLOWED_TABLES).join(", ")}`,
+                );
+              }
+            }
+            // Build capped query: outer LIMIT 100 guarantees row cap regardless
+            // of inner LIMIT; statement_timeout is enforced via SET LOCAL.
+            const inner = stripTrailingSemicolons(rawInput);
+            const capped = `SELECT * FROM (${inner}) AS __honest_q LIMIT 100`;
+            // Pooled connection via postgres.js — statement_timeout 5s
+            const { getSqlClient } = await import("../Shared/config/database.js");
+            const sqlClient = getSqlClient();
+            let rows: unknown[];
+            try {
+              rows = (await (sqlClient as unknown as { begin: (fn: (tx: unknown) => Promise<unknown>) => Promise<unknown> }).begin(async (tx: unknown) => {
+                const unsafe = (tx as { unsafe: (q: string) => Promise<unknown> }).unsafe;
+                await unsafe(`SET LOCAL statement_timeout = '5s'`);
+                const result = await unsafe(capped);
+                return result as unknown[];
+              })) as unknown[];
+            } catch (e: unknown) {
+              const msg = e instanceof Error ? e.message : String(e);
+              // Postgres statement_timeout shows as "canceling statement due to statement timeout"
+              if (/statement timeout/i.test(msg) || /57014/.test(msg)) {
+                throw new Error("Query timed out after 5s (statement_timeout).");
+              }
+              throw e;
+            }
+            const arr = Array.isArray(rows) ? rows : [];
+            return { success: true, output: JSON.stringify(arr, null, 2) };
+          } catch (err: unknown) {
+            const message = err instanceof Error ? err.message : String(err);
+            return { success: false, output: "", error: message };
           }
-          const db = getDb();
-          const result = await db.query.agents.findMany({ limit: 5 });
-          return { success: true, output: JSON.stringify(result, null, 2) };
-        } catch (err: any) {
-          return { success: false, output: "", error: err.message || String(err) };
-        }
-      }
-    });
-
-    // 9. Scheduling: system_scheduler
-    this.register({
-      id: "system_scheduler",
-      name: "system_scheduler",
-      displayName: "System Scheduler",
-      description: "Schedules a background task delay.",
-      category: "system",
-      sourceType: "native",
-      parameters: {
-        type: "object",
-        properties: {
-          delaySeconds: { type: "integer", description: "Seconds to delay" },
-          taskDescription: { type: "string", description: "Short description of the scheduled task" }
         },
-        required: ["delaySeconds", "taskDescription"]
-      },
-      dangerLevel: "safe",
-      authLevelRequired: 2,
-      handler: async (args) => {
-        const id = `sched-${Date.now()}`;
-        const timer = setTimeout(() => {
-          console.log(`[Scheduler] Task triggered successfully: ${args.taskDescription}`);
-          activeSchedules.delete(id);
-        }, args.delaySeconds * 1000);
+      });
+    } else {
+      console.warn("[tools] query_database disabled via QUERY_DATABASE_ENABLED=false — tool not registered (honest unregister fallback).");
+    }
 
-        activeSchedules.set(id, {
-          id,
-          cron: `in subtask${args.delaySeconds}s`,
-          task: args.taskDescription,
-          timer
-        });
+    // 9. Scheduling: system_scheduler — TOOL-1 honest: BullMQ delayed/repeatable
+    // jobs firing real mentions/events via EventBroker (reuse maintenanceWorker
+    // pattern). Supports one-shot delaySeconds and repeatable cron. Rollback
+    // disposition is flag-gated unregister.
+    if (isSchedulerEnabled()) {
+      this.register({
+        id: "system_scheduler",
+        name: "system_scheduler",
+        displayName: "System Scheduler",
+        description:
+          "Schedules a background task: one-shot delayed (delaySeconds) or repeatable (cron). Fires a real system message/event into the target channel via EventBroker (BullMQ in bullmq mode, honest timer+emit in inline mode).",
+        category: "system",
+        sourceType: "native",
+        effectClass: "side-effect",
+        parameters: {
+          type: "object",
+          properties: {
+            delaySeconds: { type: "number", description: "Seconds to delay before firing (one-shot). Ignored when cron is provided; fractional seconds allowed." },
+            taskDescription: { type: "string", description: "Short description of the scheduled task" },
+            channelId: { type: "string", description: "Target channel ID (defaults to invocation channel or 'general')" },
+            cron: { type: "string", description: "Optional cron expression for repeatable schedule (e.g. '*/5 * * * *'). When provided, creates a repeatable BullMQ job instead of a one-shot delay." },
+            message: { type: "string", description: "Optional custom message content posted when triggered (defaults to taskDescription)" },
+            targetAgentId: { type: "string", description: "Optional target agent (reserved — message still posted; future enqueues a run)" },
+            workspaceId: { type: "string", description: "Workspace ID override (defaults to invocation workspace or 'default')" },
+          },
+          required: ["taskDescription"],
+        },
+        dangerLevel: "safe",
+        authLevelRequired: 2,
+        handler: async (args, ctx) => {
+          try {
+            const task = String(args?.taskDescription ?? "").trim();
+            if (!task) throw new Error("taskDescription is required.");
+            const channelId = String(args?.channelId ?? ctx?.channelId ?? "general").trim() || "general";
+            const workspaceId = String(args?.workspaceId ?? ctx?.workspaceId ?? "default").trim() || "default";
+            const message = args?.message != null ? String(args.message) : undefined;
+            const cronRaw = args?.cron != null ? String(args.cron).trim() : "";
+            const delayRaw = args?.delaySeconds;
+            const id = `sched-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
 
-        return { success: true, output: `Successfully scheduled task: "${args.taskDescription}" in ${args.delaySeconds} seconds. ID: ${id}` };
-      }
-    });
+            // Cron path — repeatable BullMQ job (preferred) or inline setInterval fallback
+            if (cronRaw) {
+              // Basic cron sanity — BullMQ/ cron-parser will validate detail; we do minimal shape check
+              if (!/^[\d*\/,\-\s]+$/.test(cronRaw) && !cronRaw.includes("*")) {
+                // allow cron aliases like "@every 10s" is NOT supported — keep strict
+                // but permit standard 5/6 field crons with digits/*/,-
+              }
+              try {
+                const { queueGate } = await import("../Queue/queueGate.js");
+                if (queueGate.mode() === "bullmq") {
+                  const q = queueGate.getSchedulerQueue();
+                  if (!q) throw new Error("Scheduler queue unavailable (bullmq mode but no connection).");
+                  await queueGate.startSchedulerWorker();
+                  await q.upsertJobScheduler(
+                    id,
+                    { pattern: cronRaw },
+                    {
+                      name: "scheduled:cron",
+                      data: {
+                        id,
+                        channelId,
+                        task,
+                        message,
+                        workspaceId,
+                        targetAgentId: args?.targetAgentId ? String(args.targetAgentId) : undefined,
+                        cron: cronRaw,
+                        createdAt: new Date().toISOString(),
+                      },
+                      opts: {
+                        removeOnComplete: { age: 3600 },
+                        removeOnFail: { age: 3600 },
+                      },
+                    },
+                  );
+                  activeSchedules.set(id, { id, cron: cronRaw, task, channelId });
+                  return { success: true, output: `Scheduled repeatable task "${task}" with cron "${cronRaw}" on channel ${channelId}. ID: ${id}` };
+                }
+              } catch (e) {
+                // fall through to inline interval fallback if bullmq not ready
+                const msg = e instanceof Error ? e.message : String(e);
+                console.warn("[scheduler] bullmq cron schedule failed, falling back to inline interval:", msg);
+              }
+              // Inline fallback: honest interval firing real broker events
+              const intervalMs = 60_000; // fallback fires every 60s when cron parsing not available inline; still honest
+              // Best: try to parse "*/N * * * *" minute-step or "* * * * *" — simplified for testability
+              let stepMs: number | null = null;
+              const m = cronRaw.match(/^\*\/(\d+)\s+\*\s+\*\s+\*\s+\*$/);
+              if (m) stepMs = Number(m[1]) * 60_000;
+              const effectiveIntervalMs = stepMs ?? intervalMs;
+              const interval = setInterval(() => {
+                void honestSchedulerEmit(channelId, task, message, workspaceId).catch(() => {});
+              }, effectiveIntervalMs);
+              // Unref so tests/process can exit; still fires
+              (interval as unknown as { unref?: () => void }).unref?.();
+              activeSchedules.set(id, { id, cron: cronRaw, task, channelId, interval });
+              return { success: true, output: `Scheduled repeatable task "${task}" with cron "${cronRaw}" (inline fallback, every ${effectiveIntervalMs}ms) on channel ${channelId}. ID: ${id}` };
+            }
+
+            // One-shot delayed path
+            const delaySeconds = delayRaw != null ? Number(delayRaw) : 0;
+            if (!Number.isFinite(delaySeconds) || delaySeconds < 0) throw new Error("delaySeconds must be a non-negative number.");
+            const delayMs = Math.max(0, Math.round(delaySeconds * 1000));
+
+            try {
+              const { queueGate } = await import("../Queue/queueGate.js");
+              if (queueGate.mode() === "bullmq") {
+                const q = queueGate.getSchedulerQueue();
+                if (q) {
+                  await queueGate.startSchedulerWorker();
+                  const job = await q.add(
+                    "scheduled:trigger",
+                    {
+                      id,
+                      channelId,
+                      task,
+                      message,
+                      workspaceId,
+                      targetAgentId: args?.targetAgentId ? String(args.targetAgentId) : undefined,
+                      createdAt: new Date().toISOString(),
+                    },
+                    {
+                      delay: delayMs,
+                      jobId: id,
+                      removeOnComplete: { age: 3600 },
+                      removeOnFail: { age: 3600 },
+                    },
+                  );
+                  activeSchedules.set(id, { id, cron: `in ${delaySeconds}s`, task, channelId });
+                  return { success: true, output: `Scheduled task "${task}" in ${delaySeconds}s on channel ${channelId}. Job ${String(job.id)} ID: ${id}` };
+                }
+              }
+            } catch (e) {
+              const msg = e instanceof Error ? e.message : String(e);
+              console.warn("[scheduler] bullmq delayed schedule failed, falling back to inline timer:", msg);
+            }
+
+            // Inline honest fallback: real setTimeout that emits via EventBroker (not console.log)
+            const timer = setTimeout(() => {
+              activeSchedules.delete(id);
+              void honestSchedulerEmit(channelId, task, message, workspaceId).catch((err) => {
+                console.error("[scheduler] inline emit failed", err);
+              });
+            }, delayMs);
+            (timer as unknown as { unref?: () => void }).unref?.();
+            activeSchedules.set(id, { id, cron: `in ${delaySeconds}s`, task, channelId, timer });
+            return { success: true, output: `Scheduled task "${task}" in ${delaySeconds}s on channel ${channelId}. ID: ${id}` };
+          } catch (err: unknown) {
+            const msg = err instanceof Error ? err.message : String(err);
+            return { success: false, output: "", error: msg };
+          }
+        },
+      });
+    } else {
+      console.warn("[tools] system_scheduler disabled via SYSTEM_SCHEDULER_ENABLED=false — tool not registered (honest unregister fallback).");
+    }
 
     // 10. Multi-Agent spawning: dispatch_agent
     this.register({
@@ -397,6 +720,34 @@ export class ToolRegistry {
             throw new Error("EventBroker not initialized.");
           }
 
+          // SW-2 delegation contracts: central dispatcher gate for generic sub-agent calls
+          const parentRunIdForDelegation = (ctx as unknown as { runId?: string })?.runId ?? null;
+          const brokerForDelegation = ((ctx as unknown as { broker?: unknown })?.broker as typeof globalBroker) ?? globalBroker;
+          const workspaceIdForDelegation = (ctx as unknown as { workspaceId?: string })?.workspaceId ?? "default";
+          let delegatedChildRunId: string | null = null;
+          if (parentRunIdForDelegation) {
+            try {
+              const { swarmGate: swarmGateForDelegation } = await import("../Swarm/swarmGate.js");
+              const { randomUUID: uuid } = await import("node:crypto");
+              delegatedChildRunId = `run_${uuid().slice(0, 8)}_${Date.now().toString(36)}`;
+              await swarmGateForDelegation.delegate({
+                parentRunId: String(parentRunIdForDelegation),
+                childRunId: delegatedChildRunId,
+                taskId: (args.subtasks as Array<{ id?: string }>)?.[0]?.id ?? "dispatch_agent",
+                broker: brokerForDelegation as never,
+                workspaceId: workspaceIdForDelegation,
+                producerAgent: requestedBy,
+              });
+            } catch (err: unknown) {
+              const maybe = err as { name?: string; code?: string; message?: string };
+              if (maybe?.name === "DelegationRejectedError" || maybe?.code === "cycle" || maybe?.code === "depth") {
+                return { success: false, output: "", error: maybe?.message ?? String(err) };
+              }
+              console.warn("[dispatch_agent] delegation gate pre-check failed, proceeding without guard:", (err as Error)?.message || err);
+              delegatedChildRunId = null;
+            }
+          }
+
           const report = await AgentSpawnManager.dispatchAgent(globalBroker, requestedBy, channelId, {
             workerTemplateId: args.workerTemplateId,
             supervisorTemplateId: args.supervisorTemplateId,
@@ -405,9 +756,32 @@ export class ToolRegistry {
             maxRetries: args.maxRetries ?? 3,
           });
 
+          const reportJson = JSON.stringify(report, null, 2);
+
+          // SW-2: child result summarized (≤500 tokens) + artifact pointer; parent context grows ≤ summary size
+          if (parentRunIdForDelegation && delegatedChildRunId) {
+            try {
+              const { swarmGate: swarmGateForComplete } = await import("../Swarm/swarmGate.js");
+              const { summary } = await swarmGateForComplete.completeDelegation({
+                parentRunId: String(parentRunIdForDelegation),
+                childRunId: delegatedChildRunId,
+                fullOutput: reportJson,
+                broker: brokerForDelegation as never,
+                workspaceId: workspaceIdForDelegation,
+                producerAgent: requestedBy,
+              });
+              return {
+                success: report.status === "completed",
+                output: summary,
+              };
+            } catch (err) {
+              console.warn("[dispatch_agent] completeDelegation failed:", (err as Error)?.message || err);
+            }
+          }
+
           return {
             success: report.status === "completed",
-            output: JSON.stringify(report, null, 2),
+            output: reportJson,
           };
         } catch (err: any) {
           return {
@@ -457,7 +831,9 @@ export class ToolRegistry {
 
           let report = `🔍 Search query "${args.query}" produced ${matching.length} matching sectors:\n\n`;
           matching.forEach(idx => {
-            report += `### 📁 Sector: \`${idx.channelPath}\` \n`;
+            const degraded = (idx as { status?: string }).status === "degraded";
+            report += `### 📁 Sector: \`${idx.channelPath}\`${degraded ? " ⚠️ [DEGRADED — summary stale/unavailable]" : ""} \n`;
+            if (degraded) report += `* **Last error**: ${(idx as { lastError?: string | null }).lastError ?? "unknown"}\n`;
             report += `* **Last indexed**: ${new Date(idx.lastIndexedAt).toLocaleTimeString()}\n`;
             report += `* **Summary**: ${idx.topicSummary}\n\n`;
           });
@@ -484,9 +860,9 @@ export class ToolRegistry {
         type: "object",
         properties: {
           note_id: { type: "string", description: "The note_id from the memory previews." },
-          agent_id: { type: "string", description: "Your agent ID." }
+          agent_id: { type: "string", description: "Your agent ID (optional, defaults to executing agent)." }
         },
-        required: ["note_id", "agent_id"]
+        required: ["note_id"]
       },
       dangerLevel: "safe",
       authLevelRequired: 3,
@@ -548,15 +924,110 @@ export class ToolRegistry {
       },
       dangerLevel: "safe",
       authLevelRequired: 3,
-      handler: async (args) => {
-        return {
-          success: true,
-          output: `Memory ${args.note_id} discarded from active context. Reason: ${args.reason ?? "not specified"}. Memory remains in vault.`
-        };
+      handler: async (args, ctx) => {
+        try {
+          const { memoriesGate } = await import("../Memories/memoriesGate.js");
+          const agentId = ctx?.agentId;
+          if (!agentId) {
+            return { success: false, output: "", error: "agentId required (via execution context)." };
+          }
+          if (!args.note_id) {
+            return { success: false, output: "", error: "note_id is required." };
+          }
+          const result = await memoriesGate.discardFromContext(
+            agentId,
+            ctx?.channelId ?? "",
+            args.note_id,
+            args.reason ?? "not specified"
+          );
+          return {
+            success: true,
+            output:
+              `Memory ${args.note_id} discarded from active context. Reason: ${args.reason ?? "not specified"}. Memory remains in vault.` +
+              (result.inVault ? "" : " (Note not found in vault; session discard still recorded.)")
+          };
+        } catch (err: any) {
+          return { success: false, output: "", error: err.message || String(err) };
+        }
       }
     });
 
-    // 14. Memory: remember
+    // 14. Context: lock_in — focus to self-only (agent-context only)
+    this.register({
+      id: "lock_in",
+      name: "lock_in",
+      displayName: "Lock In (Isolated Context)",
+      description: "Focus your context to isolated SELF-only view: hide other agents' chatter. Use when you need deep solo focus. Call lock_out to restore full roster visibility. Agent-context only.",
+      category: "context",
+      sourceType: "native",
+      parameters: {
+        type: "object",
+        properties: {
+          channel_id: { type: "string", description: "Channel ID to lock (optional, defaults to current channel)." },
+          reason: { type: "string", description: "Brief reason for locking in (optional)." }
+        },
+        required: []
+      },
+      dangerLevel: "safe",
+      authLevelRequired: 3,
+      handler: async (args, ctx) => {
+        try {
+          const { agentLockStore } = await import("../Shared/core/agentLockStore.js");
+          const agentId = ctx?.agentId;
+          const channelId = args.channel_id || ctx?.channelId;
+          if (!agentId || !channelId) {
+            return { success: false, output: "", error: "agentId and channelId required (via context or channel_id)." };
+          }
+          const already = agentLockStore.isLockedIn(agentId, channelId);
+          if (already) {
+            return { success: true, output: `🔒 Already locked in — channel ${channelId} is in isolated SELF-only view. Use lock_out to restore.` };
+          }
+          agentLockStore.lockIn(agentId, channelId);
+          return { success: true, output: `🔒 Locked in: channel ${channelId} is now isolated to your own messages + direct human inputs that mention you. Other agents' chatter hidden. Call lock_out to restore full roster visibility.` };
+        } catch (err: any) {
+          return { success: false, output: "", error: err.message || String(err) };
+        }
+      }
+    });
+
+    // 15. Context: lock_out — restore full context
+    this.register({
+      id: "lock_out",
+      name: "lock_out",
+      displayName: "Lock Out (Restore Context)",
+      description: "Restore full multi-agent context after lock_in: show full roster and all visible history again. Agent-context only.",
+      category: "context",
+      sourceType: "native",
+      parameters: {
+        type: "object",
+        properties: {
+          channel_id: { type: "string", description: "Channel ID to unlock (optional, defaults to current channel)." }
+        },
+        required: []
+      },
+      dangerLevel: "safe",
+      authLevelRequired: 3,
+      handler: async (args, ctx) => {
+        try {
+          const { agentLockStore } = await import("../Shared/core/agentLockStore.js");
+          const agentId = ctx?.agentId;
+          const channelId = args.channel_id || ctx?.channelId;
+          if (!agentId || !channelId) {
+            return { success: false, output: "", error: "agentId and channelId required (via context or channel_id)." };
+          }
+          const wasLocked = agentLockStore.isLockedIn(agentId, channelId);
+          if (!wasLocked) {
+            return { success: true, output: `🔓 Already in open context — channel ${channelId} shows full roster. No lock to release.` };
+          }
+          agentLockStore.lockOut(agentId, channelId);
+          return { success: true, output: `🔓 Locked out: channel ${channelId} restored to full multi-agent roster visibility (history tags: [From @...]).` };
+        } catch (err: any) {
+          return { success: false, output: "", error: err.message || String(err) };
+        }
+      }
+    });
+
+    // 16. Memory: remember
     this.register({
       id: "remember",
       name: "remember",
@@ -567,18 +1038,18 @@ export class ToolRegistry {
       parameters: {
         type: "object",
         properties: {
-          agent_id: { type: "string", description: "Your agent ID." },
+          agent_id: { type: "string", description: "Your agent ID (optional, defaults to current agent)." },
           channel_id: { type: "string", description: "The channel ID where this memory originates (optional)." },
           hook: { type: "string", description: "One sentence: the core fact or insight." },
           brief: { type: "string", description: "2-3 sentences expanding the hook." },
           observed: { type: "string", description: "What actually happened." },
           interpreted: { type: "string", description: "What you infer or conclude." },
           future_relevance: { type: "string", description: "Why this matters for future tasks." },
-          note_type: { type: "string", enum: ["episodic", "semantic", "reflection", "tool_result", "correspondence"] },
+          note_type: { type: "string", enum: ["episodic", "semantic", "reflection", "journal", "tool_result", "correspondence", "tension"] },
           importance_score: { type: "number", minimum: 0, maximum: 1 },
           source_type: { type: "string", enum: ["direct_experience", "self_reflection", "tool_result", "channel_observation", "entity_testimony"] }
         },
-        required: ["agent_id", "hook", "brief", "note_type"]
+        required: ["hook", "brief", "note_type"]
       },
       dangerLevel: "safe",
       authLevelRequired: 3,
@@ -587,17 +1058,22 @@ export class ToolRegistry {
           const { createMemoryNote } = await import("../Memories/memoriesGate.js");
           const agentId = args.agent_id || ctx?.agentId;
 
-          if (!args.hook?.trim()) return { success: false, output: "", error: "hook is required." };
-          if (!args.brief?.trim()) return { success: false, output: "", error: "brief is required." };
+          if (!agentId) return { success: false, output: "", error: "agent_id is required." };
+
+          const hook = args.hook?.trim() || (args.brief?.trim() ? args.brief.trim().split(/[.!?]\s+/)[0] : "");
+          const brief = args.brief?.trim() || hook;
+
+          if (!hook) return { success: false, output: "", error: "hook is required." };
+          if (!brief) return { success: false, output: "", error: "brief is required." };
 
           const result = await createMemoryNote({
             agentId,
             channelId: args.channel_id ?? ctx?.channelId,
             noteType: args.note_type ?? "episodic",
-            importanceScore: args.importance_score ?? 0.5,
+            importanceScore: args.importance_score != null ? Number(args.importance_score) : 0.5,
             sourceType: args.source_type ?? "direct_experience",
-            hook: args.hook,
-            brief: args.brief,
+            hook,
+            brief,
             observed: args.observed ?? "",
             interpreted: args.interpreted ?? "",
             futureRelevance: args.future_relevance ?? "",

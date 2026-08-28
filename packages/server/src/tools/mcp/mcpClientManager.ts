@@ -1,8 +1,37 @@
 ﻿import { spawn, type ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
-import type { McpServerConfig, McpServerStatus, McpRawTool } from "./mcpTypes.js";
-import type { ToolDefinition, ToolResult, ToolExecutionContext } from "../toolTypes.js";
+import type { McpFraming, McpServerConfig, McpServerStatus, McpRawTool } from "./mcpTypes.js";
+import {
+  MCP_PROTOCOL_VERSION,
+  DEFAULT_MCP_FRAMING,
+  DEFAULT_MCP_DANGER_LEVEL,
+  MCP_DANGER_TO_AUTH_LEVEL,
+} from "./mcpTypes.js";
+import type { ToolDefinition, ToolResult, ToolExecutionContext, ToolDangerLevel } from "../toolTypes.js";
 import { toolRegistry } from "../toolRegistry.js";
+import { isSensitiveKey, redactLogPayload } from "../../Shared/core/redact.js";
+import { decryptRecordValues } from "../../Shared/core/secretBox.js";
+
+const REQUEST_TIMEOUT_MS = 30000;
+
+export class McpServerCrashedError extends Error {
+  readonly serverId: string;
+  readonly exitCode: number | null;
+  readonly signal: string | null;
+  constructor(serverId: string, exitCode: number | null, signal: string | null, message?: string) {
+    super(message ?? `MCP server '${serverId}' exited unexpectedly (code=${exitCode}, signal=${signal ?? "none"})`);
+    this.name = "McpServerCrashedError";
+    this.serverId = serverId;
+    this.exitCode = exitCode;
+    this.signal = signal;
+  }
+}
+
+interface McpPendingRequest {
+  resolve: (res: any) => void;
+  reject: (err: Error) => void;
+  timer: NodeJS.Timeout;
+}
 
 interface McpProcessSession {
   config: McpServerConfig;
@@ -11,8 +40,109 @@ interface McpProcessSession {
   lastError?: string;
   tools: Map<string, ToolDefinition>;
   requestId: number;
-  pendingRequests: Map<number | string, { resolve: (res: any) => void; reject: (err: Error) => void }>;
-  buffer: string;
+  pendingRequests: Map<number | string, McpPendingRequest>;
+  stdinBuffer: Buffer;
+  exited: boolean;
+  framing: McpFraming;
+}
+
+const DANGER_SEVERITY: Record<ToolDangerLevel, number> = { safe: 0, moderate: 1, dangerous: 2 };
+
+function severityMax(a: ToolDangerLevel, b: ToolDangerLevel): ToolDangerLevel {
+  return DANGER_SEVERITY[a] >= DANGER_SEVERITY[b] ? a : b;
+}
+
+function resolveDangerLevel(config: McpServerConfig, raw: McpRawTool): ToolDangerLevel {
+  const floor = config.defaultDangerLevel ?? DEFAULT_MCP_DANGER_LEVEL;
+  // Server-provided claims (MCP annotations) may only ESCALATE above the
+  // config floor — a compromised server can never downgrade itself to safe.
+  const claimed: ToolDangerLevel | undefined =
+    raw.annotations?.destructiveHint === true ? "dangerous" : undefined;
+  return claimed ? severityMax(claimed, floor) : floor;
+}
+
+function buildChildEnv(config: McpServerConfig): Record<string, string> {
+  // Hardened: shell:false + env allowlist — never inherit full process.env (P0-5)
+  const allowedEnvKeys = new Set([
+    "PATH", "PATHEXT", "SYSTEMROOT", "TEMP", "TMP", "HOME", "USER", "LANG", "LC_ALL", "NODE_ENV",
+    "MCP_TRANSPORT",
+  ]);
+  const filteredEnv: Record<string, string> = {};
+  for (const [k, v] of Object.entries(process.env)) {
+    if (allowedEnvKeys.has(k) && v) filteredEnv[k] = v;
+  }
+
+  const declared = new Set(config.requiredEnvVars ?? []);
+  const droppedUndeclared: string[] = [];
+  // SEC-4: env var values arrive envelope-encrypted; decrypt at this single
+  // consumption point so plaintext only exists inside the child env map.
+  const resolvedEnvVars = decryptRecordValues(config.envVars);
+  for (const [k, v] of Object.entries(resolvedEnvVars ?? {})) {
+    if (v === undefined) continue;
+    if (!isSensitiveKey(k) || declared.has(k)) {
+      filteredEnv[k] = v;
+    } else {
+      droppedUndeclared.push(k);
+    }
+  }
+
+  if (droppedUndeclared.length > 0 || declared.size > 0) {
+    const declaredButUnset = Array.from(declared).filter(
+      (k) => config.envVars?.[k] === undefined
+    );
+    if (droppedUndeclared.length > 0 || declaredButUnset.length > 0) {
+      console.warn(
+        `[MCP:${config.id}] env policy applied`,
+        redactLogPayload({
+          serverId: config.id,
+          droppedUndeclaredSensitiveKeys: droppedUndeclared.sort(),
+          declaredButUnsetKeys: declaredButUnset.sort(),
+          hint: "secret-shaped vars are only forwarded when listed in requiredEnvVars",
+        })
+      );
+    }
+  }
+
+  return filteredEnv;
+}
+
+function encodeFrame(framing: McpFraming, payload: unknown): Buffer {
+  const body = Buffer.from(JSON.stringify(payload), "utf8");
+  if (framing === "content-length") {
+    return Buffer.concat([Buffer.from(`Content-Length: ${body.byteLength}\r\n\r\n`, "utf8"), body]);
+  }
+  return Buffer.concat([body, Buffer.from("\n", "utf8")]);
+}
+
+function extractFrames(framing: McpFraming, buffer: Buffer): { messages: string[]; rest: Buffer } {
+  const messages: string[] = [];
+  let pos = 0;
+  if (framing === "content-length") {
+    for (;;) {
+      const headerEnd = buffer.indexOf("\r\n\r\n", pos);
+      if (headerEnd === -1) break;
+      const header = buffer.slice(pos, headerEnd).toString("utf8");
+      const match = /Content-Length:\s*(\d+)/i.exec(header);
+      if (!match) {
+        pos = headerEnd + 4;
+        continue;
+      }
+      const bodyStart = headerEnd + 4;
+      const bodyEnd = bodyStart + Number.parseInt(match[1], 10);
+      if (buffer.length < bodyEnd) break;
+      messages.push(buffer.slice(bodyStart, bodyEnd).toString("utf8"));
+      pos = bodyEnd;
+    }
+  } else {
+    for (;;) {
+      const nl = buffer.indexOf(0x0a, pos);
+      if (nl === -1) break;
+      const line = buffer.slice(pos, nl).toString("utf8").trim();
+      pos = nl + 1;
+      if (line) messages.push(line);
+    }
+  }
+  return { messages, rest: buffer.slice(pos) };
 }
 
 export class McpClientManager extends EventEmitter {
@@ -29,7 +159,9 @@ export class McpClientManager extends EventEmitter {
       tools: new Map(),
       requestId: 1,
       pendingRequests: new Map(),
-      buffer: "",
+      stdinBuffer: Buffer.alloc(0),
+      exited: false,
+      framing: config.framing ?? DEFAULT_MCP_FRAMING,
     };
 
     this.sessions.set(config.id, session);
@@ -53,6 +185,8 @@ export class McpClientManager extends EventEmitter {
 
     session.status = 'connecting';
     session.lastError = undefined;
+    session.exited = false;
+    session.stdinBuffer = Buffer.alloc(0);
 
     try {
       if (session.config.transport === 'stdio') {
@@ -66,24 +200,27 @@ export class McpClientManager extends EventEmitter {
     } catch (err: any) {
       session.status = 'error';
       session.lastError = err.message;
+      this.failPending(session, err instanceof Error ? err : new Error(String(err)));
+      try { session.process?.kill(); } catch {}
+      session.process = undefined;
       throw err;
     }
   }
 
   private async connectStdio(session: McpProcessSession): Promise<void> {
-    const { command, args = [], envVars = {} } = session.config;
+    const { command, args = [] } = session.config;
     if (!command) throw new Error(`Command required for stdio transport`);
 
     const child = spawn(command, args, {
-      env: { ...process.env, ...envVars },
+      env: buildChildEnv(session.config),
       stdio: ['pipe', 'pipe', 'pipe'],
-      shell: true,
+      shell: false,
     });
 
     session.process = child;
 
     child.stdout?.on('data', (chunk: Buffer) => {
-      this.handleStdioData(session, chunk.toString('utf-8'));
+      this.handleStdioData(session, chunk);
     });
 
     child.stderr?.on('data', (chunk: Buffer) => {
@@ -91,21 +228,42 @@ export class McpClientManager extends EventEmitter {
     });
 
     child.on('error', (err) => {
-      session.status = 'error';
       session.lastError = err.message;
+      if (session.exited) return;
+      session.exited = true;
+      session.status = 'error';
+      this.failPending(
+        session,
+        new McpServerCrashedError(session.config.id, null, null, `MCP server '${session.config.id}' spawn failed: ${err.message}`)
+      );
+      this.cleanupTools(session);
     });
 
-    child.on('exit', () => {
+    child.on('exit', (code, signal) => {
+      if (session.exited) return;
+      session.exited = true;
       session.status = 'disconnected';
+      session.stdinBuffer = Buffer.alloc(0);
+      session.process = undefined;
+      this.failPending(session, new McpServerCrashedError(session.config.id, code, signal));
       this.cleanupTools(session);
     });
 
     // 1. Send initialize request
-    await this.sendJsonRpc(session, 'initialize', {
-      protocolVersion: '2024-11-05',
+    const requestedVersion = session.config.protocolVersion ?? MCP_PROTOCOL_VERSION;
+    const initRes = await this.sendJsonRpc(session, 'initialize', {
+      protocolVersion: requestedVersion,
       capabilities: { tools: {} },
       clientInfo: { name: 'CrowdOS', version: '2.0.0' },
     });
+
+    const negotiated = initRes?.protocolVersion;
+    if (negotiated && negotiated !== requestedVersion) {
+      console.warn(
+        `[MCP:${session.config.id}] protocol version drift`,
+        redactLogPayload({ requested: requestedVersion, serverReturned: negotiated })
+      );
+    }
 
     // 2. Send initialized notification
     this.sendNotification(session, 'notifications/initialized', {});
@@ -116,6 +274,7 @@ export class McpClientManager extends EventEmitter {
 
     // 4. Register each tool
     for (const raw of rawTools) {
+      const dangerLevel = resolveDangerLevel(session.config, raw);
       const toolDef: ToolDefinition = {
         id: `mcp_${session.config.id}_${raw.name}`,
         name: `mcp_${session.config.id}_${raw.name}`,
@@ -130,8 +289,8 @@ export class McpClientManager extends EventEmitter {
           required: raw.inputSchema?.required || [],
           additionalProperties: false,
         },
-        dangerLevel: 'safe',
-        authLevelRequired: 2,
+        dangerLevel,
+        authLevelRequired: MCP_DANGER_TO_AUTH_LEVEL[dangerLevel],
         timeoutMs: 45000,
         handler: async (callArgs: Record<string, any>): Promise<ToolResult> => {
           const startTime = Date.now();
@@ -153,6 +312,7 @@ export class McpClientManager extends EventEmitter {
               durationMs: Date.now() - startTime,
             };
           } catch (err: any) {
+            if (err instanceof McpServerCrashedError) throw err;
             return {
               success: false,
               output: '',
@@ -168,62 +328,72 @@ export class McpClientManager extends EventEmitter {
     }
   }
 
-  private handleStdioData(session: McpProcessSession, text: string): void {
-    session.buffer += text;
-    const lines = session.buffer.split('\n');
-    session.buffer = lines.pop() || '';
+  private handleStdioData(session: McpProcessSession, chunk: Buffer): void {
+    if (session.exited) return;
+    session.stdinBuffer = Buffer.concat([session.stdinBuffer, chunk]);
+    const { messages, rest } = extractFrames(session.framing, session.stdinBuffer);
+    session.stdinBuffer = rest;
 
-    for (const line of lines) {
-      const trimmed = line.trim();
-      if (!trimmed) continue;
+    for (const text of messages) {
+      let msg: any;
       try {
-        const msg = JSON.parse(trimmed);
-        if (msg.id !== undefined && session.pendingRequests.has(msg.id)) {
-          const { resolve, reject } = session.pendingRequests.get(msg.id)!;
-          session.pendingRequests.delete(msg.id);
-          if (msg.error) {
-            reject(new Error(msg.error.message || JSON.stringify(msg.error)));
-          } else {
-            resolve(msg.result);
-          }
-        }
+        msg = JSON.parse(text);
       } catch {
-        // Line might be partial or non-JSON log
+        continue;
       }
+      if (msg.id === undefined) continue;
+      const pending = session.pendingRequests.get(msg.id);
+      if (!pending) continue;
+      session.pendingRequests.delete(msg.id);
+      clearTimeout(pending.timer);
+      if (msg.error) {
+        pending.reject(new Error(msg.error.message || JSON.stringify(msg.error)));
+      } else {
+        pending.resolve(msg.result);
+      }
+    }
+  }
+
+  private failPending(session: McpProcessSession, err: Error): void {
+    const entries = Array.from(session.pendingRequests.values());
+    session.pendingRequests.clear();
+    for (const entry of entries) {
+      clearTimeout(entry.timer);
+      entry.reject(err);
     }
   }
 
   private sendJsonRpc(session: McpProcessSession, method: string, params: any): Promise<any> {
     return new Promise((resolve, reject) => {
-      if (!session.process || !session.process.stdin) {
-        return reject(new Error(`MCP server process not running`));
+      if (session.exited || !session.process || !session.process.stdin) {
+        return reject(new McpServerCrashedError(session.config.id, null, null, `MCP server '${session.config.id}' is not running`));
       }
       const id = session.requestId++;
-      const timeout = setTimeout(() => {
+      const entry: McpPendingRequest = {
+        resolve,
+        reject,
+        timer: setTimeout(() => {
+          session.pendingRequests.delete(id);
+          reject(new Error(`MCP Request timed out for method '${method}'`));
+        }, REQUEST_TIMEOUT_MS),
+      };
+      session.pendingRequests.set(id, entry);
+
+      try {
+        session.process.stdin.write(encodeFrame(session.framing, { jsonrpc: '2.0', id, method, params }));
+      } catch (err: any) {
         session.pendingRequests.delete(id);
-        reject(new Error(`MCP Request timed out for method '${method}'`));
-      }, 30000);
-
-      session.pendingRequests.set(id, {
-        resolve: (res) => {
-          clearTimeout(timeout);
-          resolve(res);
-        },
-        reject: (err) => {
-          clearTimeout(timeout);
-          reject(err);
-        },
-      });
-
-      const payload = JSON.stringify({ jsonrpc: '2.0', id, method, params }) + '\n';
-      session.process.stdin.write(payload);
+        clearTimeout(entry.timer);
+        entry.reject(new McpServerCrashedError(session.config.id, null, null, `stdin write failed: ${err.message}`));
+      }
     });
   }
 
   private sendNotification(session: McpProcessSession, method: string, params: any): void {
-    if (!session.process || !session.process.stdin) return;
-    const payload = JSON.stringify({ jsonrpc: '2.0', method, params }) + '\n';
-    session.process.stdin.write(payload);
+    if (session.exited || !session.process || !session.process.stdin) return;
+    try {
+      session.process.stdin.write(encodeFrame(session.framing, { jsonrpc: '2.0', method, params }));
+    } catch {}
   }
 
   private cleanupTools(session: McpProcessSession): void {
@@ -245,6 +415,8 @@ export class McpClientManager extends EventEmitter {
       } catch {}
       session.process = undefined;
     }
+    session.exited = true;
+    this.failPending(session, new McpServerCrashedError(serverId, null, null, `MCP server '${serverId}' disconnected`));
     session.status = 'disconnected';
   }
 

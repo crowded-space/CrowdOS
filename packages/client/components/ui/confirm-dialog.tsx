@@ -23,10 +23,60 @@ export default function ConfirmDialog({
   onConfirm,
   onCancel
 }: ConfirmDialogProps) {
+  const cancelRef = React.useRef<HTMLButtonElement>(null);
+  const confirmRef = React.useRef<HTMLButtonElement>(null);
+
+  React.useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        onCancel();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    // autofocus cancel for safety on danger actions; otherwise confirm
+    const t = setTimeout(() => {
+      if (isDanger) cancelRef.current?.focus();
+      else confirmRef.current?.focus();
+    }, 0);
+    const prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => {
+      window.removeEventListener('keydown', onKey);
+      clearTimeout(t);
+      document.body.style.overflow = prevOverflow;
+      // focus return handled by caller via open state change
+    };
+  }, [open, onCancel, isDanger]);
+
+  const handleBackdropKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'Tab') {
+      const focusable = [cancelRef.current, confirmRef.current].filter(Boolean) as HTMLElement[];
+      if (focusable.length === 0) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (e.shiftKey && document.activeElement === first) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && document.activeElement === last) {
+        e.preventDefault();
+        first.focus();
+      }
+    }
+  };
+
   return (
     <AnimatePresence>
       {open && (
-        <div className="fixed inset-0 z-[9990] flex items-center justify-center p-4 font-sans select-none">
+        <div
+          role={isDanger ? 'alertdialog' : 'dialog'}
+          aria-modal="true"
+          aria-labelledby="confirm-dialog-title"
+          aria-describedby="confirm-dialog-description"
+          onKeyDown={handleBackdropKeyDown}
+          className="fixed inset-0 z-[9990] flex items-center justify-center p-4 font-sans select-none"
+        >
           {/* Backdrop */}
           <motion.div
             initial={{ opacity: 0 }}
@@ -52,10 +102,10 @@ export default function ConfirmDialog({
                   <AlertTriangle size={18} />
                 </div>
                 <div>
-                  <h3 className="text-sm font-semibold text-zinc-100 tracking-tight font-sans">
+                  <h3 id="confirm-dialog-title" className="text-sm font-semibold text-zinc-100 tracking-tight font-sans">
                     {title}
                   </h3>
-                  <p className="text-xs text-zinc-400 mt-1 leading-normal font-sans">
+                  <p id="confirm-dialog-description" className="text-xs text-zinc-400 mt-1 leading-normal font-sans">
                     {description}
                   </p>
                 </div>
@@ -63,27 +113,30 @@ export default function ConfirmDialog({
 
               <button
                 onClick={onCancel}
-                className="text-zinc-500 hover:text-zinc-300 p-1 rounded-md hover:bg-zinc-900 transition focus:outline-none cursor-pointer shrink-0"
+                aria-label="Close confirmation dialog"
+                className="text-zinc-500 hover:text-zinc-300 p-1 rounded-md hover:bg-zinc-900 transition focus:outline-none focus-visible:ring-2 focus-visible:ring-zinc-700 cursor-pointer shrink-0"
               >
-                <X size={14} />
+                <X size={14} aria-hidden="true" />
               </button>
             </div>
 
             <div className="flex items-center justify-end gap-2 pt-2 border-t border-zinc-900">
               <button
+                ref={cancelRef}
                 type="button"
                 onClick={onCancel}
-                className="px-3.5 py-1.5 rounded-lg text-xs font-medium text-zinc-400 hover:text-zinc-200 hover:bg-zinc-900 transition focus:outline-none cursor-pointer"
+                className="px-3.5 py-1.5 rounded-lg text-xs font-medium text-zinc-400 hover:text-zinc-200 hover:bg-zinc-900 transition focus:outline-none focus-visible:ring-2 focus-visible:ring-zinc-700 cursor-pointer"
               >
                 {cancelLabel}
               </button>
               <button
+                ref={confirmRef}
                 type="button"
                 onClick={onConfirm}
-                className={`px-3.5 py-1.5 rounded-lg text-xs font-semibold transition focus:outline-none cursor-pointer shadow-sm ${
+                className={`px-3.5 py-1.5 rounded-lg text-xs font-semibold transition focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-[#0e0e11] cursor-pointer shadow-sm ${
                   isDanger
-                    ? 'bg-rose-600 hover:bg-rose-500 text-white'
-                    : 'bg-indigo-600 hover:bg-indigo-500 text-white'
+                    ? 'bg-rose-600 hover:bg-rose-500 text-white focus-visible:ring-rose-500'
+                    : 'bg-indigo-600 hover:bg-indigo-500 text-white focus-visible:ring-indigo-500'
                 }`}
               >
                 {confirmLabel}

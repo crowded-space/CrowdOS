@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { pathToFileURL } from "node:url";
 
 import { and, eq, isNull } from "drizzle-orm";
 
@@ -13,7 +14,7 @@ import {
   categories,
 } from "./schema.js";
 
-async function seed(): Promise<void> {
+export async function seed(): Promise<void> {
   await ensurePgVectorExtension();
 
   const db = getDb();
@@ -276,11 +277,15 @@ async function seed(): Promise<void> {
   ]);
 }
 
-seed()
-  .catch((error) => {
-    console.error(error);
-    process.exitCode = 1;
-  })
-  .finally(async () => {
-    await closeDatabaseConnection();
-  });
+const invokedDirectly = process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
+
+if (invokedDirectly) {
+  seed()
+    .catch((error) => {
+      console.error(error);
+      process.exitCode = 1;
+    })
+    .finally(async () => {
+      await closeDatabaseConnection();
+    });
+}

@@ -167,20 +167,20 @@ export default function MentionParser({ text }: MentionParserProps) {
   if (parts.length === 0) return null;
 
   return (
-    <div className="space-y-3 font-sans text-zinc-300 select-text">
+    <div className="space-y-3 font-sans text-zinc-300 select-text min-w-0 max-w-full overflow-hidden">
       {parts.map((part, index) => {
         if (part.type === 'codeblock') {
           return (
-            <CodeSandboxBlock 
-              key={index} 
-              language={part.language || 'plaintext'} 
-              code={part.content || ''} 
+            <CodeSandboxBlock
+              key={index}
+              language={part.language || 'plaintext'}
+              code={part.content || ''}
             />
           );
         }
 
         return (
-          <div key={index} className="space-y-2">
+          <div key={index} className="space-y-2 min-w-0 max-w-full overflow-hidden">
             {renderMarkdownParagraphs(part.content || '', mentionRegex)}
           </div>
         );
@@ -194,6 +194,45 @@ function renderMarkdownParagraphs(text: string, mentionRegex: RegExp): React.Rea
   const renderedElements: React.ReactNode[] = [];
   let currentList: React.ReactNode[] = [];
   let listType: 'ul' | 'ol' | null = null;
+
+  let tableHeaders: string[] | null = null;
+  let tableRows: string[][] = [];
+
+  const isTableRow = (l: string) => l.trim().startsWith('|') && l.trim().endsWith('|');
+  const isSeparatorRow = (l: string) => /^\|[\s|:-]+\|$/.test(l.trim());
+  const splitCells = (l: string) => l.trim().slice(1, -1).split('|').map(c => c.trim());
+
+  const flushTable = (key: number) => {
+    if (!tableHeaders) return;
+    renderedElements.push(
+      <div key={`table-${key}`} className="my-3 rounded-lg border border-zinc-800/70 shadow-sm overflow-hidden max-w-full">
+        <table className="w-full text-xs font-mono border-collapse table-fixed">
+          <thead>
+            <tr className="bg-zinc-900/80 border-b border-zinc-700/60">
+              {tableHeaders.map((cell, ci) => (
+                <th key={ci} className="px-3 py-2 text-left text-zinc-300 font-semibold tracking-wide whitespace-normal break-words align-top border-r border-zinc-800/50 last:border-r-0">
+                  {renderInlineStyles(cell, mentionRegex)}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {tableRows.map((row, ri) => (
+              <tr key={ri} className={`border-b border-zinc-800/40 last:border-b-0 ${ri % 2 === 0 ? 'bg-zinc-900/20' : 'bg-zinc-900/40'}`}>
+                {row.map((cell, ci) => (
+                  <td key={ci} className="px-3 py-1.5 text-zinc-300 border-r border-zinc-800/30 last:border-r-0 leading-relaxed whitespace-normal break-words align-top">
+                    {renderInlineStyles(cell, mentionRegex)}
+                  </td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    );
+    tableHeaders = null;
+    tableRows = [];
+  };
 
   const flushList = (key: number) => {
     if (currentList.length > 0 && listType) {
@@ -214,6 +253,26 @@ function renderMarkdownParagraphs(text: string, mentionRegex: RegExp): React.Rea
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
     const trimmed = line.trim();
+
+    // Table detection: header row followed by separator row
+    if (isTableRow(trimmed)) {
+      const nextTrimmed = (lines[i + 1] || '').trim();
+      if (!tableHeaders && isSeparatorRow(nextTrimmed)) {
+        // This is the header row
+        flushList(i);
+        flushTable(i);
+        tableHeaders = splitCells(trimmed);
+        i++; // skip separator row
+        continue;
+      } else if (tableHeaders) {
+        // Continuation data row
+        tableRows.push(splitCells(trimmed));
+        continue;
+      }
+    } else if (tableHeaders) {
+      // Non-table line after table rows — flush table first
+      flushTable(i);
+    }
 
     if (trimmed.startsWith('#')) {
       flushList(i);
@@ -279,6 +338,7 @@ function renderMarkdownParagraphs(text: string, mentionRegex: RegExp): React.Rea
   }
 
   flushList(lines.length);
+  flushTable(lines.length);
 
   return renderedElements;
 }

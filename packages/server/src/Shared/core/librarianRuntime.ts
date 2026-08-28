@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { eq, and, lte } from "drizzle-orm";
-import { getDb } from "../config/database.js";
+import { eq, and, gt, isNull } from "drizzle-orm";
+import { getDb, withTransaction } from "../config/database.js";
 import {
   agents,
   channels,
@@ -14,16 +14,67 @@ import type { EventBroker } from "../../EventBroker/eventBrokerGate.js";
 import type { AgentProfile } from "../../Agents/agentGate.js";
 import type { ChannelMessage } from "../../Messages/messageGate.js";
 import { TokenTracker } from "./tokenTracker.js";
-import { LoopArbiter } from "../../core/LoopArbiter.js";
-import { compileGoogleEndpoint, isGemmaModel, parseGemmaThoughts } from "./modelRouter.js";
+import { LoopArbiter } from "./LoopArbiter.js";
+import { compileGoogleEndpoint, isGemmaModel, parseGemmaThoughts } from "./googleModelHelpers.js";
+import { loadRoutingModules, resolveModelModule } from "./modelRouting.js";
+import { decrypt as secretBoxDecrypt, isEncrypted } from "./secretBox.js";
+import { redactSecrets } from "./redact.js";
+import { logMetric } from "./structuredLog.js";
+import { allocateSequence } from "./sequenceNumber.js";
+import { monotonicUlid } from "./ulid.js";
 
-async function getNextSequenceNumber(channelId: string): Promise<number> {
-  const db = getDb();
-  const lastMessage = await db.query.messages.findFirst({
-    where: eq(messages.channelId, channelId),
-    orderBy: (table, { desc }) => [desc(table.sequenceNumber)],
-  });
-  return lastMessage ? lastMessage.sequenceNumber + 1 : 1;
+const DEGRADED_SUMMARY_PLACEHOLDER = "[INDEX DEGRADED] Summary unavailable — provider call failed.";
+
+export function deltaIndexEnabled(): boolean {
+  return (process.env.DELTA_INDEX || "").trim().toLowerCase() !== "false";
+}
+
+export interface IndexWindowLog {
+  authorName: string;
+  content: string;
+  sequenceNumber: number;
+}
+
+export interface IndexWindow {
+  logs: IndexWindowLog[];
+  fullWindow: boolean;
+}
+
+/**
+ * PERF-4: picks the summarizer input window. Delta mode processes only
+ * messages past channel_index.last_seq; null last_seq seeds from the full
+ * current window once. DELTA_INDEX=false restores the legacy reload-window.
+ */
+export function selectIndexWindow(
+  allLogs: IndexWindowLog[],
+  lastIndexedSeq: number | null | undefined,
+  deltaMode: boolean
+): IndexWindow {
+  if (!deltaMode || lastIndexedSeq == null) {
+    return { logs: allLogs, fullWindow: true };
+  }
+  return {
+    logs: allLogs.filter((m) => m.sequenceNumber > (lastIndexedSeq as number)),
+    fullWindow: false,
+  };
+}
+
+/**
+ * Chars fed to the summarizer this pass — previous summary plus the new
+ * messages only (delta), or the raw history on a full window. This length is
+ * the −80% input-token proxy measured by the fixture test.
+ */
+export function compileHistoryText(previousSummary: string, logs: IndexWindowLog[]): string {
+  const lines = logs.map((m) => `[${m.authorName}]: ${m.content}`).join("\n");
+  if (!previousSummary) return lines;
+  return `[PREVIOUS SUMMARY]\n${previousSummary}\n[NEW MESSAGES]\n${lines}`;
+}
+
+function redactErrorMessage(message: string): string {
+  const scrubbed = message
+    .replace(/([?&](?:key|api[_-]?key|access_token|token)=)[^&\s"']+/gi, "$1[REDACTED]")
+    .replace(/(bearer\s+)[\w.\-]+/gi, "$1[REDACTED]");
+  return String(redactSecrets({ message: scrubbed }).message);
 }
 
 export class LibrarianRuntime {
@@ -84,24 +135,26 @@ Available commands:
     broker.emit("message:stream", { channelId, agentId: librarianAgent.id, chunk: replyContent }, { channelId });
 
     setTimeout(async () => {
-      const nextSeq = await getNextSequenceNumber(channelId);
-      const repMsg: ChannelMessage = {
-        id: `msg-${Date.now()}-lib-reply`,
-        channelId,
-        authorId: librarianAgent.id,
-        authorName: librarianAgent.name,
-        authorLevel: librarianAgent.authorityLevel as any,
-        authorType: "agent",
-        content: replyContent,
-        mentions: [],
-        isInternalMonologue: false,
-        sequenceNumber: nextSeq,
-        timestamp: new Date(),
-      };
-
-      await db.insert(messages).values({
-        ...repMsg,
-        authorLevel: String(repMsg.authorLevel),
+      const repMsg = await withTransaction(async (tx) => {
+        const sequenceNumber = await allocateSequence(channelId, 1, tx);
+        const msg: ChannelMessage = {
+          id: monotonicUlid(),
+          channelId,
+          authorId: librarianAgent.id,
+          authorName: librarianAgent.name,
+          authorLevel: librarianAgent.authorityLevel as any,
+          authorType: "agent",
+          content: replyContent,
+          mentions: [],
+          isInternalMonologue: false,
+          sequenceNumber,
+          timestamp: new Date(),
+        };
+        await tx.insert(messages).values({
+          ...msg,
+          authorLevel: String(msg.authorLevel),
+        });
+        return msg;
       });
       broker.emit("message:new", repMsg, { channelId });
 
@@ -120,10 +173,12 @@ Available commands:
 
   /**
    * Compiles the topic summary index for a single channel.
+   * PERF-4: delta mode summarizes only messages past channel_index.last_seq,
+   * prepending the previous summary; the first run seeds from the full window.
    */
   async indexChannel(broker: EventBroker, librarianAgent: AgentProfile, targetChannelId: string): Promise<string> {
     const db = getDb();
-    
+
     // 1. Get channel & category
     const chan = await db.query.channels.findFirst({
       where: eq(channels.id, targetChannelId),
@@ -142,11 +197,31 @@ Available commands:
       pathName = `#${chan.name}`;
     }
 
-    // 2. Fetch standard message logs
-    const logs = await db.query.messages.findMany({
-      where: and(eq(messages.channelId, targetChannelId), eq(messages.isInternalMonologue, false)),
-      orderBy: (table, { asc }) => [asc(table.sequenceNumber)],
-    });
+    // 2. Current index cursor
+    const deltaMode = deltaIndexEnabled();
+    const [idxRow] = await db.select().from(channelIndex).where(eq(channelIndex.channelId, targetChannelId)).limit(1);
+    const lastIndexedSeq = idxRow?.lastSeq ?? null;
+
+    // 3. Fetch message logs — delta only when a cursor exists
+    let logs;
+    if (deltaMode && lastIndexedSeq != null) {
+      logs = await db.query.messages.findMany({
+        where: and(
+          eq(messages.channelId, targetChannelId),
+          eq(messages.isInternalMonologue, false),
+          gt(messages.sequenceNumber, lastIndexedSeq),
+        ),
+        orderBy: (table, { asc }) => [asc(table.sequenceNumber)],
+      });
+      if (logs.length === 0) {
+        return idxRow.topicSummary;
+      }
+    } else {
+      logs = await db.query.messages.findMany({
+        where: and(eq(messages.channelId, targetChannelId), eq(messages.isInternalMonologue, false)),
+        orderBy: (table, { asc }) => [asc(table.sequenceNumber)],
+      });
+    }
 
     if (logs.length === 0) {
       const emptySummary = "Empty sector. No communications logged yet.";
@@ -154,20 +229,38 @@ Available commands:
       return emptySummary;
     }
 
-    // 3. Compile topic summary via LLM model module
+    const historyLogs = logs;
+
+    // 4. Compile topic summary via LLM model module (MODEL-1: librarian pinned to flash tier)
     let summary = "";
-    
-    const modelModule = librarianAgent.modelModuleId
-      ? await db.query.modelModules.findFirst({ where: eq(modelModules.id, librarianAgent.modelModuleId) })
+    let degradeReason = "no_model_configured";
+
+    const routingDecision = resolveModelModule({
+      runtimeType: "librarian",
+      taskClass: "librarian",
+      availableModules: await loadRoutingModules(),
+      staticModuleId: librarianAgent.modelModuleId,
+      requireCredential: true,
+    });
+    const routedModuleId = routingDecision.moduleId ?? librarianAgent.modelModuleId ?? null;
+
+    const modelModule = routedModuleId
+      ? await db.query.modelModules.findFirst({ where: eq(modelModules.id, routedModuleId) })
       : null;
 
     if (modelModule && modelModule.apiKey) {
       try {
         console.log(`[LibrarianRuntime] Calling real Google indexing for #${chan.name}...`);
-        const modelName = modelModule.modelName || "gemini-2.0-flash";
-        const { url, headers, bodyBuilder } = compileGoogleEndpoint(modelModule);
-        
-        const historyText = logs.map(m => `[${m.authorName}]: ${m.content}`).join("\n");
+        const resolvedModule = modelModule.apiKey && isEncrypted(modelModule.apiKey)
+          ? { ...modelModule, apiKey: secretBoxDecrypt(modelModule.apiKey) }
+          : modelModule;
+        const modelName = resolvedModule.modelName || "gemini-2.0-flash";
+        const { url, headers, bodyBuilder } = compileGoogleEndpoint(resolvedModule);
+
+        const historyText = compileHistoryText(
+          deltaMode && lastIndexedSeq != null && idxRow ? idxRow.topicSummary : "",
+          historyLogs,
+        );
         const systemPrompt = "You are the Swarm Librarian. Your task is to compile a high-fidelity summary of discussions, decisions, and action items in this channel history logs. Keep it under 150 words.";
 
         const response = await fetch(url, {
@@ -179,7 +272,7 @@ Available commands:
         if (response.ok) {
           const json = await response.json();
           let rawText = json.candidates?.[0]?.content?.parts?.[0]?.text || "";
-          
+
           if (rawText) {
             if (isGemmaModel(modelName)) {
               const parsed = parseGemmaThoughts(rawText);
@@ -187,42 +280,77 @@ Available commands:
             } else {
               summary = rawText;
             }
+          } else {
+            degradeReason = "empty_provider_response";
           }
+        } else {
+          degradeReason = `provider_http_${response.status}`;
         }
       } catch (err) {
         console.error("[LibrarianRuntime] Google Indexer call failed:", err);
+        degradeReason = redactErrorMessage(err instanceof Error ? err.message : String(err));
       }
     }
 
-    // Mock summary fallback if LLM failed or in test environment
+    // DB-3: on failure surface a visible degraded marker — never fabricate content
     if (!summary) {
-      const uniqueAuthors = Array.from(new Set(logs.map(l => l.authorName)));
-      const decisionsCount = logs.filter(l => l.content.toLowerCase().includes("approve") || l.content.toLowerCase().includes("completed")).length;
-      summary = `Channel #${chan.name} contains ${logs.length} active discussion logs featuring ${uniqueAuthors.join(", ")}. 
-Key topics center on workspace development coordination and swarm safety protocols. 
-A total of ${decisionsCount} major coordination decisions were compiled in this sector. 
-*(Indexed via librarian specialist fallback)*`;
+      await this.markIndexDegraded(broker, targetChannelId, pathName, degradeReason, historyLogs[historyLogs.length - 1].sequenceNumber);
+      return `[INDEX DEGRADED] Summary for #${chan.name} unavailable this cycle (${degradeReason}). No synthetic summary was written.`;
     }
 
-    const lastSeq = logs[logs.length - 1].sequenceNumber;
-    await this.upsertIndex(targetChannelId, pathName, summary, lastSeq);
+    const newLastSeq = historyLogs[historyLogs.length - 1].sequenceNumber;
+    await this.upsertIndex(targetChannelId, pathName, summary, Math.max(newLastSeq, lastIndexedSeq ?? 0));
 
     return summary;
   }
 
+  private async markIndexDegraded(broker: EventBroker, channelId: string, pathName: string, reason: string, lastSeq: number): Promise<void> {
+    const db = getDb();
+    const now = new Date();
+
+    const [existing] = await db.select().from(channelIndex).where(eq(channelIndex.channelId, channelId)).limit(1);
+
+    if (existing) {
+      await db.update(channelIndex)
+        .set({
+          channelPath: pathName,
+          status: "degraded",
+          lastError: reason,
+          lastIndexedAt: now
+        })
+        .where(eq(channelIndex.channelId, channelId));
+    } else {
+      await db.insert(channelIndex).values({
+        channelId,
+        channelPath: pathName,
+        topicSummary: DEGRADED_SUMMARY_PLACEHOLDER,
+        lastIndexedAt: now,
+        messageCountSinceIndex: 0,
+        status: "degraded",
+        lastError: reason
+      });
+    }
+
+    logMetric({ stage: "librarian.index.degraded", channelId, error: reason, failedAtSeq: lastSeq });
+    broker.emit("index:degraded", { channelId, path: pathName, reason }, { channelId });
+  }
+
   private async upsertIndex(channelId: string, pathName: string, summary: string, lastSeq: number): Promise<void> {
     const db = getDb();
-    
+
     // Check if index exists
     const [existing] = await db.select().from(channelIndex).where(eq(channelIndex.channelId, channelId)).limit(1);
-    
+
     if (existing) {
       await db.update(channelIndex)
         .set({
           channelPath: pathName,
           topicSummary: summary,
           lastIndexedAt: new Date(),
-          messageCountSinceIndex: 0
+          lastSeq,
+          messageCountSinceIndex: 0,
+          status: "ok",
+          lastError: null
         })
         .where(eq(channelIndex.channelId, channelId));
     } else {
@@ -231,7 +359,10 @@ A total of ${decisionsCount} major coordination decisions were compiled in this 
         channelPath: pathName,
         topicSummary: summary,
         lastIndexedAt: new Date(),
-        messageCountSinceIndex: 0
+        lastSeq,
+        messageCountSinceIndex: 0,
+        status: "ok",
+        lastError: null
       });
     }
 
@@ -251,16 +382,19 @@ A total of ${decisionsCount} major coordination decisions were compiled in this 
   private async handleHelpCommand(): Promise<string> {
     const db = getDb();
     const indices = await db.select().from(channelIndex);
-    
+
     if (indices.length === 0) {
       return `📊 **Swarm Index Registry Status**: No channels have been compiled yet. Please run \`@Librarian index all\` to start.`;
     }
 
     let report = `📊 **Swarm Index Registry Status** (${indices.length} sectors compiled):\n\n`;
-    report += `| Channel / Sector Path | Last Indexed At | Message Drift |\n`;
-    report += `|---|---|---:|\n`;
+    report += `| Channel / Sector Path | Last Indexed At | Message Drift | Status |\n`;
+    report += `|---|---|---:|---|\n`;
     indices.forEach(idx => {
-      report += `| \`${idx.channelPath}\` | ${new Date(idx.lastIndexedAt).toLocaleTimeString()} | ${idx.messageCountSinceIndex} new |\n`;
+      const statusCell = idx.status === "degraded"
+        ? `⚠️ DEGRADED — ${idx.lastError ?? "unknown error"}`
+        : "ok";
+      report += `| \`${idx.channelPath}\` | ${new Date(idx.lastIndexedAt).toLocaleTimeString()} | ${idx.messageCountSinceIndex} new | ${statusCell} |\n`;
     });
 
     return report;
@@ -271,7 +405,9 @@ A total of ${decisionsCount} major coordination decisions were compiled in this 
    */
   private async handleIndexAll(broker: EventBroker, librarianAgent: AgentProfile, originChannelId: string): Promise<string> {
     const db = getDb();
-    const allChannels = await db.query.channels.findMany();
+    const allChannels = await db.query.channels.findMany({
+      where: isNull(channels.archivedAt),
+    });
     
     console.log(`[LibrarianRuntime] Starting workspace-wide indexing across ${allChannels.length} channels...`);
     
@@ -324,7 +460,11 @@ A total of ${decisionsCount} major coordination decisions were compiled in this 
 
     let report = `🔍 **Search Results for "${query}"** (${matching.length} matching sectors):\n\n`;
     matching.forEach(idx => {
-      report += `### 📁 Sector: \`${idx.channelPath}\` \n`;
+      const degraded = idx.status === "degraded";
+      report += `### 📁 Sector: \`${idx.channelPath}\`${degraded ? " ⚠️ **DEGRADED INDEX**" : ""} \n`;
+      if (degraded) {
+        report += `* **Last error**: ${idx.lastError ?? "unknown error"} — summary below is stale, not freshly compiled\n`;
+      }
       report += `* **Last compiled**: ${new Date(idx.lastIndexedAt).toLocaleTimeString()}\n`;
       report += `* **Summary**: ${idx.topicSummary}\n\n`;
     });

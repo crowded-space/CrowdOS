@@ -1,0 +1,67 @@
+name: nightly
+
+on:
+  schedule:
+    - cron: "0 2 * * *" # 02:00 UTC daily
+  workflow_dispatch:
+
+concurrency:
+  group: nightly-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  nightly:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: crowdos_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      DATABASE_URL: postgres://postgres:postgres@localhost:5432/crowdos_test
+      REDIS_URL: redis://localhost:6379
+      EMBEDDING_ENABLED: "true"
+      OTEL_ENABLED: "false"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run lint:gates --workspace @community-agent/server
+      - name: Migrate
+        working-directory: packages/server
+        run: npx drizzle-kit migrate
+      - name: Seed
+        run: npm run db:seed --workspace @community-agent/server
+      - name: Unit + failure-mode suite (TST-5)
+        run: npm test --workspace @community-agent/server -- src/Shared/core/failureModes.test.ts src/Observability/tracing.test.ts src/Memories/embeddings.test.ts
+      - name: Full suite
+        run: npm test --workspace @community-agent/server
+      - name: Load smoke (SCL-1 — 100 sends / 10 swarms)
+        run: node load/harness.mjs --vus 20 --duration 10
+        env:
+          BASE_URL: http://localhost:3001
+      # 8h soak is staged: smoke runs on nightly, full 8h is manual via workflow_dispatch with SOAK_DURATION=8h
+      - name: Build
+        run: npm run build

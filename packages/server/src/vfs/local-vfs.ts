@@ -9,6 +9,7 @@ import { eq, and } from "drizzle-orm";
 
 import { getDb } from "../Shared/config/database.js";
 import { workspaceNodes, workspaces } from "../db/schema.js";
+import { TtlCache } from "../Shared/core/ttlCache.js";
 import { resolveWorkspacePath, normalizePath, extractName, guessMimeType } from "./path-guard.js";
 import type { VirtualFS, FileNode, FileStat } from "./vfs.interface.js";
 
@@ -18,6 +19,13 @@ export interface LocalVFSOptions {
   actorId: string;
   onEvent?: (type: string, path: string, metadata?: Record<string, unknown>) => void;
 }
+
+/**
+ * Directory listing cache (P2-1). Shared across LocalVFS instances of the same
+ * process so any instance's mutation invalidates the workspace's entries.
+ * Short TTL bounds staleness for out-of-band disk changes (e.g. bash tools).
+ */
+const listCache = new TtlCache<FileNode[]>(10_000, 300);
 
 export class LocalVFS implements VirtualFS {
   private readonly workspaceId: string;
@@ -101,6 +109,11 @@ export class LocalVFS implements VirtualFS {
     return resolveWorkspacePath(this.workspaceRoot, path);
   }
 
+  /** Invalidate cached listings for this workspace after a mutation. */
+  private invalidateListCache(): void {
+    listCache.invalidatePrefix(`${this.workspaceId}:`);
+  }
+
   private computeChecksum(content: string): string {
     return createHash("sha256").update(content, "utf8").digest("hex");
   }
@@ -129,6 +142,7 @@ export class LocalVFS implements VirtualFS {
 
     // Write to disk
     await fs.writeFile(absPath, content, "utf8");
+    this.invalidateListCache();
 
     // Sync metadata to DB
     const db = getDb();
@@ -180,6 +194,7 @@ export class LocalVFS implements VirtualFS {
     const name = extractName(path);
 
     await fs.mkdir(absPath, { recursive: true });
+    this.invalidateListCache();
 
     // Sync directory node to DB
     const db = getDb();
@@ -222,6 +237,7 @@ export class LocalVFS implements VirtualFS {
     } else {
       await fs.unlink(absPath);
     }
+    this.invalidateListCache();
 
     // Remove from DB (cascade removes children for directories)
     const db = getDb();
@@ -251,6 +267,7 @@ export class LocalVFS implements VirtualFS {
     await fs.mkdir(newParent, { recursive: true });
 
     await fs.rename(absOld, absNew);
+    this.invalidateListCache();
 
     // Update DB
     const db = getDb();
@@ -277,33 +294,41 @@ export class LocalVFS implements VirtualFS {
   }
 
   async list(path: string): Promise<FileNode[]> {
+    const normalizedDir = normalizePath(path);
+    const cacheKey = `${this.workspaceId}:${normalizedDir}`;
+    const cached = listCache.get(cacheKey);
+    if (cached) return cached;
+
     const absPath = this.resolve(path);
     const entries = await fs.readdir(absPath, { withFileTypes: true });
 
-    const nodes: FileNode[] = [];
-    for (const entry of entries) {
-      // Skip hidden .crowdos directory from listings
-      if (entry.name === ".crowdos") continue;
+    // Stat entries concurrently — serial fs.stat per entry was an N+1 bottleneck
+    // on large directories (P2-1).
+    const nodes = await Promise.all(
+      entries
+        .filter((entry) => entry.name !== ".crowdos")
+        .map(async (entry): Promise<FileNode> => {
+          const entryPath = join(absPath, entry.name);
+          const stat = await fs.stat(entryPath);
+          return {
+            name: entry.name,
+            path: normalizePath(join(path, entry.name)),
+            type: entry.isDirectory() ? "directory" : "file",
+            size: stat.size,
+            mimeType: entry.isFile() ? guessMimeType(entry.name) : null,
+            updatedAt: stat.mtime,
+          };
+        })
+    );
 
-      const entryPath = join(absPath, entry.name);
-      const stat = await fs.stat(entryPath);
-      const normalized = normalizePath(join(path, entry.name));
-
-      nodes.push({
-        name: entry.name,
-        path: normalized,
-        type: entry.isDirectory() ? "directory" : "file",
-        size: stat.size,
-        mimeType: entry.isFile() ? guessMimeType(entry.name) : null,
-        updatedAt: stat.mtime,
-      });
-    }
-
-    return nodes.sort((a, b) => {
+    nodes.sort((a, b) => {
       // Directories first, then alphabetical
       if (a.type !== b.type) return a.type === "directory" ? -1 : 1;
       return a.name.localeCompare(b.name);
     });
+
+    listCache.set(cacheKey, nodes);
+    return nodes;
   }
 
   async stat(path: string): Promise<FileStat> {

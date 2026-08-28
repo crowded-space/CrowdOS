@@ -1,15 +1,38 @@
-﻿import type { TokenUsage } from '../types/tool.types.js'
+import type { TokenUsage } from '../types/tool.types.js'
 import type { EventBroker } from '../EventBroker/eventBrokerGate.js'
 
 export type { TokenUsage }
 
 export interface HistoryMessage {
-  role: 'user' | 'assistant' | 'system'
+  role: 'user' | 'assistant' | 'system' | 'tool'
   content: string
   authorName?: string
+  // Multi-agent source tagging (agent-context only, never shown in UI)
+  authorId?: string
+  authorType?: 'user' | 'agent' | 'system'
+  authorLevel?: string
+  isSelf?: boolean
+  mentions?: import('../types/mention.types.js').MentionMetadata[]
   isInternalMonologue?: boolean
   timestamp: Date
+  toolCalls?: RawToolCall[]
+  toolCallId?: string
+  toolName?: string
 }
+
+export interface ToolCallIR {
+  id: string
+  tool: string
+  arguments: Record<string, unknown>
+}
+
+export type AgentEvent =
+  | { type: 'thought'; content: string; timestamp: Date }
+  | { type: 'tool_call'; callId: string; toolName: string; input: Record<string, unknown>; timestamp: Date }
+  | { type: 'tool_result'; callId: string; toolName: string; success: boolean; output: string; durationMs: number; timestamp: Date }
+  | { type: 'model_output'; content: string; timestamp: Date }
+  | { type: 'agent_completed'; response: string; timestamp: Date }
+  | { type: 'agent_error'; error: string; timestamp: Date }
 
 export interface RuntimePolicy {
   maxTokenBudget: number
@@ -29,6 +52,13 @@ export interface ExecutionMetadata {
   startedAt: Date
 }
 
+export interface ResumeContext {
+  watermarkSeq: number
+  completedCallIds: string[]
+  historyRef?: string
+  updatedAt?: string
+}
+
 export interface ContextPacket {
   requestId: string
   agentId: string
@@ -44,6 +74,14 @@ export interface ContextPacket {
   tools?: LLMToolDefinition[]
   policies: RuntimePolicy
   metadata: ExecutionMetadata
+  /**
+   * Cancellation signal for this run (HM2). Aborted by explicit user cancel —
+   * never by browser disconnect. Propagated to LLM fetches and tool execution.
+   */
+  abortSignal?: AbortSignal
+  /** RUN-0 correlation: id of the runs row opened for this execution (null if bookkeeping failed). */
+  runId?: string | null
+  resumeContext?: ResumeContext | null
 }
 
 export interface RuntimeResult {
@@ -56,7 +94,7 @@ export interface RuntimeResult {
   memoryCandidates?: MemoryCandidate[]
   runtimeEvents: RuntimeEvent[]
   usage: TokenUsage
-  status: 'completed' | 'failed' | 'loop_detected' | 'budget_exceeded'
+  status: 'completed' | 'failed' | 'loop_detected' | 'budget_exceeded' | 'cancelled'
 }
 
 export interface ToolCallRecord {
@@ -136,8 +174,21 @@ export type RuntimeType =
   | 'swarm'
   | 'coding'
   | 'research'
-  | 'observer'
-  | 'orchestrator'
+
+export type ComposerMode = 'auto' | 'chat' | 'conversational' | 'agentic' | 'coding' | 'research'
+
+export const COMPOSER_MODE_TO_RUNTIME: Record<Exclude<ComposerMode, 'auto'>, RuntimeType> = {
+  chat: 'conversational',
+  conversational: 'conversational',
+  agentic: 'agentic',
+  coding: 'coding',
+  research: 'research',
+}
+
+export function composerModeToRuntime(mode: ComposerMode | string | undefined): RuntimeType | undefined {
+  if (!mode || mode === 'auto') return undefined
+  return COMPOSER_MODE_TO_RUNTIME[mode as Exclude<ComposerMode, 'auto'>]
+}
 
 export interface IRuntime {
   type: RuntimeType
@@ -149,7 +200,8 @@ export interface IProviderAdapter {
   call(
     config: ModelModuleConfig,
     request: LLMRequest,
-    onChunk?: (chunk: { content: string; thoughts?: string; isThoughts?: boolean }) => void
+    onChunk?: (chunk: { content: string; thoughts?: string; isThoughts?: boolean }) => void,
+    options?: { signal?: AbortSignal }
   ): Promise<LLMResponse>
   supportsStreaming: boolean
   supportsTools: boolean

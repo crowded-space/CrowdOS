@@ -315,6 +315,36 @@ export default function WorkspaceSettingsModal() {
   // Category Creation
   const [newCategoryName, setNewCategoryName] = useState('');
 
+  // Validation derived state
+  const trimmedCategoryName = newCategoryName.trim();
+  const isCategoryTooShort = trimmedCategoryName.length > 0 && trimmedCategoryName.length < 2;
+  const isCategoryTooLong = trimmedCategoryName.length > 40;
+  const isCategoryDuplicate = !!trimmedCategoryName && !!activeWS && activeWS.categories.some(c => c.name.toLowerCase() === trimmedCategoryName.toLowerCase());
+
+  const formattedNewChannelName = newChannelName.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9_-]/g, '');
+  const isChannelEmpty = !formattedNewChannelName;
+  const isChannelTooShort = formattedNewChannelName.length > 0 && formattedNewChannelName.length < 2;
+  const isChannelTooLong = formattedNewChannelName.length > 40;
+  const isChannelDuplicate = !!formattedNewChannelName && !!activeWS && (
+    (activeWS.channels || []).some(c => c.name.toLowerCase() === formattedNewChannelName) ||
+    activeWS.categories.some(cat => cat.channels.some(c => c.name.toLowerCase() === formattedNewChannelName))
+  );
+  const isChannelCategoryMissing = !newChannelCategory;
+
+  React.useEffect(() => {
+    if (!settingsModalOpen) return;
+    const onEsc = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setSettingsModalOpen(false);
+    };
+    window.addEventListener('keydown', onEsc);
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => {
+      window.removeEventListener('keydown', onEsc);
+      document.body.style.overflow = prev;
+    };
+  }, [settingsModalOpen, setSettingsModalOpen]);
+
   // Local safety option toggles
   const [humanApproval, setHumanApproval] = useState(true);
   const [rateLimit, setRateLimit] = useState(true);
@@ -498,12 +528,19 @@ export default function WorkspaceSettingsModal() {
 
   const handleCreateChannel = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newChannelName.trim()) return;
-
-    const formattedName = newChannelName.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9_-]/g, '');
-    
+    if (!newChannelName.trim() || !formattedNewChannelName || isChannelDuplicate || isChannelTooShort || isChannelTooLong) {
+      if (!formattedNewChannelName) showError('Channel Error', 'Channel name must contain at least one letter or number.');
+      else if (isChannelDuplicate) showError('Channel Error', `Channel #${formattedNewChannelName} already exists.`);
+      else if (isChannelTooShort) showError('Channel Error', 'Channel name must be at least 2 characters.');
+      else if (isChannelTooLong) showError('Channel Error', 'Channel name must be 40 characters or fewer.');
+      return;
+    }
+    if (isChannelCategoryMissing) {
+      showError('Channel Error', 'Select a target category.');
+      return;
+    }
     try {
-      await createChannel(newChannelCategory || null, formattedName, newChannelDesc);
+      await createChannel(newChannelCategory || null, formattedNewChannelName, newChannelDesc);
       setNewChannelName('');
       setNewChannelDesc('');
     } catch (err) {
@@ -513,10 +550,16 @@ export default function WorkspaceSettingsModal() {
 
   const handleCreateCategory = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newCategoryName.trim()) return;
-
+    const t = newCategoryName.trim();
+    if (!t || isCategoryDuplicate || isCategoryTooShort || isCategoryTooLong) {
+      if (!t) return;
+      if (isCategoryDuplicate) showError('Category Error', `Category "${t}" already exists.`);
+      else if (isCategoryTooShort) showError('Category Error', 'Category name must be at least 2 characters.');
+      else if (isCategoryTooLong) showError('Category Error', 'Category name must be 40 characters or fewer.');
+      return;
+    }
     try {
-      await createCategory(newCategoryName.trim());
+      await createCategory(t);
       setNewCategoryName('');
     } catch (err) {
       showError('Category Error', err instanceof Error ? err.message : 'Failed to create category.');
@@ -654,7 +697,7 @@ export default function WorkspaceSettingsModal() {
     <>
       <AnimatePresence>
         {settingsModalOpen && activeWS && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 md:p-10 select-none" id="workspace-settings-modal">
+        <div role="dialog" aria-modal="true" aria-label="Workspace Settings" className="fixed inset-0 z-50 flex items-center justify-center p-4 md:p-10 select-none" id="workspace-settings-modal">
           {/* Black Translucent Backdrop */}
           <motion.div 
             initial={{ opacity: 0 }}
@@ -1561,20 +1604,30 @@ export default function WorkspaceSettingsModal() {
                         <input
                           required
                           type="text"
+                          maxLength={40}
                           value={newCategoryName}
                           onChange={(e) => setNewCategoryName(e.target.value)}
                           placeholder="e.g. Core Cognitive Agents"
-                          className="w-full bg-zinc-900 border border-zinc-800 focus:border-zinc-700 focus:ring-1 focus:ring-zinc-700/40 rounded px-2.5 py-1.5 font-sans focus:outline-none text-xs text-zinc-200 placeholder-zinc-650"
+                          aria-describedby={isCategoryDuplicate || isCategoryTooShort || isCategoryTooLong ? "category-validation" : undefined}
+                          className={`w-full bg-zinc-900 border rounded px-2.5 py-1.5 font-sans focus:outline-none text-xs text-zinc-200 placeholder-zinc-650 ${isCategoryDuplicate || isCategoryTooShort || isCategoryTooLong ? 'border-rose-500/40 focus:border-rose-500/60 focus:ring-rose-500/30' : 'border-zinc-800 focus:border-zinc-700 focus:ring-1 focus:ring-zinc-700/40'}`}
                         />
+                        {(isCategoryDuplicate || isCategoryTooShort || isCategoryTooLong) && trimmedCategoryName && (
+                          <div id="category-validation" className="text-[11px] font-mono px-1 pt-1">
+                            {isCategoryDuplicate && <span className="text-rose-400">Category &quot;{trimmedCategoryName}&quot; already exists.</span>}
+                            {isCategoryTooShort && !isCategoryDuplicate && <span className="text-amber-400">Must be at least 2 characters.</span>}
+                            {isCategoryTooLong && <span className="text-rose-400">Must be 40 characters or fewer.</span>}
+                          </div>
+                        )}
                       </div>
                     </div>
 
                     <div className="flex justify-end select-none pt-3">
                       <button
                         type="submit"
-                        className="px-2.5 py-1.5 bg-indigo-500 hover:bg-indigo-650 font-semibold text-white rounded flex items-center gap-1 cursor-pointer focus:outline-none"
+                        disabled={!trimmedCategoryName || isCategoryDuplicate || isCategoryTooShort || isCategoryTooLong}
+                        className="px-2.5 py-1.5 bg-indigo-500 hover:bg-indigo-600 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-indigo-500 font-semibold text-white rounded flex items-center gap-1 cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
                       >
-                        <Plus size={13} />
+                        <Plus size={13} aria-hidden="true" />
                         <span>Assemble Category</span>
                       </button>
                     </div>
@@ -1589,11 +1642,24 @@ export default function WorkspaceSettingsModal() {
                         <input
                           required
                           type="text"
+                          maxLength={40}
                           value={newChannelName}
                           onChange={(e) => setNewChannelName(e.target.value)}
                           placeholder="e.g. layout-scaffolding"
-                          className="w-full bg-zinc-900 border border-zinc-800 focus:border-zinc-700 focus:ring-1 focus:ring-zinc-700/40 rounded px-2.5 py-1.5 font-sans focus:outline-none text-xs text-zinc-200 placeholder-zinc-650"
+                          aria-describedby={isChannelDuplicate || isChannelTooShort || isChannelTooLong || isChannelEmpty ? "channel-validation" : undefined}
+                          className={`w-full bg-zinc-900 border rounded px-2.5 py-1.5 font-sans focus:outline-none text-xs text-zinc-200 placeholder-zinc-650 ${isChannelDuplicate || isChannelTooShort || isChannelTooLong || (isChannelEmpty && newChannelName.trim()) ? 'border-rose-500/40 focus:border-rose-500/60 focus:ring-rose-500/30' : 'border-zinc-800 focus:border-zinc-700 focus:ring-1 focus:ring-zinc-700/40'}`}
                         />
+                        {(isChannelDuplicate || isChannelTooShort || isChannelTooLong || (isChannelEmpty && newChannelName.trim())) && (
+                          <div id="channel-validation" className="text-[11px] font-mono px-1">
+                            {isChannelDuplicate && <span className="text-rose-400">Channel #{formattedNewChannelName} already exists.</span>}
+                            {isChannelEmpty && newChannelName.trim() && !isChannelDuplicate && <span className="text-rose-400">Must contain at least one letter or number.</span>}
+                            {isChannelTooShort && !isChannelDuplicate && !isChannelEmpty && <span className="text-amber-400">Must be at least 2 characters.</span>}
+                            {isChannelTooLong && <span className="text-rose-400">Must be 40 characters or fewer.</span>}
+                          </div>
+                        )}
+                        {formattedNewChannelName && !isChannelDuplicate && !isChannelTooShort && !isChannelTooLong && (
+                          <div className="text-[10px] font-mono text-zinc-500 px-1">Will be created as #{formattedNewChannelName}</div>
+                        )}
                       </div>
 
                       <div className="space-y-1">
@@ -1616,6 +1682,7 @@ export default function WorkspaceSettingsModal() {
                       <label className="text-[10px] font-mono text-zinc-500 font-bold block mb-1">DESCRIPTION</label>
                       <input
                         type="text"
+                        maxLength={120}
                         value={newChannelDesc}
                         onChange={(e) => setNewChannelDesc(e.target.value)}
                         placeholder="e.g. Scrapes repository structures and tracks layouts"
@@ -1626,9 +1693,10 @@ export default function WorkspaceSettingsModal() {
                     <div className="flex justify-end select-none">
                       <button
                         type="submit"
-                        className="px-2.5 py-1.5 bg-indigo-500 hover:bg-indigo-650 font-semibold text-white rounded flex items-center gap-1 cursor-pointer focus:outline-none"
+                        disabled={!formattedNewChannelName || isChannelDuplicate || isChannelTooShort || isChannelTooLong || isChannelCategoryMissing}
+                        className="px-2.5 py-1.5 bg-indigo-500 hover:bg-indigo-600 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-indigo-500 font-semibold text-white rounded flex items-center gap-1 cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
                       >
-                        <Plus size={13} />
+                        <Plus size={13} aria-hidden="true" />
                         <span>Assemble Area</span>
                       </button>
                     </div>

@@ -4,9 +4,11 @@ import { ChevronDown, Settings, Plus, Copy, LogOut, Layers, Hash } from 'lucide-
 import { useCrowdOSStore } from '@/stores/crowd-os-store';
 import CrowIcon from '@/components/ui/crow-icon';
 import { useToast } from '@/components/ui/toast-provider';
+import ConfirmDialog from '@/components/ui/confirm-dialog';
 
 export default function WorkspaceDropdown() {
   const [dropdownOpen, setDropdownOpen] = useState(false);
+  const [leaveConfirmOpen, setLeaveConfirmOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
   const { showSuccess } = useToast();
   
@@ -20,15 +22,22 @@ export default function WorkspaceDropdown() {
 
   const activeWS = workspaces.find(ws => ws.id === activeWorkspaceId);
 
-  // Close when clicking outside
+  // Close when clicking outside or pressing Escape
   useEffect(() => {
     function handleClickOutside(event: MouseEvent) {
       if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
         setDropdownOpen(false);
       }
     }
+    function handleEsc(event: KeyboardEvent) {
+      if (event.key === 'Escape') setDropdownOpen(false);
+    }
     document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
+    document.addEventListener('keydown', handleEsc);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+      document.removeEventListener('keydown', handleEsc);
+    };
   }, []);
 
   if (!activeWS) return null;
@@ -37,78 +46,112 @@ export default function WorkspaceDropdown() {
     <div className="relative" ref={dropdownRef} id="workspace-dropdown">
       <button
         onClick={() => setDropdownOpen(!dropdownOpen)}
-        className="w-full flex items-center justify-between p-3.5 hover:bg-zinc-900/60 border-b border-zinc-900 transition text-left cursor-pointer focus:outline-none"
+        aria-haspopup="menu"
+        aria-expanded={dropdownOpen}
+        aria-controls="workspace-dropdown-menu"
+        aria-label="Open workspace menu"
+        className="w-full flex items-center justify-between px-3.5 py-3.5 hover:bg-zinc-900/50 border-b border-zinc-900/80 transition text-left cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500/30 active:bg-zinc-900/70"
       >
-        <div className="flex items-center gap-2 truncate">
-          <CrowIcon variant={activeWS.icon} className="w-7 h-7 rounded bg-transparent border-0" iconSize={65} />
-          <span className="font-semibold text-zinc-100 text-[13.5px] truncate tracking-tight font-sans">
+        <div className="flex items-center gap-3 min-w-0">
+          <CrowIcon variant={activeWS.icon} className="w-8 h-8 rounded-xl bg-transparent border-0 shadow-sm" iconSize={64} />
+          <span className="font-semibold text-zinc-100 text-[14px] truncate tracking-[-0.015em] font-sans">
             {activeWS.name}
           </span>
         </div>
-        <ChevronDown size={14} className="text-zinc-400 shrink-0" />
+        <span className={`w-7 h-7 rounded-lg bg-zinc-900 border border-zinc-800 flex items-center justify-center transition ${dropdownOpen ? 'bg-zinc-800 border-zinc-700' : ''}`}>
+          <ChevronDown size={14} className={`text-zinc-400 shrink-0 transition-transform ${dropdownOpen ? 'rotate-180' : ''}`} />
+        </span>
       </button>
 
       {/* Accordion dropdown menu option */}
       <AnimatePresence>
       {dropdownOpen && (
         <motion.div 
+          id="workspace-dropdown-menu"
+          role="menu"
           initial={{ opacity: 0, scale: 0.95, y: -10 }} 
           animate={{ opacity: 1, scale: 1, y: 0 }} 
           exit={{ opacity: 0, scale: 0.95, y: -10 }} 
           transition={{ duration: 0.15, ease: "easeOut" }}
-          className="absolute top-full left-2 right-2 mt-1 bg-zinc-950 border border-zinc-900 rounded-lg shadow-xl z-50 p-1.5 space-y-0.5 origin-top"
+          className="absolute top-full left-2 right-2 mt-2 bg-[#141416] border border-zinc-800 rounded-2xl shadow-2xl z-50 p-2 space-y-1 origin-top"
         >
           <button
+            role="menuitem"
             onClick={() => {
               setDropdownOpen(false);
               setWorkspaceSettingsTab('overview');
               setSettingsModalOpen(true);
             }}
-            className="w-full flex items-center gap-2 px-3 py-2.5 sm:py-2 text-[13px] sm:text-xs text-zinc-300 hover:bg-indigo-500/20 hover:text-indigo-200 rounded-md transition text-left cursor-pointer"
+            className="w-full flex items-center gap-3 px-3 py-3 min-h-[44px] text-[13px] text-zinc-200 hover:bg-zinc-900 hover:text-white rounded-xl transition text-left cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500/30 active:bg-zinc-800"
           >
-            <Settings size={15} className="shrink-0" />
-            <span>Workspace Settings</span>
+            <span className="w-8 h-8 rounded-lg bg-indigo-500/12 border border-indigo-500/20 flex items-center justify-center shrink-0 text-indigo-400">
+              <Settings size={15} aria-hidden="true" />
+            </span>
+            <span className="font-medium">Workspace Settings</span>
           </button>
 
           <button
+            role="menuitem"
             onClick={() => {
               setDropdownOpen(false);
               setWorkspaceSettingsTab('channels');
               setSettingsModalOpen(true);
             }}
-            className="w-full flex items-center gap-2 px-3 py-2.5 sm:py-2 text-[13px] sm:text-xs text-zinc-300 hover:bg-indigo-500/20 hover:text-indigo-200 rounded-md transition text-left cursor-pointer"
+            className="w-full flex items-center gap-3 px-3 py-3 min-h-[44px] text-[13px] text-zinc-200 hover:bg-zinc-900 hover:text-white rounded-xl transition text-left cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500/30 active:bg-zinc-800"
           >
-            <Layers size={15} className="shrink-0" />
-            <span>Create Category</span>
+            <span className="w-8 h-8 rounded-lg bg-zinc-900 border border-zinc-800 flex items-center justify-center shrink-0 text-zinc-400">
+              <Layers size={15} aria-hidden="true" />
+            </span>
+            <span className="font-medium">Create Category</span>
           </button>
 
           <button
+            role="menuitem"
             onClick={() => {
               setDropdownOpen(false);
               navigator.clipboard.writeText(activeWS.id || '');
               showSuccess('Workspace ID Copied', 'ID copied to clipboard.');
             }}
-            className="w-full flex items-center gap-2 px-3 py-2.5 sm:py-2 text-[13px] sm:text-xs text-[#a1a1aa] hover:bg-zinc-900 rounded-md transition text-left cursor-pointer"
+            className="w-full flex items-center gap-3 px-3 py-3 min-h-[44px] text-[13px] text-zinc-400 hover:bg-zinc-900 hover:text-zinc-200 rounded-xl transition text-left cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-zinc-700 active:bg-zinc-800"
           >
-            <Copy size={15} className="shrink-0" />
-            <span>Copy Workspace ID</span>
+            <span className="w-8 h-8 rounded-lg bg-zinc-900 border border-zinc-800 flex items-center justify-center shrink-0">
+              <Copy size={15} aria-hidden="true" />
+            </span>
+            <span className="font-medium">Copy Workspace ID</span>
           </button>
 
-          <div className="border-t border-zinc-900 my-1 pointer-events-none" />
+          <div className="h-px bg-zinc-900 my-1.5 mx-1" />
 
           <button
+            role="menuitem"
             onClick={() => {
               setDropdownOpen(false);
-              leaveWorkspace();
+              setLeaveConfirmOpen(true);
             }}
-            className="w-full flex items-center gap-2 px-3 py-2.5 sm:py-2 text-[13px] sm:text-xs text-rose-400 hover:bg-rose-500/10 rounded-md transition text-left cursor-pointer"
+            className="w-full flex items-center gap-3 px-3 py-3 min-h-[44px] text-[13px] text-rose-300 hover:bg-rose-500/10 hover:text-rose-200 rounded-xl transition text-left cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-rose-500/30 active:bg-rose-500/15"
           >
-            <LogOut size={15} className="shrink-0" />
-            <span>Leave Space Portal</span>
+            <span className="w-8 h-8 rounded-lg bg-rose-500/10 border border-rose-500/20 flex items-center justify-center shrink-0">
+              <LogOut size={15} aria-hidden="true" />
+            </span>
+            <span className="font-medium">Leave Portal</span>
           </button>
         </motion.div>
       )}
       </AnimatePresence>
+
+      <ConfirmDialog
+        open={leaveConfirmOpen}
+        title="Leave Workspace?"
+        description={`Leave "${activeWS.name}" and return to portal? Unsent drafts will be discarded. You can re-enter from the active sessions list.`}
+        confirmLabel="Leave"
+        cancelLabel="Cancel"
+        isDanger={true}
+        onCancel={() => setLeaveConfirmOpen(false)}
+        onConfirm={() => {
+          setLeaveConfirmOpen(false);
+          leaveWorkspace();
+        }}
+      />
     </div>
   );
 }

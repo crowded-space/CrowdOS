@@ -1,0 +1,44 @@
+# ACAD Twin-YAML
+# Version: 1.1.0
+# Source: playwright.config
+
+block:
+  id: "96ee1a29-50a4-4a29-8993-afb073690815"
+  label: "PlaywrightConfig"
+  position: { x: 1400, y: 1820 }
+  size: { width: 240, height: 200 }
+  color: "#7f8c8d"
+  collapsed: false
+  ports:
+    imports:
+      - defineConfig
+      - devices
+    exports:
+      - PlaywrightConfigModule
+
+spec:
+  version: "1.1.0"
+  file:
+    path: playwright.config
+    language: typescript
+  imports:
+    - from: "@playwright/test"
+      symbols:
+        - defineConfig
+        - devices
+  types: []
+  exports:
+    - name: PlaywrightConfigModule
+      kind: function
+      async: false
+      params: []
+      returns: void
+      doc: "Module definition for playwright.config.ts"
+      intent:
+        - action: return
+          value: "void"
+  constraints:
+    style:
+      indent: 2
+      quotes: single
+      semicolons: true

@@ -1,0 +1,27 @@
+# 17 Testing And Release Progress
+
+Linked plan:
+- [Execution plan](C:\Users\Asus\Documents\GitHub\.ThisCrowd\execution-plan\17-testing-and-release.md)
+
+## Status
+- Current status: `not-started`
+- Progress: `0%`
+- Owner: `unassigned`
+- Last updated: `2026-04-18`
+
+## Checklist
+- [ ] Vitest setup added
+- [ ] Core unit tests added
+- [ ] Integration harness added
+- [ ] Playwright setup added
+- [ ] Smoke checklist added
+- [ ] CI checks added
+
+## Short Change Notes
+- 2026-04-18: Tracker file created.
+- 2026-04-18: No implementation yet.
+
+## Next Update Format
+- YYYY-MM-DD: short description of what changed.
+- YYYY-MM-DD: short description of test or verification result.
+- YYYY-MM-DD: short description of blocker, if any.

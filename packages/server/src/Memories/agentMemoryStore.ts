@@ -3,9 +3,12 @@ import { and, asc, desc, eq, gte, or, type SQL } from "drizzle-orm";
 import { getDb } from "../Shared/config/database.js";
 import {
   agents,
+  channels,
   agentMemoryNotes,
-  memoryUpdateLog,
 } from "../db/schema.js";
+import { logMemoryUpdate, enforceNoteCap, isSuppressionActive } from "./memoryLifecycle.js";
+import { reflectionThrottle } from "./memoryReflectionThrottle.js";
+import { sanitizeReflectionField } from "../Shared/core/reflectionSanitizer.js";
 import type { InferSelectModel } from "drizzle-orm";
 
 export type MemoryNoteType =
@@ -110,7 +113,9 @@ export type MemoryStoreError =
   | "AGENT_NOT_FOUND"
   | "NOTE_NOT_FOUND"
   | "INVALID_INPUT"
-  | "UPDATE_FAILED";
+  | "UPDATE_FAILED"
+  | "REFLECTION_THROTTLED"
+  | "REFLECTION_DUPLICATE";
 
 export type MemoryStoreResult<T> =
   | { ok: true; value: T }
@@ -155,29 +160,53 @@ function toFull(note: NoteRow): MemoryNoteFull {
 
 /** Resolve a human-readable agent name or slug to its DB UUID. */
 export async function resolveAgentId(agentId: string): Promise<string> {
+  if (!agentId) return agentId;
+  const cleanId = agentId.trim();
+  const rawName = cleanId.replace(/^@+/, "");
   const db = getDb();
-  const byId = await db.query.agents.findFirst({ where: eq(agents.id, agentId) });
+
+  // 1. Direct ID match
+  const byId = await db.query.agents.findFirst({ where: eq(agents.id, cleanId) });
   if (byId) return byId.id;
-  const byName = await db.query.agents.findFirst({
-    where: or(eq(agents.name, agentId), eq(agents.name, `@${agentId}`), eq(agents.title, agentId)),
+
+  // 2. Query all agents to perform flexible, case-insensitive and handle-based matching
+  const allAgents = await db.query.agents.findMany();
+  const matched = allAgents.find((a) => {
+    const aName = (a.name || "").toLowerCase();
+    const aTitle = (a.title || "").toLowerCase();
+    const targetRaw = rawName.toLowerCase();
+    const targetClean = cleanId.toLowerCase();
+
+    return (
+      a.id.toLowerCase() === targetClean ||
+      aName === targetRaw ||
+      aName === targetClean ||
+      aName.replace(/^@+/, "") === targetRaw ||
+      aTitle === targetRaw ||
+      aTitle === targetClean
+    );
   });
-  if (byName) return byName.id;
-  return agentId;
+
+  if (matched) return matched.id;
+  return cleanId;
 }
 
-/** Generate a unique note ID in the Continuum format: YYYY-MM-DD-NNN */
-export async function generateNoteId(agentId: string): Promise<string> {
-  const db = getDb();
-  const now = new Date();
+/**
+ * Generate a unique note ID in the Continuum lineage format:
+ * YYYY-MM-DD-<suffix>, where the suffix is 12 hex chars from a UUID.
+ * Collision space (~2^48/day) makes table scans unnecessary; the insert retry
+ * loop in createMemoryNote covers the negligible collision case.
+ */
+export function buildNoteId(now: Date = new Date()): string {
   const yyyy = now.getUTCFullYear();
   const mm = String(now.getUTCMonth() + 1).padStart(2, "0");
   const dd = String(now.getUTCDate()).padStart(2, "0");
-  const datePrefix = `${yyyy}-${mm}-${dd}`;
-  const existing = await db.query.agentMemoryNotes.findMany({
-    where: eq(agentMemoryNotes.agentId, agentId),
-  });
-  const todaysCount = existing.filter((n) => n.id.startsWith(datePrefix)).length;
-  return `${datePrefix}-${String(todaysCount + 1).padStart(3, "0")}`;
+  const suffix = randomUUID().replace(/-/g, "").slice(0, 12);
+  return `${yyyy}-${mm}-${dd}-${suffix}`;
+}
+
+export async function generateNoteId(_agentId?: string): Promise<string> {
+  return buildNoteId();
 }
 
 export async function createMemoryNote(
@@ -190,34 +219,94 @@ export async function createMemoryNote(
     return { ok: false, error: { code: "AGENT_NOT_FOUND", message: `Agent not found: ${input.agentId}` } };
   }
 
-  const id = await generateNoteId(resolvedAgentId);
+  // Validate channelId: if non-existent or invalid, fallback to null to avoid foreign key errors
+  let validChannelId: string | null = null;
+  if (input.channelId) {
+    const channel = await db.query.channels.findFirst({ where: eq(channels.id, input.channelId) });
+    if (channel) {
+      validChannelId = channel.id;
+    }
+  }
+
   const noteTimestamp = input.noteTimestamp ?? new Date();
 
-  const [inserted] = await db
-    .insert(agentMemoryNotes)
-    .values({
-      id,
-      agentId: resolvedAgentId,
-      channelId: input.channelId ?? null,
-      noteType: input.noteType,
-      noteTimestamp,
-      importanceScore: input.importanceScore ?? 0.5,
-      confidence: input.confidence ?? "medium",
-      sourceType: input.sourceType ?? "direct_experience",
-      emotionalValence: input.emotionalValence ?? "neutral",
-      links: input.links ?? [],
-      hook: input.hook,
-      brief: input.brief,
-      observed: input.observed ?? "",
-      interpreted: input.interpreted ?? "",
-      feltSense: input.feltSense ?? "",
-      futureRelevance: input.futureRelevance ?? "",
-      uncertainty: input.uncertainty ?? "",
-      detailed: input.detailed ?? "",
-    })
-    .returning();
+  const isAutoReflection = input.noteType === "reflection" && input.sourceType === "self_reflection";
+  if (isAutoReflection) {
+    // CTX-2 provenance + control/block stripping before throttle check so dedupe sees sanitized form
+    input.hook = sanitizeReflectionField(input.hook);
+    input.brief = sanitizeReflectionField(input.brief);
+    if (input.observed) input.observed = sanitizeReflectionField(input.observed);
+    if (input.interpreted) input.interpreted = sanitizeReflectionField(input.interpreted);
+    if (input.feltSense) input.feltSense = sanitizeReflectionField(input.feltSense);
+    if (input.futureRelevance) input.futureRelevance = sanitizeReflectionField(input.futureRelevance);
+    if (input.uncertainty) input.uncertainty = sanitizeReflectionField(input.uncertainty);
+    if (input.detailed) input.detailed = sanitizeReflectionField(input.detailed);
+    const verdict = reflectionThrottle.check(resolvedAgentId, input.hook);
+    if (!verdict.allowed) {
+      return {
+        ok: false,
+        error: {
+          code: verdict.reason === "duplicate_hook" ? "REFLECTION_DUPLICATE" : "REFLECTION_THROTTLED",
+          message:
+            verdict.reason === "duplicate_hook"
+              ? "Reflection note deduplicated: a recent note has a similar hook."
+              : "Reflection note throttled: min interval between reflection writes not elapsed.",
+        },
+      };
+    }
+  }
 
-  return { ok: true, value: toPreview(inserted) };
+  // Retry up to 3 times in case of ID collision
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      const id = await generateNoteId(resolvedAgentId);
+      const [inserted] = await db
+        .insert(agentMemoryNotes)
+        .values({
+          id,
+          agentId: resolvedAgentId,
+          channelId: validChannelId,
+          noteType: input.noteType,
+          noteTimestamp,
+          importanceScore: input.importanceScore ?? 0.5,
+          confidence: input.confidence ?? "medium",
+          sourceType: input.sourceType ?? "direct_experience",
+          emotionalValence: input.emotionalValence ?? "neutral",
+          links: input.links ?? [],
+          hook: input.hook,
+          brief: input.brief,
+          observed: input.observed ?? "",
+          interpreted: input.interpreted ?? "",
+          feltSense: input.feltSense ?? "",
+          futureRelevance: input.futureRelevance ?? "",
+          uncertainty: input.uncertainty ?? "",
+          detailed: input.detailed ?? "",
+        })
+        .returning();
+
+      if (isAutoReflection) reflectionThrottle.record(resolvedAgentId, input.hook);
+
+      logMemoryUpdate({
+        noteId: id,
+        agentId: resolvedAgentId,
+        action: "create",
+        reason: "created",
+        fieldsChanged: ["noteType", "hook", "brief"],
+      });
+
+      void enforceNoteCap(resolvedAgentId).catch((err) => {
+        console.error("[MemoryStore] Note-cap enforcement failed:", (err as any)?.message || err);
+      });
+
+      return { ok: true, value: toPreview(inserted) };
+    } catch (err: any) {
+      if (attempt === 2) {
+        throw err;
+      }
+    }
+  }
+
+  return { ok: false, error: { code: "UPDATE_FAILED", message: "Failed to allocate a unique memory note ID." } };
 }
 
 export async function readMemoryNote(
@@ -282,7 +371,11 @@ export async function listMemoryPreviews(
     limit: filter.limit ?? 50,
   });
 
-  return { ok: true, value: notes.map(toPreview) };
+  const visible = filter.includeSuppressed
+    ? notes
+    : notes.filter((n) => !isSuppressionActive(n));
+
+  return { ok: true, value: visible.map(toPreview) };
 }
 
 export async function updateMemoryNote(
@@ -340,10 +433,10 @@ export async function updateMemoryNote(
     .where(eq(agentMemoryNotes.id, noteId))
     .returning();
 
-  await db.insert(memoryUpdateLog).values({
-    id: randomUUID(),
+  logMemoryUpdate({
     noteId,
-    timestamp: new Date(),
+    agentId: resolvedAgentId,
+    action: "update",
     reason: patch.reason ?? "update",
     fieldsChanged,
     previousValues,
@@ -377,10 +470,10 @@ export async function archiveMemoryNote(
     .where(eq(agentMemoryNotes.id, noteId))
     .returning();
 
-  await db.insert(memoryUpdateLog).values({
-    id: randomUUID(),
+  logMemoryUpdate({
     noteId,
-    timestamp: new Date(),
+    agentId: resolvedAgentId,
+    action: "archive",
     reason,
     fieldsChanged: ["lifecycleStatus"],
     previousValues: { lifecycleStatus: existing.lifecycleStatus },
@@ -416,12 +509,12 @@ export async function suppressMemoryNote(
     .where(eq(agentMemoryNotes.id, noteId))
     .returning();
 
-  await db.insert(memoryUpdateLog).values({
-    id: randomUUID(),
+  logMemoryUpdate({
     noteId,
-    timestamp: new Date(),
+    agentId: resolvedAgentId,
+    action: "suppress",
     reason,
-    fieldsChanged: ["lifecycleStatus"],
+    fieldsChanged: ["lifecycleStatus", "suppressUntil"],
     previousValues: { lifecycleStatus: existing.lifecycleStatus },
   });
 

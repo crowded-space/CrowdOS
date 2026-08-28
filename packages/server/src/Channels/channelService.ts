@@ -1,4 +1,4 @@
-import { eq } from "drizzle-orm";
+import { eq, isNull } from "drizzle-orm";
 import { randomUUID } from "node:crypto";
 import { getDb } from "../Shared/config/database.js";
 import { categories, channels } from "../db/schema.js";
@@ -15,6 +15,7 @@ export async function categoryExists(categoryId: string): Promise<boolean> {
 export async function listChannels() {
   const db = getDb();
   return db.query.channels.findMany({
+    where: isNull(channels.archivedAt),
     orderBy: (table, { asc }) => [asc(table.position)],
   });
 }

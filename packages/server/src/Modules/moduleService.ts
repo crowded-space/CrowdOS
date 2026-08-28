@@ -1,7 +1,10 @@
 import { eq } from "drizzle-orm";
 import { randomUUID } from "node:crypto";
 import { getDb } from "../Shared/config/database.js";
-import { compileGoogleEndpoint } from "../Shared/core/modelRouter.js";
+import { compileGoogleEndpoint } from "../Shared/core/googleModelHelpers.js";
+import { encrypt, decrypt } from "../Shared/core/secretBox.js";
+import { runtimeGate } from "../runtime/runtimeGate.js";
+import { skillsGate } from "../Skills/skillsGate.js";
 import {
   agents,
   modelModules,
@@ -199,7 +202,7 @@ export async function createModelModule(body: CreateModelModuleBody) {
   const [res] = await getDb().insert(modelModules).values({
     id,
     ...body,
-    apiKey: body.apiKey ?? null,
+    apiKey: body.apiKey == null ? null : encrypt(body.apiKey),
     endpointUrl: body.endpointUrl ?? null,
     stopSequences: body.stopSequences ?? [],
     enableCompression: body.enableCompression ?? true
@@ -207,20 +210,25 @@ export async function createModelModule(body: CreateModelModuleBody) {
   return res;
 }
 export async function updateModelModule(id: string, body: UpdateModelModuleBody) {
+  const updates: UpdateModelModuleBody = { ...body };
+  if (updates.apiKey !== undefined) updates.apiKey = updates.apiKey == null ? null : encrypt(updates.apiKey);
   const [res] = await getDb()
     .update(modelModules)
-    .set({ ...body, updatedAt: new Date() })
+    .set({ ...updates, updatedAt: new Date() })
     .where(eq(modelModules.id, id))
     .returning();
+  runtimeGate.invalidateModelModuleCache(id);
   return res ?? null;
 }
 export async function deleteModelModule(id: string) {
-  return getDb().delete(modelModules).where(eq(modelModules.id, id)).returning();
+  const rows = await getDb().delete(modelModules).where(eq(modelModules.id, id)).returning();
+  runtimeGate.invalidateModelModuleCache(id);
+  return rows;
 }
 export async function testModelModule(id: string) {
   const [module] = await getDb().select().from(modelModules).where(eq(modelModules.id, id)).limit(1);
   if (!module) return null;
-  return testConnectionHelper(module.provider, module.modelName, module.apiKey, module.endpointUrl);
+  return testConnectionHelper(module.provider, module.modelName, module.apiKey ? decrypt(module.apiKey) : module.apiKey, module.endpointUrl);
 }
 
 // --- Instruction Modules ---
@@ -268,6 +276,7 @@ export async function createToolkitModule(body: CreateToolkitModuleBody) {
     ...body,
     tools: body.tools ?? []
   }).returning();
+  skillsGate.invalidateAgentCaches();
   return res;
 }
 export async function updateToolkitModule(id: string, body: UpdateToolkitModuleBody) {
@@ -276,10 +285,13 @@ export async function updateToolkitModule(id: string, body: UpdateToolkitModuleB
     .set({ ...body, updatedAt: new Date() })
     .where(eq(toolkitModules.id, id))
     .returning();
+  skillsGate.invalidateAgentCaches();
   return res ?? null;
 }
 export async function deleteToolkitModule(id: string) {
-  return getDb().delete(toolkitModules).where(eq(toolkitModules.id, id)).returning();
+  const rows = await getDb().delete(toolkitModules).where(eq(toolkitModules.id, id)).returning();
+  skillsGate.invalidateAgentCaches();
+  return rows;
 }
 
 // --- Constraints Modules ---

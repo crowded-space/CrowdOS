@@ -10,18 +10,26 @@
     "packages/pi-core"
   ],
   "scripts": {
-    "dev": "run-p dev:server dev:client",
+    "dev": "run-p dev:api dev:worker dev:client",
+    "dev:api": "npm run dev --workspace @community-agent/server",
+    "dev:worker": "npm run worker --workspace @community-agent/server",
     "dev:server": "npm run dev --workspace @community-agent/server",
     "dev:client": "npm run dev --workspace @community-agent/client",
     "build": "npm run build --workspaces --if-present",
     "test": "npm run test --workspaces --if-present",
     "test:e2e": "playwright test",
     "lint": "npm run lint --workspaces --if-present",
+    "lint:gates": "npm run lint:gates --workspace @community-agent/server",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "db:push": "npm run db:push --workspace @community-agent/server",
     "db:seed": "npm run db:seed --workspace @community-agent/server",
     "db:check": "npm run db:check --workspace @community-agent/server",
-    "db:bootstrap": "npm run db:push && npm run db:seed"
+    "db:bootstrap": "npm run db:push && npm run db:seed",
+    "load:concurrent-sends": "k6 run load/k6/concurrent-sends.js",
+    "load:concurrent-swarms": "k6 run load/k6/concurrent-swarms.js",
+    "load:soak": "k6 run load/k6/soak.js",
+    "load:soak:nightly": "k6 run -e SOAK_DURATION=8h load/k6/soak.js",
+    "load:harness": "node load/harness.mjs"
   },
   "keywords": [
     "ai",

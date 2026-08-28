@@ -16,7 +16,6 @@ interface ListenerRegistration {
 export class EventBroker {
   private readonly emitter = new EventEmitter();
   private readonly listeners = new Map<string, ListenerRegistration>();
-  private readonly recentEventsByChannel = new Map<string, BrokerEvent[]>();
 
   emit<TType extends BrokerEventType>(
     type: TType,
@@ -30,15 +29,6 @@ export class EventBroker {
       payload,
       timestamp: new Date(),
     };
-
-    if (event.channelId) {
-      const recentEvents = this.recentEventsByChannel.get(event.channelId) ?? [];
-      recentEvents.push(event);
-      if (recentEvents.length > 50) {
-        recentEvents.shift();
-      }
-      this.recentEventsByChannel.set(event.channelId, recentEvents);
-    }
 
     this.emitter.emit(type, event);
     this.emitter.emit("*", event);
@@ -81,18 +71,5 @@ export class EventBroker {
 
     this.emitter.off(registration.eventType ?? "*", registration.handler);
     this.listeners.delete(listenerId);
-  }
-
-  removeChannelListeners(channelId: string): void {
-    for (const [listenerId, registration] of this.listeners.entries()) {
-      if (registration.channelId === channelId) {
-        this.off(listenerId);
-      }
-    }
-  }
-
-  getRecentEvents(channelId: string, limit = 20): BrokerEvent[] {
-    const events = this.recentEventsByChannel.get(channelId) ?? [];
-    return events.slice(-limit);
   }
 }

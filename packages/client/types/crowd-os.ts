@@ -203,6 +203,16 @@ export interface Tool {
   usageCount: number;
 }
 
+export type ComposerMode = 'auto' | 'chat' | 'agentic' | 'coding' | 'research'
+
+export const COMPOSER_MODE_META: Record<ComposerMode, { label: string; hint: string }> = {
+  auto: { label: 'Auto', hint: 'Router decides' },
+  chat: { label: 'Chat', hint: 'Fast conversational' },
+  agentic: { label: 'Agentic', hint: 'Tool-capable agent' },
+  coding: { label: 'Coding', hint: 'Code + Pi tools' },
+  research: { label: 'Research', hint: 'Deep research' },
+};
+
 export interface Role {
   id: string;
   name: string;

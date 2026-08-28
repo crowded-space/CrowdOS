@@ -2,12 +2,17 @@ import type { FastifyInstance } from "fastify";
 import {
   getMessagesParamsSchema,
   getMessagesQuerySchema,
-  getChannelMessages
+  getChannelMessagesPage,
+  parseBeforeCursor,
+  MalformedCursorError
 } from "../Messages/messageGate.js";
 import type { GetMessagesParams, GetMessagesQuery } from "../Messages/messageGate.js";
 
 export async function messageRoutes(app: FastifyInstance) {
-  // GET /api/channels/:channelId/messages - Retrieve message logs for a channel
+  // GET /api/channels/:channelId/messages
+  // PERF-5 keyset pagination: cursor = (timestamp, seq) pair, transparent format `before=<ISO>;<seq>`.
+  // Returns newest page first (ORDER BY timestamp DESC, seq DESC) + cursor for the next-older page.
+  // Legacy rollback: absent params return the latest 50; ?limit=N is honored (clamped 1..200).
   app.get<{ Params: GetMessagesParams; Querystring: GetMessagesQuery }>(
     "/api/channels/:channelId/messages",
     {
@@ -16,10 +21,24 @@ export async function messageRoutes(app: FastifyInstance) {
         querystring: getMessagesQuerySchema,
       },
     },
-    async (request) => {
+    async (request, reply) => {
       const { channelId } = request.params;
-      const includeMonologue = request.query.includeMonologue ?? false;
-      return getChannelMessages(channelId, includeMonologue);
+      const { includeMonologue, before, limit } = request.query;
+      try {
+        return await getChannelMessagesPage(channelId, includeMonologue ?? false, {
+          limit,
+          before: parseBeforeCursor(before)
+        });
+      } catch (err) {
+        if (err instanceof MalformedCursorError) {
+          return reply.status(400).send({
+            statusCode: 400,
+            error: "Bad Request",
+            message: err.message
+          });
+        }
+        throw err;
+      }
     }
   );
 }

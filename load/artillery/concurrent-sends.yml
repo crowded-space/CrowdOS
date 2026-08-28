@@ -1,0 +1,40 @@
+# SCL-1: Artillery — 100 concurrent sends (alternative to k6)
+# Run: npx artillery run load/artillery/concurrent-sends.yml
+config:
+  target: "{{ $env.BASE_URL || 'http://localhost:3001' }}"
+  phases:
+    - duration: 30
+      arrivalRate: 10
+      name: ramp to 50
+    - duration: 30
+      arrivalRate: 20
+      name: ramp to 100
+    - duration: 60
+      arrivalRate: 20
+      name: sustain 100
+  plugins:
+    metrics-by-endpoint: {}
+  processor: "./processor.js"
+  ensure:
+    maxErrorRate: 1
+    p95: 800
+
+scenarios:
+  - name: concurrent sends
+    weight: 100
+    flow:
+      - get:
+          url: "/health"
+          expect:
+            - statusCode: 200
+      - get:
+          url: "/api/channels/load-test-channel/messages?limit=20"
+          headers:
+            Authorization: "Bearer {{ $env.API_KEY || $env.AUTH_TOKEN || '' }}"
+      - get:
+          url: "/api/search?q=load&limit=10"
+          headers:
+            Authorization: "Bearer {{ $env.API_KEY || $env.AUTH_TOKEN || '' }}"
+          expect:
+            - statusCode: [200, 401, 403]
+      - think: 0.5

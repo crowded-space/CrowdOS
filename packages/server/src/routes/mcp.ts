@@ -1,6 +1,7 @@
 ﻿import type { FastifyInstance } from "fastify";
 import { toolsGate } from "../tools/toolsGate.js";
 import { globalBroker } from "../Shared/sockets/registerSocketServer.js";
+import { encryptRecordValues } from "../Shared/core/secretBox.js";
 
 export async function mcpRoutes(app: FastifyInstance) {
   // GET /api/mcp/servers
@@ -13,7 +14,7 @@ export async function mcpRoutes(app: FastifyInstance) {
     "/api/mcp/servers",
     async (request, reply) => {
       try {
-        await toolsGate.registerMcpServer(request.body);
+        await toolsGate.registerMcpServer({ ...request.body, envVars: encryptRecordValues(request.body.envVars) });
         globalBroker?.emit("workspace:sync", {});
         return reply.status(201).send({ success: true, server: toolsGate.getMcpStatus(request.body.id) });
       } catch (err: any) {
