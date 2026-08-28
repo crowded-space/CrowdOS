@@ -410,6 +410,72 @@ Short notes:
 - 2026-05-25: Completed Unified Runtime Convergence Layer (Phases 1-6) linking shared contracts, canonicalizing socket events, implementing periodic state snapshot reconciliation, achieving full constraints/capabilities module parity across UI modals, and integrating Agent Lifecycle heartbeats.
 - 2026-05-25: Completed Unified Runtime Convergence Layer (Phases 7-10) wiring Swarm Provider health and failover dashboard, reactive VFS auto-sync, Parliament multi-agent consensus voting, and strike warning alerts.
 
+---
+
+## Remediation Spec — Phases 0–7 (AUDIT_REPORT_2026-08-26 → REMEDIATION_SPEC v1.0)
+
+Reconciled with `execution-plan/` — this board is now the single source of truth per DOC-2. Historical `execution-plan/progress/*.md` archived.
+
+| Phase | ID | Area | Status | Progress | Latest Note |
+|---|---|---|---|---:|---|
+| 0 | CI-1 | CI pipeline | `done` | 100% | `.github/workflows/ci.yml` + `nightly.yml` with postgres:16 + redis:7 services, typecheck→lint→gates→migrate→seed→vitest→build + Playwright smoke (deferred) |
+| 0 | OBS-1 | Metrics & structured logs | `done` | 100% | `GET /metrics` (admin gated) + `perfMetrics` p50/p95 + `structuredLog` JSON, no `[perf]` prose |
+| 0 | EVT-0 | Event envelope preservation | `done` | 100% | `EventEnvelope {eventId,seq,timestamp}` on socket + replay `seq` via `/api/events/recent` |
+| 0 | RUN-0 | runs table v0 | `done` | 100% | `runs` + `runs_compensation` + `run.status_changed` per hop, metadata.runId on messages |
+| 0 | HYG-1 | Repo hygiene | `done` | 100% | Zips removed (git rm), `_archive/` ignored, probe files deleted, 522 files committed clean-clone verified |
+| 0 | TST-2 | Boundary test + linter | `done` | 100% | Dynamic `check-gates.mjs` (18 domains), vacuous `jvfrom` test removed, extra `runtime:types` allowed |
+| 1 | SEC-1 | Key-based auth | `done` | 100% | `api_keys` (scrypt hash, roles admin/operator/viewer), `AUTH_STRICT=true` default-deny, `docker-compose.yml` now `true` |
+| 1 | SEC-2 | Socket trust & room isolation | `done` | 100% | Handshake verifies key, `canJoinChannelRoom` existence check, `workspace:default` mirror removed, disconnect leaves rooms (no cancel) |
+| 1 | SEC-3 | Tool gateway hardening | `done` | 100% | `validatePath` realpath+anchored, deny pipe-to-shell/interpreter one-liners, `execFile` + process-group kill, env allowlist, кодинг sandbox rooted |
+| 1 | SEC-4 | Secrets management | `done` | 100% | `secretBox` aes-256-gcm `enc:v1:` envelope, `CREDENTIALS_ENCRYPTION_KEY` (hex/base64/passphrase), redaction lint, `WORKSPACE_ADMIN_TOKEN` gate |
+| 1 | SEC-5 | Rate limiting | `done` | 100% | `@fastify/rate-limit` per-key + strict bucket on `execute-test`/`inspect-prompt` + socket token bucket |
+| 1 | SEC-6 | MCP client hygiene | `done` | 100% | `defaultDangerLevel`, `requiredEnvVars` allowlist, pending reject on exit, Content-Length framing |
+| 2 | RUN-1 | Run state machine | `done` | 100% | 17 states (created→completed/failed/cancelled, orphaned→resumable), terminal immutable, `run.status_changed` per hop |
+| 2 | CAN-1 | Cancellation & timeout | `done` | 100% | `activeRuns` array-safe, `AbortSignal` to `AgentSession.prompt`/`PiToolBridge`/`provider fetch` (10s/120s), `ProviderTimeoutError` typed |
+| 2 | DB-1 | Migration reconciliation | `done` | 100% | Baseline `0000_baseline.sql` → `0009_phase7`, `bootstrap.ts` seed-only (`LEGACY_BOOTSTRAP` flag), CI migrates empty DB |
+| 2 | DB-2 | Transactional writes & sequences | `done` | 100% | `withTransaction` for message+durable_event, `channel_sequences` `FOR UPDATE`, ULID ids, concurrency test 20 parallel no 23505 |
+| 2 | DB-3 | Stop destroying evidence | `done` | 100% | `archived_at` + 30d sweeper (agents/channels/task_files/artifacts), librarian degraded marker not fake summary |
+| 2 | DB-5 | Structured tool-call records | `done` | 100% | `messages.tool_calls jsonb` + `metadata.runId`, fallback regex for legacy |
+| 2 | MEM-1 | Memory lifecycle | `done` | 100% | `suppress_until` sweep, per-agent cap 500, counter-row IDs, `memory_update_log`, reflection throttle Jaccard 80% |
+| 2 | MEM-2 | discard_memory_from_context | `done` | 100% | Soft-suppress with `MEM_DISCARD_TTL_MS` 1.8s, session discards list |
+| 2 | CTX-1 | Event surface truth-out | `done` | 100% | `check-events.mjs` : 32 declared, 38 emitted, 44 handlers, 0 violations (swarm whitelist); duplicate `runtime-events.ts` kept as shared shim |
+| 2 | RT-5 | Runtime taxonomy cleanup | `done` | 100% | `observer`/`orchestrator` removed, `LoopArbiter` canonical `Shared/core/LoopArbiter.ts` |
+| 3 | PERF-1 | Parallel mention dispatch | `done` | 100% | `runBoundedBatch` `MAX_PARALLEL_AGENTS=4` (env→1 serial), `Promise.allSettled` per agent |
+| 3 | PERF-2 | Bounded hot-path queries | `done` | 100% | Memory SQL window `LIMIT 60`, shared history fetch, `agentRosterCache` 30s TTL, VFS batched stat + LRU |
+| 3 | PERF-3 | Per-iteration budget | `done` | 100% | `contextBudget` per-iter trim, preview iter 1 only, tool-schema tokens counted |
+| 3 | PERF-4 | Accounting & librarian economy | `done` | 100% | Delta-index `last_seq`, `workspace_settings.budget_used` O(1) + daily `BUDGET_RECONCILE_MS` job |
+| 3 | PERF-5 | Pagination | `done` | 100% | Keyset cursor `(timestamp,seq) LIMIT 50`, virtualized list, `perf-pagination.spec.ts` 10k latency |
+| 3 | PERF-6 | Stream parity | `done` | 100% | `streamCoalescer` 50ms, Pi deltas through `streamChunk` |
+| 3 | PERF-7 | Indexes | `done` | 100% | `0005_perf_indexes.sql` + `token_usage_log_run_idx` |
+| 3 | PERF-8 | Tool parallelism classifier | `done` | 100% | `TOOL_RWP` static read vs write, bounded pool 4 |
+| 3 | PERF-9 | HTTP keep-alive | `done` | 100% | Undici `httpAgent` keepAlive pipelining |
+| 3 | MODEL-1 | Model routing economy | `done` | 100% | `googleModelHelpers` + `modelRouting` task-class tiers, `cost_per_1k` on `model_modules` |
+| 4 | QUE-1 | Infrastructure | `done` | 100% | `docker-compose.yml` postgres:16 + redis:7 + `api` + `worker` |
+| 4 | QUE-2 | Queue domain | `done` | 100% | `Queue/` (`runs`/`maintenance`/`scheduler`), `QUEUE_MODE=inline|bullmq` |
+| 4 | QUE-3 | Job semantics | `done` | 100% | `jobId=channel:agent:messageId`, 3× backoff 1m/5m/25m, 15m lease, 7d DLQ, `SIGTERM` drain |
+| 4 | RES-1 | Resume from checkpoint | `done` | 100% | `runs.checkpoint` watermark + `runs_compensation` inverse ops, `run:resume` + sweeper `orphaned→resumable` |
+| 4 | CFG-1 | Config consolidation | `done` | 100% | `env.ts` zod full matrix + `initConfig` fail-fast + `generate-env-doc.mjs` |
+| 5 | RT-1 | Research runtime | `done` | 100% | `SearchProviders` Brave/Tavily/Serper + `ResearchRuntime` evidence bundle + cited synthesis |
+| 5 | SW-1 | Swarm v1 | `done` | 100% | `Swarm/` DAG `swarm_tasks` + leases + aggregator + verifier, `SWARM_V1` flag |
+| 5 | SW-2 | Delegation contracts | `done` | 100% | `delegations` depth≤2 + visited-set, `delegation:start/completed` |
+| 5 | APR-1 | Approval engine | `done` | 100% | `approval_requests` + `WAITING_FOR_APPROVAL` pause + TTL + reusable scope-hash |
+| 5 | CTX-2 | Prompt integrity | `done` | 100% | `<untrusted>` wrapping + `reflectionSanitizer` + precedence doc |
+| 5 | RT-4 | Honest compression | `done` | 100% | Cheap-model summary via `HistoryCompressionMiddleware` |
+| 5 | TOOL-1 | Honest tools | `done` | 100% | `query_database` real read-only SQL + `system_scheduler` BullMQ delayed/repeatable |
+| 5 | ART-1 | Artifact service | `done` | 100% | `Artifacts/` `diff`/`report`/`citations` + retention + `artifact.created` events |
+| 6 | UX-1 | Cancel | `done` | 100% | Stop button → `user:cancel` + `run.status_changed` cancelled |
+| 6 | UX-2 | Approval cards | `done` | 100% | `approval-card.tsx` grant/deny/scope |
+| 6 | UX-3 | Diff review | `done` | 100% | `diff-viewer.tsx` side-by-side + apply/revert via VFS |
+| 6 | UX-4 | Edit/regenerate/retry | `done` | 100% | Hover actions → `run:resume` lineage |
+| 6 | UX-5 | Background continuity | `done` | 100% | `channel:join` + `afterSeq` cursor + reconnect digest + Notification + mute map |
+| 6 | UX-6 | Delegation timeline | `done` | 100% | Typed shared contracts + `delegation-message.tsx` |
+| 6 | UX-7 | Honesty pass | `done` | 100% | Runtime badge + ledger-backed `right-sidebar.tsx` (`/api/observability/cost/dashboard`), `DEMO_FALLBACK` gate |
+| 6 | UX-8 | Store decomposition + pagination | `done` | 100% | `api/client.ts` + `messagePagination.ts` + `modeStore`, virtualized pagination |
+| 7 | SCL-1 | Load suite | `done` | 100% | `load/k6` 100 sends / 10 swarms / soak 8h + `load/harness.mjs` + `nightly.yml` |
+| 7 | SCL-2 | Semantic memory | `done` | 100% | `Memories/embeddings.ts` pgvector hybrid + `EMBEDDING_ENABLED` + `0009` vector |
+| 7 | SCL-3 | OTel + cost ledger | `done` | 100% | `Observability/` `assemble`/`llm`/`tool`/`persist` spans + `cost_ledger_per_run` view |
+| 7 | TST-5 | Failure-mode automation | `done` | 100% | `failureModes.test.ts` Goal §25 (20 scenarios) + `nightly.yml` |
+
 
 
 

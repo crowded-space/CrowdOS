@@ -9,6 +9,25 @@ export default function RightSidebar() {
   const { agents, messages, activeChannelId, activeWorkspaceId, workspaces, openAgentProfileModal, rightSidebarOpen } = useCrowdOSStore();
   const { totalTokensConsumed } = useCrowdOSStore();
   const [telemetryTab, setTelemetryTab] = useState<'channel' | 'global'>('global');
+  const [ledger, setLedger] = useState<{ totalTokens: number; totalCostUsd: number } | null>(null);
+
+  // UX-7: fetch real ledger aggregates from observability cost dashboard (SCL-3)
+  // When available, global telemetry uses ledger totals instead of local estimates.
+  // Fallback to DEMO_FALLBACK=false shows honest outage (no fake 421035 baseline).
+  React.useEffect(() => {
+    let cancelled = false;
+    async function fetchLedger() {
+      try {
+        const res = await fetch('/api/observability/cost/dashboard');
+        if (!res.ok) return;
+        const data = await res.json() as { totalTokens?: number; totalCostUsd?: number };
+        if (!cancelled && typeof data.totalTokens === 'number') setLedger({ totalTokens: data.totalTokens, totalCostUsd: data.totalCostUsd ?? 0 });
+      } catch {}
+    }
+    fetchLedger();
+    const id = setInterval(fetchLedger, 30000);
+    return () => { cancelled = true; clearInterval(id); };
+  }, []);
 
   // Dynamic telemetry metrics
   const { calculatedTokens, calculatedBudgetSpent, activeCount, totalAgentsCount, currentChannelsCount } = useMemo(() => {
@@ -20,7 +39,7 @@ export default function RightSidebar() {
     let cost = 0;
 
     relevantMessages.forEach(m => {
-      // UX-7: Honest telemetry pass - use actual metadata.usage if available, otherwise calculate from delegationInfo or fallback to 0
+      // UX-7: Honest telemetry — use actual metadata.usage if available, otherwise 0 (no fake length*1.5)
       const metadataUsage = m.metadata?.usage;
       const textTokens = (typeof metadataUsage?.totalTokens === 'number')
         ? metadataUsage.totalTokens
@@ -55,7 +74,16 @@ export default function RightSidebar() {
       ).length;
     }
 
-    // UX-7: Real token calculation without fake baseline numbers
+    // UX-7: ledger-backed global totals when available; else honest local sum (no 421035 fake baseline)
+    if (telemetryTab === 'global' && ledger) {
+      return {
+        calculatedTokens: ledger.totalTokens,
+        calculatedBudgetSpent: ledger.totalCostUsd,
+        activeCount: activeAgs,
+        totalAgentsCount: totalAgs || agents.length,
+        currentChannelsCount: channelsCount,
+      };
+    }
     const baseTokens = telemetryTab === 'global' ? (totalTokensConsumed || 0) : 0;
     const baseCost = (baseTokens + tokens) * 0.000003;
 
@@ -66,7 +94,7 @@ export default function RightSidebar() {
       totalAgentsCount: totalAgs || agents.length,
       currentChannelsCount: telemetryTab === 'global' ? channelsCount : (activeChannelId ? 1 : 0)
     };
-  }, [messages, telemetryTab, activeChannelId, agents, workspaces, activeWorkspaceId, totalTokensConsumed]);
+  }, [messages, telemetryTab, activeChannelId, agents, workspaces, activeWorkspaceId, totalTokensConsumed, ledger]);
 
 
   // Filter agents into corporate tiers

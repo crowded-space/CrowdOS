@@ -289,25 +289,24 @@ The platform prioritizes flexibility over lock-in.
 
 # Technical Direction
 
-Current architectural direction:
+Current architectural direction (implemented through Remediation Spec Phases 0–7):
 
 ## Frontend
 
-* React
-* TypeScript
-* TailwindCSS
+* React 19 + TypeScript + TailwindCSS v4 + Zustand + Socket.io
+* Workspace shell with 3-panel layout + mobile drawers, diff viewer, approval cards, delegation timeline, virtualized paginated history, omni-search
 
 ## Backend
 
-* Node.js
-* TypeScript
-* Event-driven architecture
+* Node.js + Fastify 5 + TypeScript + Drizzle ORM + Postgres 16
+* EventBroker with durable_events (ordered, replayable, idempotent) + run state machine (17 states) + context pipeline (10 middlewares, parallel lane)
+* 4 provider adapters (OpenAI/Anthropic/Google/Ollama/Custom) with real token accounting + model routing (MODEL-1)
 
 ## Infrastructure
 
-* PostgreSQL
-* WebSockets
-* Redis / BullMQ
+* PostgreSQL 16 (primary) + Redis 7 + BullMQ 6 (durable execution since Phase 4 — `QUEUE_MODE=bullmq` with `api` + `worker` processes, repeatable maintenance jobs, 3× exponential backoff, 7d DLQ, graceful drain)
+* WebSockets (Socket.io) with per-socket token bucket rate limiting + room isolation
+* Docker Compose with `api` + `worker` + health checks (see `docker-compose.yml`)
 
 ---
 
@@ -328,16 +327,21 @@ The platform intentionally avoids premature infrastructure complexity during ear
 
 # Current Status
 
-CrowdOS is currently in an early prototype and architecture exploration phase.
+CrowdOS has completed Remediation Spec Phases 0–7 (46 days, see `REMEDIATION_SPEC.md`). Durable, observable, and resumable execution is now real — not prototype.
 
-The project is actively evolving around:
+| Phase | What shipped | Flag |
+|---|---|---|
+| 0 | CI, `/metrics`, event envelope (seq), `runs` ledger, gate linter | `METRICS_ENABLED` |
+| 1 | Key-based auth (`api_keys`, `AUTH_STRICT=true`), socket trust, Guard hardening (realpath, process-group kill), encrypted secrets, rate limiting, MCP hygiene | `AUTH_STRICT`, `LEGACY_GUARD` |
+| 2 | Run state machine (17 states), cancellation (AbortSignal array-safe), transactional writes (ULID + `channel_sequences`), structured `tool_calls` jsonb, memory lifecycle caps | — |
+| 3 | Parallel dispatch (`MAX_PARALLEL_AGENTS=4`), bounded queries, per-iteration budget, delta librarian, keyset pagination, stream coalescing, HNSW-ready indexes, tool R/W classifier, Undici keep-alive, model routing (`MODEL_ROUTE=routed`) | `PIPELINE_PARALLEL` etc. |
+| 4 | Redis + BullMQ (`QUEUE_MODE=bullmq`), `runs`/`maintenance`/`scheduler` queues, idempotency `channel:agent:message`, 15m lease + heartbeat, resume from checkpoint + compensation journal | `QUEUE_MODE` |
+| 5 | Research (Brave/Tavily/Serper + evidence bundle), Swarm v1 (DAG `swarm_tasks` + aggregator + verifier), Approvals (`WAITING_FOR_APPROVAL` + TTL + reusable grants), prompt integrity (`<untrusted>`), honest compression, Artifact service (`diff`/`report`/`citations`) | `RESEARCH_V1`, `SWARM_V1`, `APPROVALS_ENABLED` |
+| 6 | Cancel button, approval cards, diff viewer, edit/regenerate/retry, background continuity (reconnect digest + notifications), delegation timeline, honesty pass (`DEMO_FALLBACK`), store decomposition + pagination | — |
+| 7 | Load suite (k6 100 sends / 10 swarms / 8h soak), pgvector hybrid memory (`EMBEDDING_ENABLED`), OTel traces (`assemble`/`llm`/`tool`/`persist` keyed `runId` + cost ledger `token_usage_log×cost_per_1k`) | `OTEL_ENABLED`, `EMBEDDING_ENABLED` |
 
-* orchestration systems
-* governance architecture
-* delegation models
-* observability UX
-* social interaction patterns
-* agent ecosystem design
+**Roadmap vs shipped:**
+- `Raven` (Lv0-1 strategic), `Crow` (Lv2-3 operational), `Conspiracy` (high-context reasoning group), `Murder` (distributed swarm) were aspirational names in early docs — **Swarm v1 now ships the Murder primitive behind `SWARM_V1` (Phase 5)**; Raven/Crow as branded Lv0/Lv1 personas remain **roadmap, not separate agent species** — the generic `Agents` + `instruction_modules` + `model_modules` system is the shipped abstraction. See `Goal.md` §32 target architecture for the honest model.
 
 ---
 

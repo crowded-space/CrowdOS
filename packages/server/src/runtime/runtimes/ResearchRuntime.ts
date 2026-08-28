@@ -479,10 +479,18 @@ export class ResearchRuntime extends BaseRuntime {
         let results: SearchResult[] = []
         try {
           if (queueMode === "bullmq") {
-            // In bullmq mode sub-runs would be jobs; for RT-1 we execute inline but
-            // note the mode so future work can swap to durable enqueue.
-            // Example durable path (commented for traceability):
-            // await queueGate.enqueueRun({ channelId: packet.channelId, agentId: packet.agentId, messageId: `research-sub-${idx}-${Date.now()}`, userInput: subQ, workspaceId: packet.workspaceId })
+            // RT-1 / QUE: when bullmq is active, optionally enqueue sub-run trace
+            try {
+              const { queueGate } = await import("../../Queue/queueGate.js");
+              await queueGate.enqueueRun({
+                runId: childId ?? undefined,
+                channelId: packet.channelId,
+                agentId: packet.agentId,
+                messageId: `res-sub-${idx}-${Date.now()}`,
+                userInput: subQ,
+                workspaceId: packet.workspaceId,
+              });
+            } catch {}
           }
           const searchRes = await searchProviderGate.search(subQ, { limit: 8, signal: packet.abortSignal, timeoutMs: 6000 })
           results = [...searchRes]

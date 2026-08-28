@@ -59,10 +59,10 @@
 
 | Identifier | Kind | Description |
 |---|---|---|
-| RuntimeEvents | const object | Event string constants (24 events) |
+| RuntimeEvents | const object | Event string constants (32 events via Phase 7) |
 | RuntimeEventType | type alias | Union of all event strings |
 
-Events: AGENT_SPAWNED, AGENT_DESPAWNED, AGENT_PAUSED, AGENT_RESUMED, AGENT_LIFECYCLE, RUNTIME_STATE, RUNTIME_SNAPSHOT, RUNTIME_OVERRIDE, WORKSPACE_PATCHED, WORKSPACE_SNAPSHOT, SANDBOX_UPDATED, SANDBOX_STREAM, SANDBOX_PROCESS, SWARM_CREATED, SWARM_UPDATED, SWARM_TERMINATED, ESCALATION_CREATED, ESCALATION_UPDATED, ESCALATION_RESOLVED
+Events: AGENT_SPAWNED, AGENT_DESPAWNED, AGENT_PAUSED, AGENT_RESUMED, AGENT_LIFECYCLE, RUNTIME_STATE, RUNTIME_SNAPSHOT, RUNTIME_OVERRIDE, WORKSPACE_PATCHED, WORKSPACE_SNAPSHOT, SANDBOX_UPDATED, SANDBOX_STREAM, SANDBOX_PROCESS, SWARM_CREATED, SWARM_UPDATED, SWARM_TERMINATED, ESCALATION_CREATED, ESCALATION_UPDATED, ESCALATION_RESOLVED, BUDGET_WARNING, BUDGET_EXCEEDED, RUN_STATUS_CHANGED, RUN_QUEUED, RUN_COMPENSATIONS, INDEX_DEGRADED, SCHEDULED_TRIGGERED, APPROVAL_REQUESTED, APPROVAL_DECIDED, DELEGATION_START, DELEGATION_COMPLETED, ARTIFACT_CREATED, DIFF_CREATED, ARTIFACT_UPDATED
 
 ---
 
@@ -204,7 +204,7 @@ Events: AGENT_SPAWNED, AGENT_DESPAWNED, AGENT_PAUSED, AGENT_RESUMED, AGENT_LIFEC
 | TokenBudget | interface | globalSoftCap + perProviderBudget |
 | TokenUsageLog | interface | id, agentId, channelId, modelProfileId, promptTokens, completionTokens, totalTokens, timestamp |
 
-### 2.2 Database Schema (server/src/db/schema.ts) — 28 tables + relations
+### 2.2 Database Schema (server/src/db/schema.ts) — 38 tables + relations (Phase 7)
 
 | Table | Key Columns |
 |---|---|
@@ -227,15 +227,27 @@ Events: AGENT_SPAWNED, AGENT_DESPAWNED, AGENT_PAUSED, AGENT_RESUMED, AGENT_LIFEC
 | spawn_requests | id (pk), requestedBy (fk), channelId (fk), workerTemplateId (fk), supervisorTemplateId (fk), failurePolicy, maxRetries, subtasks (jsonb[]), status |
 | task_files | id (pk), spawnRequestId (fk), subtaskId, title, content, workerAgentId (fk), supervisorAgentId (fk), status |
 | scheduled_tasks | id (pk), cronExpression, channelId (fk), targetAgentId (fk), taskPayload (jsonb), isActive, nextRun |
-| token_usage_log | id (pk), agentId (fk), channelId (fk), modelModuleId (fk), promptTokens, completionTokens, totalTokens |
-| channel_index | channelId (pk/fk), channelPath, topicSummary, lastIndexedAt, msgCountSinceIndex |
+| token_usage_log | id (pk), agentId (fk), channelId (fk), modelModuleId (fk), `runId` (fk runs.id, nullable, Phase 7 cost ledger), promptTokens, completionTokens, totalTokens, timestamp + indexes `token_usage_log_timestamp_idx`, `token_usage_log_run_idx` |
+| channel_index | channelId (pk/fk), channelPath, topicSummary, lastIndexedAt, `lastSeq` (int, Phase 3 delta), `status` (ok/degraded), `lastError`, msgCountSinceIndex |
 | compressed_summaries | id (pk), channelId (fk), summary, coversUpToSeq |
 | workspace_settings | id (pk), globalSoftCap, perProviderBudget (jsonb) |
 | workspaces | id (pk), name, ownerId, status, rootPath, permissions (jsonb), constraints (jsonb), metadata (jsonb) |
 | workspace_nodes | id (pk), workspaceId (fk), path (unique per ws), name, type, mimeType, size, checksum, createdBy, updatedBy, metadata (jsonb) |
 | workspace_events | id (pk), workspaceId (fk), type, agentId, path, payload (jsonb) |
 | workspace_agents | id (pk), workspaceId (fk), agentId (fk), scope, permissions (jsonb) |
-| artifacts | id (pk), workspaceId (fk), producerAgent, artifactType, path, semanticTags (text[]), metadata (jsonb) |
+| artifacts | id (pk), workspaceId (fk), producerAgent, artifactType (`reasoning_trace`..`diff`/`report`/`citations` Phase 5), path, semanticTags (text[]), metadata (jsonb), `runId` (fk runs.id), `beforeHash`, `afterHash`, `patch`, `contentRef` |
+| runs | id (uuid pk), parent_run_id (fk runs.id), agent_id, channel_id, workspace_id, runtime_type, status (17 states: created→completed/failed/cancelled etc), error_code, checkpoint_seq, checkpoint (jsonb watermark+completedCallIds), createdAt/updatedAt |
+| runs_compensation | id (pk), run_id (fk runs.id), seq, tool_name, target_path, inverse_op (jsonb delete/restore), createdAt |
+| api_keys | id (uuid pk), key_hash (unique, scrypt), label, role (admin/operator/viewer), createdAt, lastUsedAt, revokedAt |
+| durable_events | seq (bigserial pk), eventId, type, channelId, agentId, payload (jsonb), createdAt + index `durable_events_channel_seq_idx` |
+| channel_sequences | channel_id (pk/fk channels.id), last_seq (bigint), updatedAt |
+| swarm_tasks | id (pk), run_id (fk runs.id), depends_on (jsonb[]), assignee_template, status (pending/running/completed/failed/blocked), output_ref, createdAt/updatedAt |
+| delegations | id (pk), parent_run_id (fk runs.id), child_run_id (fk runs.id), depth, summary, createdAt |
+| approval_requests | id (pk), run_id (fk runs.id), tool_name, args_preview (jsonb), risk_class (install/network/destructive/git_push/db_write/general), status (pending/approved/denied/expired), requested_by, decided_by, expiresAt, scope, createdAt/decidedAt |
+| agent_memory_notes | id (pk), agentId (fk), channelId (fk), noteType, noteTimestamp, importanceScore, confidence, sourceType, emotionalValence, accessCount, lastAccessed, links (jsonb), contradictionFlags (jsonb), lifecycleStatus, archivedAt, suppressUntil, hook, brief, observed, interpreted, feltSense, futureRelevance, uncertainty, detailed, `embedding` (text json + `embedding_vec vector(1536)` Phase 7), `embeddingModel`, `embeddingUpdatedAt` |
+| memory_update_log | id (pk), agentId, noteId (fk), timestamp, reason, fieldsChanged (jsonb), previousValues (jsonb) |
+| agent_tools | agentId+toolId composite pk |
+| channel_sequences | channel_id (pk) see above (duplicate entry collapsed) |
 
 ### 2.3 Core Engine (server/src/core/)
 
@@ -585,4 +597,19 @@ read_file, write_file, list_directory, delete_file, execute_bash, execute_safe, 
 
 ---
 
-*Generated: May 2026 — Comprehensive register across the CrowdOS monorepo.*
+*Generated: Aug 2026 — Remediation post-Phase 7, 38 tables, 32 events, 18 gated domains (see `REMEDIATION_SPEC.md`).*
+
+### 9. Observability & Scale (Phase 7)
+
+| Identifier | File | Description |
+|---|---|---|
+| observabilityGate | Observability/observabilityGate.ts | Gated facade: `startSpan`/`endSpan`/`withSpan`, `getTrace`/`getAllTraces`, `getPerRunCostLedger`/`getCostDashboard`/`verifyLedgerAccuracy` |
+| tracing.ts | Observability/tracing.ts | In-memory OTel-compatible spans keyed `runId`, dynamic `@opentelemetry/api` when `OTEL_ENABLED` |
+| costLedger.ts | Observability/costLedger.ts | `token_usage_log × model_modules.cost_per_1k` → per-run rollup + `cost_ledger_per_run` view |
+| embeddings.ts | Memories/embeddings.ts | `mockEmbed` deterministic hash, `cosineSimilarity`, `hybridScore` (weight `EMBEDDING_HYBRID_WEIGHT`), `searchByEmbedding` via pgvector `<=>` or JS fallback |
+| failureModes.test.ts | Shared/core/failureModes.test.ts | Goal §25 (20 scenarios: model timeout/refusal, tool crash, network, DB, queue, worker crash, duplicate, cancel, swarm partial, stale, corrupted, drain) |
+| load/k6 & load/harness.mjs | load/ | 100 concurrent sends / 10 swarms / soak 8h + harness (`load:harness`); nightly via `.github/workflows/nightly.yml` |
+
+### 10. Config Flags (Shared/config/env.ts — 45 flags, §13 registry)
+
+`AUTH_STRICT`, `QUEUE_MODE`, `SWARM_V1`, `SWARM_LEGACY`, `APPROVALS_ENABLED`, `DELTA_INDEX`, `PER_ITERATION_BUDGET`, `DEMO_FALLBACK`, `LEGACY_BOOTSTRAP/GUARD`, `PIPELINE_PARALLEL`, `STREAM_BATCH_MS`, `ORPHAN_AFTER_MS`, `OTEL_ENABLED`, `EMBEDDING_ENABLED` etc. — see `docs/environment.md` generated via `npm run gen:env-doc`.

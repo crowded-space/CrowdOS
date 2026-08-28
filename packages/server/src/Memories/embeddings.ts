@@ -298,12 +298,12 @@ export async function searchByEmbedding(
   // Fallback to JS cosine over fetched candidates
   let notes: Array<{ id: string; hook: string; brief: string; embedding: unknown }> = [];
   try {
-    // Attempt native pgvector query via raw sql
+    // Attempt native pgvector query via raw sql (checks embedding_vec or embedding column)
     const sqlClient = (await import("../Shared/config/database.js")).getSqlClient();
     const vecLiteral = `[${queryEmb.vector.join(",")}]`;
-    // Use raw query; if column is text (pre-vector migration), this will fail and fall through
+    // Use raw query with embedding_vec if available, falling back to embedding
     const rows = await sqlClient.unsafe(
-      `SELECT id, hook, brief, embedding FROM agent_memory_notes WHERE agent_id = $1 AND lifecycle_status = 'active' AND embedding IS NOT NULL ORDER BY embedding <=> $2::vector LIMIT $3`,
+      `SELECT id, hook, brief, COALESCE(embedding_vec::text, embedding) as embedding FROM agent_memory_notes WHERE agent_id = $1 AND lifecycle_status = 'active' AND (embedding_vec IS NOT NULL OR embedding IS NOT NULL) ORDER BY COALESCE(embedding_vec, embedding::vector) <=> $2::vector LIMIT $3`,
       [agentId, vecLiteral, limit] as unknown as string[],
     ) as unknown as Array<{ id: string; hook: string; brief: string; embedding: string }>;
     if (rows && rows.length > 0) {

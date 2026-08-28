@@ -41,7 +41,9 @@ services:
       QUEUE_MODE: bullmq
       CLIENT_ORIGIN: http://localhost:5173
       PORT: 3001
-      AUTH_STRICT: "false"
+      AUTH_STRICT: "true"
+      # CREDENTIALS_ENCRYPTION_KEY must be set in production (32-byte hex). Generate: openssl rand -hex 32
+      # CREDENTIALS_ENCRYPTION_KEY: "change-me-32-byte-hex"
     ports:
       - "3001:3001"
     command: npm run dev --workspace @community-agent/server
@@ -70,7 +72,7 @@ services:
       QUEUE_MODE: bullmq
       CLIENT_ORIGIN: http://localhost:5173
       PORT: 3001
-      AUTH_STRICT: "false"
+      AUTH_STRICT: "true"
     command: npm run worker --workspace @community-agent/server
     healthcheck:
       test: ["CMD-SHELL", "redis-cli -h redis ping | grep -q PONG"]
