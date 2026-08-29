@@ -12,11 +12,20 @@ export async function categoryExists(categoryId: string): Promise<boolean> {
   return Boolean(category);
 }
 
-export async function listChannels() {
+export async function listChannels(opts?: { limit?: number; cursor?: string | null }) {
   const db = getDb();
+  const limit = Math.min(200, Math.max(1, opts?.limit ?? 200));
+  // Cursor is offset-based for backward compat; future is keyset on (position,id)
+  let offset = 0;
+  if (opts?.cursor) {
+    const parsed = Number(opts.cursor);
+    if (Number.isFinite(parsed) && parsed >= 0) offset = Math.floor(parsed);
+  }
   return db.query.channels.findMany({
     where: isNull(channels.archivedAt),
     orderBy: (table, { asc }) => [asc(table.position)],
+    limit,
+    offset,
   });
 }
 

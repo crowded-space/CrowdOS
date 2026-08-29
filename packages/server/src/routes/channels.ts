@@ -20,8 +20,12 @@ function emitWorkspaceSync(): void {
 }
 
 export async function channelRoutes(app: FastifyInstance) {
-  // GET /api/channels - List all channels
-  app.get("/api/channels", async () => listChannels());
+  // GET /api/channels - List channels with limit+cursor compat (default capped 200)
+  app.get("/api/channels", async (req: any) => {
+    const limit = req.query?.limit != null ? Number(req.query.limit) : undefined;
+    const cursor = req.query?.cursor ?? req.query?.offset ?? null;
+    return listChannels({ limit, cursor: cursor != null ? String(cursor) : null });
+  });
 
   // POST /api/channels - Create a channel under a category
   app.post<{ Body: CreateChannelBody }>(

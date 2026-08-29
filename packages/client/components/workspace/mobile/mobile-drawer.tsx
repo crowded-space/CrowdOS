@@ -32,11 +32,29 @@ export default function MobileDrawer({ open, onClose, side = 'left', children }:
     const onEsc = (e: KeyboardEvent) => {
       if (e.key === 'Escape') onClose();
     };
+    const onTabTrap = (e: KeyboardEvent) => {
+      if (e.key !== 'Tab' || !drawerRef.current) return;
+      const focusable = Array.from(drawerRef.current.querySelectorAll<HTMLElement>('button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])')).filter(el => !el.hasAttribute('disabled') && el.getAttribute('aria-hidden') !== 'true');
+      if (focusable.length === 0) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (e.shiftKey && document.activeElement === first) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && document.activeElement === last) {
+        e.preventDefault();
+        first.focus();
+      }
+    };
     window.addEventListener('keydown', onEsc);
+    window.addEventListener('keydown', onTabTrap);
     const prevOverflow = document.body.style.overflow;
     const prevOverscroll = document.documentElement.style.overscrollBehavior;
     document.body.style.overflow = 'hidden';
     document.documentElement.style.overscrollBehavior = 'none';
+    const root = document.getElementById('crowd-os-root-shell') as HTMLElement | null;
+    const prevInert = root?.hasAttribute('inert');
+    try { (root as any)?.setAttribute?.('inert', ''); } catch {}
     // focus first focusable
     setTimeout(() => {
       const el = drawerRef.current?.querySelector<HTMLElement>('button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])');
@@ -45,8 +63,10 @@ export default function MobileDrawer({ open, onClose, side = 'left', children }:
 
     return () => {
       window.removeEventListener('keydown', onEsc);
+      window.removeEventListener('keydown', onTabTrap);
       document.body.style.overflow = prevOverflow;
       document.documentElement.style.overscrollBehavior = prevOverscroll;
+      if (root && !prevInert) try { (root as any)?.removeAttribute?.('inert'); } catch {}
     };
   }, [open, onClose]);
 

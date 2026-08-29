@@ -59,6 +59,8 @@ export const listAgentsQuerySchema = z.object({
   authorityLevel: z.coerce.number().int().min(0).max(3).optional(),
   status: agentStatusSchema.optional(),
   isTemplate: z.coerce.boolean().optional(),
+  limit: z.coerce.number().int().min(1).max(200).optional(),
+  cursor: z.string().optional(),
 });
 
 export const agentParamsSchema = z.object({

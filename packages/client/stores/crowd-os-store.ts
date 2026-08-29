@@ -91,6 +91,20 @@ function persistSeqCursors(map: Record<string, number>) {
   try { localStorage.setItem('crowdos_seq_cursors', JSON.stringify(map)); } catch {}
 }
 
+let _persistSeqTimer: ReturnType<typeof setTimeout> | null = null;
+function schedulePersistSeqCursors(map: Record<string, number>) {
+  if (typeof localStorage === 'undefined') return;
+  if (_persistSeqTimer) return;
+  _persistSeqTimer = setTimeout(() => {
+    _persistSeqTimer = null;
+    try {
+      const idle = (globalThis as any).requestIdleCallback as ((cb: () => void) => void) | undefined;
+      if (idle) idle(() => persistSeqCursors(map));
+      else persistSeqCursors(map);
+    } catch { persistSeqCursors(map); }
+  }, 500);
+}
+
 function isChannelMutedLS(channelId: string): boolean {
   if (typeof localStorage === 'undefined' || !channelId) return false;
   try {
@@ -187,6 +201,27 @@ function persistActiveChannel(channelId: string | null) {
 function writeMessagesMirror(messages: Message[]) {
   if (typeof localStorage === 'undefined') return;
   localStorage.setItem('crowdos_messages', JSON.stringify(capMessagesMirror(messages)));
+}
+
+let _writeMirrorTimer: ReturnType<typeof setTimeout> | null = null;
+let _pendingMirrorMessages: Message[] | null = null;
+function scheduleWriteMessagesMirror(messages: Message[]) {
+  _pendingMirrorMessages = messages;
+  if (_writeMirrorTimer) return;
+  _writeMirrorTimer = setTimeout(() => {
+    const toWrite = _pendingMirrorMessages;
+    _pendingMirrorMessages = null;
+    _writeMirrorTimer = null;
+    if (toWrite) {
+      const idle = (globalThis as any).requestIdleCallback as ((cb: () => void) => void) | undefined;
+      if (idle) idle(() => writeMessagesMirror(toWrite));
+      else writeMessagesMirror(toWrite);
+    }
+  }, 500);
+}
+function flushWriteMessagesMirrorImmediate(messages: Message[]) {
+  if (_writeMirrorTimer) { clearTimeout(_writeMirrorTimer); _writeMirrorTimer = null; _pendingMirrorMessages = null; }
+  writeMessagesMirror(messages);
 }
 
 function mapBackendMessage(msg: any): Message {
@@ -464,7 +499,7 @@ const initialSelectedMode: ComposerMode = (storedIsPinned && storedSelectedMode)
     const cur = seqCursors[channelId] ?? 0;
     if (seq > cur) {
       seqCursors[channelId] = seq;
-      persistSeqCursors(seqCursors);
+      schedulePersistSeqCursors(seqCursors);
       set((s: any) => ({ channelSeq: { ...s.channelSeq, [channelId]: seq } }));
     }
   }
@@ -554,7 +589,18 @@ const initialSelectedMode: ComposerMode = (storedIsPinned && storedSelectedMode)
 
   socket.on('disconnect', () => {
     wasDisconnected = true;
+    // Offline banner (auto-clears on reconnect)
+    set({ reconnectDigest: { message: 'Offline — reconnecting…', visible: true } } as any);
   });
+  socket.on('connect_error' as any, () => {
+    set({ reconnectDigest: { message: 'Connection error — retrying…', visible: true } } as any);
+  });
+  // HMR cleanup: avoid duplicate listeners on hot reload (store recreated)
+  if (typeof import.meta !== 'undefined' && (import.meta as any).hot) {
+    (import.meta as any).hot.dispose(() => {
+      try { socket.off('connect'); socket.off('disconnect'); socket.off('message:new'); socket.off('message:stream'); socket.off('tool:start'); socket.off('tool:complete'); socket.off('agent:status'); socket.off('agent:thinking'); } catch {}
+    });
+  }
 
   // Establish socket connection event registers for real-time live synchronization
   // Per-agent monologue buffer to prevent race conditions when multiple agents respond simultaneously
@@ -572,6 +618,101 @@ const initialSelectedMode: ComposerMode = (storedIsPinned && storedSelectedMode)
   const lastTurnFinishedAt: Record<string, number> = {};
   const activeToolMessageIds: Record<string, string> = {};
 
+  // Streaming coalescer: batch message:stream chunks to ≤32ms cadence to avoid 50Hz set() storms
+  const pendingStreamMeta: Record<string, { channelId: string }> = {};
+  const dirtyStreamAgents = new Set<string>();
+  let streamCoalesceTimer: ReturnType<typeof setTimeout> | null = null;
+  let streamRaf: number | null = null;
+  function flushStreamCoalesced() {
+    streamCoalesceTimer = null;
+    streamRaf = null;
+    if (dirtyStreamAgents.size === 0) return;
+    const activeCh = get().activeChannelId;
+    const agentsToFlush = Array.from(dirtyStreamAgents);
+    dirtyStreamAgents.clear();
+    set((state: any) => {
+      let updated = [...state.messages];
+      let didChange = false;
+      for (const agentId of agentsToFlush) {
+        const p = streamParsers[agentId];
+        const meta = pendingStreamMeta[agentId];
+        if (!p || !meta) continue;
+        if (meta.channelId !== activeCh) continue;
+        const cleanThoughts = stripToolCalls(p.thoughtsBuffer || '');
+        const cleanContent = stripToolCalls(p.contentBuffer || '');
+        const existingIdx = updated.findIndex((m: Message) => m.id === `stream-${agentId}`);
+        if (existingIdx !== -1) {
+          if (updated[existingIdx].content !== cleanContent || (updated[existingIdx].metadata as any)?.monologue !== cleanThoughts) {
+            updated[existingIdx] = {
+              ...updated[existingIdx],
+              content: cleanContent,
+              metadata: cleanThoughts ? { ...updated[existingIdx].metadata, monologue: cleanThoughts } : updated[existingIdx].metadata,
+            };
+            didChange = true;
+          }
+        } else {
+          const streamMsg: Message = {
+            id: `stream-${agentId}`,
+            type: 'agent',
+            content: cleanContent,
+            authorId: agentId,
+            authorName: state.agents.find((a: Agent) => a.id === agentId)?.name || 'Agent Swarm',
+            authorAvatar: '🤖',
+            channelId: meta.channelId,
+            timestamp: new Date().toISOString(),
+            metadata: cleanThoughts ? { monologue: cleanThoughts } : undefined,
+          };
+          updated.push(streamMsg);
+          didChange = true;
+        }
+        // Handle streaming tool preview coalesced as well
+        if (p.toolName) {
+          const toolMsgId = `stream-tool-${agentId}`;
+          const existingToolIdx = updated.findIndex((m: Message) => m.id === toolMsgId);
+          let cleanInput = p.toolInputBuffer.trim().replace(/^```json\s*/i, '').replace(/```$/, '').trim();
+          const toolMsg: Message = {
+            id: toolMsgId,
+            type: 'tool_execution',
+            content: '',
+            authorId: agentId,
+            authorName: state.agents.find((a: Agent) => a.id === agentId)?.name || 'Agent Swarm',
+            authorAvatar: '🤖',
+            channelId: meta.channelId,
+            timestamp: new Date().toISOString(),
+            toolExecution: { name: p.toolName, input: cleanInput, status: 'working', durationMs: 0 },
+          };
+          if (existingToolIdx !== -1) {
+            updated[existingToolIdx] = toolMsg;
+          } else {
+            updated.push(toolMsg);
+          }
+          didChange = true;
+        }
+      }
+      if (!didChange) return state;
+      return { messages: updated };
+    });
+  }
+  function scheduleStreamFlush(agentId: string, channelId: string) {
+    pendingStreamMeta[agentId] = { channelId };
+    dirtyStreamAgents.add(agentId);
+    if (streamCoalesceTimer) return;
+    if (typeof window !== 'undefined' && typeof window.requestAnimationFrame === 'function') {
+      streamCoalesceTimer = setTimeout(() => {
+        streamRaf = window.requestAnimationFrame(() => flushStreamCoalesced());
+      }, 32) as unknown as ReturnType<typeof setTimeout>;
+    } else {
+      streamCoalesceTimer = setTimeout(() => flushStreamCoalesced(), 32);
+    }
+  }
+  // Prune stale streamParsers/lastTurnFinishedAt to avoid leak (TTL 15s)
+  setInterval(() => {
+    const now = Date.now();
+    for (const [aid, ts] of Object.entries(lastTurnFinishedAt)) {
+      if (now - ts > 15000) delete lastTurnFinishedAt[aid];
+    }
+  }, 30000).unref?.();
+
   socket.on('message:new', (raw: any) => {
     const { payload: msg, seq } = unwrapEnvelope(raw);
     if (!msg) return;
@@ -584,6 +725,9 @@ const initialSelectedMode: ComposerMode = (storedIsPinned && storedSelectedMode)
       if (streamParsers[msg.authorId]) {
         delete streamParsers[msg.authorId];
       }
+      // cancel coalesced flush for this agent (final message wins)
+      dirtyStreamAgents.delete(msg.authorId);
+      delete pendingStreamMeta[msg.authorId];
       lastTurnFinishedAt[msg.authorId] = Date.now();
     }
     const activeCh = get().activeChannelId;
@@ -684,7 +828,7 @@ const initialSelectedMode: ComposerMode = (storedIsPinned && storedSelectedMode)
       p.contentBuffer = (p.contentBuffer || '') + payload.chunk;
     }
 
-    // Parse tool calls across both thoughts and content buffers
+    // Parse tool calls across both thoughts and content buffers (buffer update sync, DOM flush coalesced)
     const combinedBuffer = (p.thoughtsBuffer || '') + '\n' + (p.contentBuffer || '');
     const openTagIdx = combinedBuffer.indexOf('<call_tool');
     if (openTagIdx !== -1) {
@@ -711,69 +855,7 @@ const initialSelectedMode: ComposerMode = (storedIsPinned && storedSelectedMode)
       p.inToolCall = false;
     }
 
-    const cleanThoughts = stripToolCalls(p.thoughtsBuffer || '');
-    const cleanContent = stripToolCalls(p.contentBuffer || '');
-
-    set(state => {
-      let updated = [...state.messages];
-
-      // 1. Update the monologue and text streaming message
-      const existingIdx = updated.findIndex(m => m.id === `stream-${agentId}`);
-      if (existingIdx !== -1) {
-        updated[existingIdx] = {
-          ...updated[existingIdx],
-          content: cleanContent,
-          metadata: cleanThoughts ? { ...updated[existingIdx].metadata, monologue: cleanThoughts } : updated[existingIdx].metadata
-        };
-      } else {
-        const streamMsg: Message = {
-          id: `stream-${agentId}`,
-          type: 'agent',
-          content: cleanContent,
-          authorId: agentId,
-          authorName: state.agents.find(a => a.id === agentId)?.name || 'Agent Swarm',
-          authorAvatar: '🤖',
-          channelId: payload.channelId,
-          timestamp: new Date().toISOString(),
-          metadata: cleanThoughts ? { monologue: cleanThoughts } : undefined
-        };
-        updated.push(streamMsg);
-      }
-
-      // 2. Handle temporary streaming tool execution message
-      if (p.toolName) {
-        const toolMsgId = `stream-tool-${agentId}`;
-        const existingToolIdx = updated.findIndex(m => m.id === toolMsgId);
-
-        let cleanInput = p.toolInputBuffer.trim();
-        cleanInput = cleanInput.replace(/^```json\s*/i, '').replace(/```$/, '').trim();
-
-        const toolMsg: Message = {
-          id: toolMsgId,
-          type: 'tool_execution',
-          content: '',
-          authorId: agentId,
-          authorName: state.agents.find(a => a.id === agentId)?.name || 'Agent Swarm',
-          authorAvatar: '🤖',
-          channelId: payload.channelId,
-          timestamp: new Date().toISOString(),
-          toolExecution: {
-            name: p.toolName,
-            input: cleanInput,
-            status: 'working',
-            durationMs: 0
-          }
-        };
-
-        if (existingToolIdx !== -1) {
-          updated[existingToolIdx] = toolMsg;
-        } else {
-          updated.push(toolMsg);
-        }
-      }
-
-      return { messages: updated };
-    });
+    scheduleStreamFlush(agentId, payload.channelId);
   });
 
   socket.on('tool:start', (raw: any) => {
@@ -1487,11 +1569,18 @@ const initialSelectedMode: ComposerMode = (storedIsPinned && storedSelectedMode)
 
     // Core actions
     fetchWorkspaces: async () => {
+      const markName = 'crowdos:fetchWorkspaces';
+      try { performance.mark(`${markName}:start`); } catch {}
       set({ isFetchingWorkspaces: true });
       try {
-        // 1. Fetch Categories & Channels nested tree
-        const catRes = await fetch(`${BACKEND_URL}/api/categories`);
-        const chanRes = await fetch(`${BACKEND_URL}/api/channels`);
+        // Parallel fetch: 5 independent REST calls in one RTT (was 5 sequential)
+        const [catRes, chanRes, agentRes, moduleRes, profRes] = await Promise.all([
+          fetch(`${BACKEND_URL}/api/categories`),
+          fetch(`${BACKEND_URL}/api/channels`),
+          fetch(`${BACKEND_URL}/api/agents`),
+          fetch(`${BACKEND_URL}/api/modules`),
+          fetch(`${BACKEND_URL}/api/providers/generation`),
+        ]);
         let dbWorkspaces = get().workspaces;
         let dbArchivedChannels = get().archivedChannels;
         
@@ -1532,8 +1621,7 @@ const initialSelectedMode: ComposerMode = (storedIsPinned && storedSelectedMode)
           });
         }
 
-        // 2. Fetch Agents Roster
-        const agentRes = await fetch(`${BACKEND_URL}/api/agents`);
+        // Agents (already fetched in parallel)
         let dbAgents = get().agents;
         if (agentRes.ok) {
           const backendAgents = await agentRes.json();
@@ -1554,8 +1642,7 @@ const initialSelectedMode: ComposerMode = (storedIsPinned && storedSelectedMode)
           }));
         }
 
-        // 3. Fetch Modules aggregated
-        const moduleRes = await fetch(`${BACKEND_URL}/api/modules`);
+        // Modules aggregated (already fetched)
         let dbInstructions = get().instructionModules;
         let dbModels = get().modelModules;
         let dbToolkits = get().toolkitModules;
@@ -1608,8 +1695,7 @@ const initialSelectedMode: ComposerMode = (storedIsPinned && storedSelectedMode)
           }));
         }
 
-        // 4. Fetch Generation profiles for Model Profiles
-        const profRes = await fetch(`${BACKEND_URL}/api/providers/generation`);
+        // Generation profiles (already fetched)
         let dbProfiles = get().modelProfiles;
         if (profRes.ok) {
           const backendProfs = await profRes.json();
@@ -1623,7 +1709,7 @@ const initialSelectedMode: ComposerMode = (storedIsPinned && storedSelectedMode)
           }));
         }
 
-        // 5. Fetch Budget Telemetry
+        // Budget Telemetry (parallel after core fetches to not block roster)
         await get().fetchBudget();
 
         if (typeof localStorage !== 'undefined') {
@@ -1674,6 +1760,14 @@ const initialSelectedMode: ComposerMode = (storedIsPinned && storedSelectedMode)
           console.warn("DEMO_FALLBACK=true — using seeded demo data as fallback (honest demo mode)");
           set({ isFetchingWorkspaces: false });
         }
+      } finally {
+        try {
+          performance.mark(`${markName}:end`);
+          performance.measure('fetchWorkspaces', `${markName}:start`, `${markName}:end`);
+          const entries = performance.getEntriesByName('fetchWorkspaces');
+          const last = entries[entries.length - 1] as PerformanceMeasure | undefined;
+          if (last) console.log(JSON.stringify({ ts: new Date().toISOString(), level: 'info', msg: 'metric', stage: 'fetchWorkspaces', durationMs: Math.round(last.duration) }));
+        } catch {}
       }
     },
 

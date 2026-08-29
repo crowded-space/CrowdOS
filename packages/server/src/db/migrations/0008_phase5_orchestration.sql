@@ -7,7 +7,7 @@ ALTER TYPE "public"."artifact_type" ADD VALUE 'report';--> statement-breakpoint
 ALTER TYPE "public"."artifact_type" ADD VALUE 'citations';--> statement-breakpoint
 CREATE TABLE "approval_requests" (
 	"id" text PRIMARY KEY NOT NULL,
-	"run_id" text NOT NULL,
+	"run_id" uuid NOT NULL,
 	"tool_name" text NOT NULL,
 	"args_preview" jsonb,
 	"risk_class" "approval_risk_class" NOT NULL,
@@ -22,8 +22,8 @@ CREATE TABLE "approval_requests" (
 --> statement-breakpoint
 CREATE TABLE "delegations" (
 	"id" text PRIMARY KEY NOT NULL,
-	"parent_run_id" text NOT NULL,
-	"child_run_id" text NOT NULL,
+	"parent_run_id" uuid NOT NULL,
+	"child_run_id" uuid NOT NULL,
 	"depth" integer NOT NULL,
 	"summary" text,
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL
@@ -31,7 +31,7 @@ CREATE TABLE "delegations" (
 --> statement-breakpoint
 CREATE TABLE "swarm_tasks" (
 	"id" text PRIMARY KEY NOT NULL,
-	"run_id" text NOT NULL,
+	"run_id" uuid NOT NULL,
 	"depends_on" jsonb DEFAULT '[]'::jsonb NOT NULL,
 	"assignee_template" text NOT NULL,
 	"status" "swarm_task_status" DEFAULT 'pending' NOT NULL,
@@ -40,7 +40,7 @@ CREATE TABLE "swarm_tasks" (
 	"updated_at" timestamp with time zone DEFAULT now() NOT NULL
 );
 --> statement-breakpoint
-ALTER TABLE "artifacts" ADD COLUMN "run_id" text;--> statement-breakpoint
+ALTER TABLE "artifacts" ADD COLUMN "run_id" uuid;--> statement-breakpoint
 ALTER TABLE "artifacts" ADD COLUMN "before_hash" text;--> statement-breakpoint
 ALTER TABLE "artifacts" ADD COLUMN "after_hash" text;--> statement-breakpoint
 ALTER TABLE "artifacts" ADD COLUMN "patch" text;--> statement-breakpoint

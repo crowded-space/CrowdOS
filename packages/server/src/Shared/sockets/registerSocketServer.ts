@@ -165,16 +165,15 @@ async function triggerSystemWarning(broker: EventBroker, channelId: string, cont
 }
 
 async function emitRuntimeSnapshot(target: any): Promise<void> {
+  const t0 = performance.now();
   try {
     const db = getDb();
-    const dbWorkspaces = await db.query.workspaces.findMany();
-    const dbAgents = await db.query.agents.findMany({
-      where: isNull(agents.archivedAt),
-    });
-    const dbOverrides = await db.query.runtimeOverrides.findMany();
-    const activeSpawns = await db.query.spawnRequests.findMany({
-      where: (table, { eq }) => eq(table.status, "in_progress"),
-    });
+    const [dbWorkspaces, dbAgents, dbOverrides, activeSpawns] = await Promise.all([
+      db.query.workspaces.findMany(),
+      db.query.agents.findMany({ where: isNull(agents.archivedAt) }),
+      db.query.runtimeOverrides.findMany(),
+      db.query.spawnRequests.findMany({ where: (table, { eq }) => eq(table.status, "in_progress") }),
+    ]);
 
     const swarms = activeSpawns.map(spawn => ({
       swarmId: spawn.id,
@@ -245,6 +244,8 @@ async function emitRuntimeSnapshot(target: any): Promise<void> {
     };
 
     target.emit("runtime:snapshot", snapshot);
+    const dt = Math.round(performance.now() - t0);
+    try { logMetric({ stage: 'snapshot.emit', durationMs: dt }); } catch {}
   } catch (err) {
     console.error("[registerSocketServer] Failed to emit runtime snapshot:", err);
   }
@@ -705,33 +706,38 @@ export function registerSocketServer(httpServer: HttpServer, broker: EventBroker
             for (const agent of targetAgents) agentsToEnqueue.push(agent);
           }
 
+          // Optimized: pre-filter paused/offline, then parallel enqueue (was serial await per agent)
+          const enqueueTasks: Array<() => Promise<void>> = [];
           for (const agent of agentsToEnqueue) {
             if (agent.status === "paused") {
-              await triggerSystemWarning(broker, channelId, `Agent @${agent.name} is currently paused.`);
+              enqueueTasks.push(async () => { await triggerSystemWarning(broker, channelId, `Agent @${agent.name} is currently paused.`); });
               continue;
             }
             if (agent.status === "offline") {
-              await triggerSystemWarning(broker, channelId, `Agent @${agent.name} is currently offline.`);
+              enqueueTasks.push(async () => { await triggerSystemWarning(broker, channelId, `Agent @${agent.name} is currently offline.`); });
               continue;
             }
-            try {
-              const provisionalRunId = `run-${Date.now()}-${Math.random().toString(36).slice(2, 8)}-${agent.id.slice(0, 6)}`;
-              await queueGate.enqueueRun({
-                runId: provisionalRunId,
-                channelId,
-                agentId: agent.id,
-                messageId: userMsg.id,
-                userInput: content,
-                workspaceId: "default",
-              });
-              broker.emit("run.queued" as never, { runId: provisionalRunId, channelId, agentId: agent.id } as never, { channelId });
-              console.log(`[Socket][Queue] Enqueued run ${provisionalRunId} for @${agent.name} in #${channelId} (msg ${userMsg.id})`);
-            } catch (err: unknown) {
-              const msg = err instanceof Error ? err.message : String(err);
-              console.error(`[Socket][Queue] Failed to enqueue agent @${agent.name}:`, msg);
-              await triggerSystemWarning(broker, channelId, `System error queueing @${agent.name}: ${msg}`);
-            }
+            enqueueTasks.push(async () => {
+              try {
+                const provisionalRunId = `run-${Date.now()}-${Math.random().toString(36).slice(2, 8)}-${agent.id.slice(0, 6)}`;
+                await queueGate.enqueueRun({
+                  runId: provisionalRunId,
+                  channelId,
+                  agentId: agent.id,
+                  messageId: userMsg.id,
+                  userInput: content,
+                  workspaceId: "default",
+                });
+                broker.emit("run.queued" as never, { runId: provisionalRunId, channelId, agentId: agent.id } as never, { channelId });
+                console.log(`[Socket][Queue] Enqueued run ${provisionalRunId} for @${agent.name} in #${channelId} (msg ${userMsg.id})`);
+              } catch (err: unknown) {
+                const msg = err instanceof Error ? err.message : String(err);
+                console.error(`[Socket][Queue] Failed to enqueue agent @${agent.name}:`, msg);
+                await triggerSystemWarning(broker, channelId, `System error queueing @${agent.name}: ${msg}`);
+              }
+            });
           }
+          await runBoundedBatch(enqueueTasks, Math.min(4, enqueueTasks.length) || 1);
         } else {
           const batch: Array<() => Promise<void>> = [];
 

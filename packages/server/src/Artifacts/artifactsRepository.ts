@@ -47,15 +47,19 @@ export async function getArtifactById(id: string): Promise<ArtifactRow | null> {
   return (row as unknown as ArtifactRow) ?? null;
 }
 
-export async function listArtifactsByRun(runId: string): Promise<ArtifactRow[]> {
+export async function listArtifactsByRun(runId: string, opts?: { limit?: number; offset?: number }): Promise<ArtifactRow[]> {
   const db = getDb();
-  const rows = await db.select().from(artifacts).where(eq(artifacts.runId, runId)).orderBy(desc(artifacts.createdAt));
+  const limit = Math.min(200, Math.max(1, opts?.limit ?? 200));
+  const offset = Math.max(0, opts?.offset ?? 0);
+  const rows = await db.select().from(artifacts).where(eq(artifacts.runId, runId)).orderBy(desc(artifacts.createdAt)).limit(limit).offset(offset);
   return rows as unknown as ArtifactRow[];
 }
 
-export async function listArtifactsByWorkspace(workspaceId: string): Promise<ArtifactRow[]> {
+export async function listArtifactsByWorkspace(workspaceId: string, opts?: { limit?: number; offset?: number }): Promise<ArtifactRow[]> {
   const db = getDb();
-  const rows = await db.select().from(artifacts).where(eq(artifacts.workspaceId, workspaceId)).orderBy(desc(artifacts.createdAt));
+  const limit = Math.min(200, Math.max(1, opts?.limit ?? 200));
+  const offset = Math.max(0, opts?.offset ?? 0);
+  const rows = await db.select().from(artifacts).where(eq(artifacts.workspaceId, workspaceId)).orderBy(desc(artifacts.createdAt)).limit(limit).offset(offset);
   return rows as unknown as ArtifactRow[];
 }
 

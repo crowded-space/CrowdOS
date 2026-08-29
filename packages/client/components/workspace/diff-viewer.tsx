@@ -136,15 +136,19 @@ export function DiffViewer({ runId, artifactId }: { runId?: string; artifactId?:
   return (
     <div className="space-y-3">
       <div className="flex items-center gap-2">
-        <div className="flex items-center gap-1 bg-zinc-900 border border-zinc-800 rounded-xl p-1">
+        <div role="group" aria-label="Diff view mode" className="flex items-center gap-1 bg-zinc-900 border border-zinc-800 rounded-xl p-1">
           <button
             onClick={() => setViewMode('unified')}
+            aria-pressed={viewMode === 'unified'}
+            role="button"
             className={`px-2.5 py-1.5 rounded-lg text-xs font-mono font-bold flex items-center gap-1.5 transition ${viewMode === 'unified' ? 'bg-zinc-800 text-zinc-100 border border-zinc-700' : 'text-zinc-500 hover:text-zinc-300'}`}
           >
             <Rows3 size={12} /> Unified
           </button>
           <button
             onClick={() => setViewMode('side')}
+            aria-pressed={viewMode === 'side'}
+            role="button"
             className={`px-2.5 py-1.5 rounded-lg text-xs font-mono font-bold flex items-center gap-1.5 transition ${viewMode === 'side' ? 'bg-zinc-800 text-zinc-100 border border-zinc-700' : 'text-zinc-500 hover:text-zinc-300'}`}
           >
             <LayoutPanelLeft size={12} /> Side-by-side

@@ -4,7 +4,7 @@
 -- Ensure pgvector extension (idempotent)
 CREATE EXTENSION IF NOT EXISTS vector;--> statement-breakpoint
 -- SCL-3: token_usage_log runId for per-run cost rollup
-ALTER TABLE "token_usage_log" ADD COLUMN IF NOT EXISTS "run_id" text;--> statement-breakpoint
+ALTER TABLE "token_usage_log" ADD COLUMN IF NOT EXISTS "run_id" uuid;--> statement-breakpoint
 CREATE INDEX IF NOT EXISTS "token_usage_log_run_idx" ON "token_usage_log" USING btree ("run_id");--> statement-breakpoint
 DO $$ BEGIN
   ALTER TABLE "token_usage_log" ADD CONSTRAINT "token_usage_log_run_id_runs_id_fk" FOREIGN KEY ("run_id") REFERENCES "public"."runs"("id") ON DELETE set null ON UPDATE no action;

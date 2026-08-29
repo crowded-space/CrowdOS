@@ -84,17 +84,30 @@ const ASK_PATTERNS: Array<{ pattern: RegExp; reason: string }> = [
 ];
 
 export class Guard {
+  private static existsCache = new Map<string, { exists: boolean; at: number }>();
+  private static cachedExistsSync(p: string): boolean {
+    const now = Date.now();
+    const cached = Guard.existsCache.get(p);
+    if (cached && now - cached.at < 5000) return cached.exists;
+    const exists = fs.existsSync(p);
+    Guard.existsCache.set(p, { exists, at: now });
+    if (Guard.existsCache.size > 200) {
+      const oldest = Array.from(Guard.existsCache.entries()).sort((a, b) => a[1].at - b[1].at)[0]?.[0];
+      if (oldest) Guard.existsCache.delete(oldest);
+    }
+    return exists;
+  }
   static getWorkspaceDir(customRoot?: string): string {
     if (customRoot) {
-      if (fs.existsSync(customRoot)) {
+      if (Guard.cachedExistsSync(customRoot)) {
         return path.resolve(customRoot);
       }
       const sandboxPath = path.join(process.cwd(), "sandbox", customRoot);
-      if (fs.existsSync(sandboxPath)) {
+      if (Guard.cachedExistsSync(sandboxPath)) {
         return path.resolve(sandboxPath);
       }
     }
-    if (process.env.WORKSPACE_DIR && fs.existsSync(process.env.WORKSPACE_DIR)) {
+    if (process.env.WORKSPACE_DIR && Guard.cachedExistsSync(process.env.WORKSPACE_DIR)) {
       return path.resolve(process.env.WORKSPACE_DIR);
     }
     return process.cwd();

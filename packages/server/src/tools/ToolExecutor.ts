@@ -115,10 +115,21 @@ export class ToolExecutor {
     const maxReadConcurrency =
       parsePositiveIntEnv(process.env.TOOL_RWP_MAX_READ_CONCURRENCY, DEFAULT_MAX_PARALLEL_READS);
 
-    await runBoundedPool(readIndexes, maxReadConcurrency, async (i) => {
+    // Preserve program order for read-after-write: reads before first write can run in parallel,
+    // reads after first write must run serially in original order to see prior writes.
+    const firstSerial = serialIndexes.length > 0 ? Math.min(...serialIndexes) : Infinity;
+    const earlyReads = readIndexes.filter((i) => i < firstSerial);
+    const lateReads = new Set(readIndexes.filter((i) => i >= firstSerial));
+    await runBoundedPool(earlyReads, maxReadConcurrency, async (i) => {
       results[i] = await runOne(i);
     });
-    for (const i of serialIndexes) {
+    // Serial tail: interleave late reads and writes in original order
+    const serialTail: number[] = [];
+    for (let i = 0; i < calls.length; i++) {
+      if (serialIndexes.includes(i) || lateReads.has(i)) serialTail.push(i);
+    }
+    serialTail.sort((a, b) => a - b);
+    for (const i of serialTail) {
       results[i] = await runOne(i);
     }
     return results;
@@ -282,46 +293,133 @@ export class ToolExecutor {
               console.warn("[ToolExecutor] approval.requested emit failed:", (e as Error)?.message || e);
             }
 
-            // Block until decision or TTL expiry (polling). No queue — synchronous pause.
+            // Hybrid event-driven + bounded-poll approval wait (was 300ms poll × ~1000 queries).
+            // Listens for broker 'approval.decided' for this ID; falls back to exponential poll (max 2s)
+            // so DB load is 2–3 queries vs 1000. Run-scoped cleanup ensures no listener leak.
             const abortSignal = (partialCtx as unknown as { abortSignal?: AbortSignal })?.abortSignal;
-            const pollIntervalMs = 300;
             const startWait = Date.now();
             let decidedRow: Awaited<ReturnType<typeof approvalGate.getById>> = null;
-            while (true) {
-              if (abortSignal?.aborted) {
-                // User cancelled while awaiting approval — resume as denied, propagate cancel
-                try { await runsGate.transition(runId, "running", "approval_cancelled"); } catch {}
-                throw new Error(`Tool "${toolId}" approval wait cancelled by user.`);
-              }
-              const current = await approvalGate.getById(pendingRow.id);
-              if (!current) {
-                try { await runsGate.transition(runId, "running", "approval_not_found"); } catch {}
-                throw new Error(`Approval ${pendingRow.id} disappeared — denying command.`);
-              }
-              if (current.status === "approved") {
-                decidedRow = current;
-                break;
-              }
-              if (current.status === "denied" || current.status === "expired") {
-                decidedRow = current;
-                break;
-              }
-              // Local TTL guard — if we outlived expiresAt, flip to expired via sweep helper
-              if (current.expiresAt && Date.now() >= new Date(current.expiresAt).getTime()) {
-                try { await approvalGate.expirePendingApprovals(); } catch {}
-                const after = await approvalGate.getById(pendingRow.id);
-                decidedRow = after ?? { ...current, status: "expired" as const } as typeof current;
-                break;
-              }
-              // Global timeout guard (in case expiresAt is far but test wants faster)
-              if (Date.now() - startWait > pendingTtl + 2000) {
-                try { await approvalGate.expirePendingApprovals(); } catch {}
-                const after = await approvalGate.getById(pendingRow.id);
-                decidedRow = after ?? { ...current, status: "expired" as const } as typeof current;
-                break;
-              }
-              await new Promise(res => setTimeout(res, pollIntervalMs));
+
+            const waitForApprovalDecision = async (): Promise<typeof decidedRow> => {
+              const pendingId = pendingRow.id;
+              let settled = false;
+              let off: (() => void) | null = null;
+              let timer: ReturnType<typeof setTimeout> | null = null;
+              let pollBackoff = 400;
+
+              const cleanup = () => {
+                settled = true;
+                if (off) try { off(); } catch {}
+                if (timer) clearTimeout(timer);
+              };
+
+              return new Promise<typeof decidedRow>((resolve, reject) => {
+                if (abortSignal?.aborted) {
+                  resolve(null);
+                  return;
+                }
+                const onAbort = () => {
+                  cleanup();
+                  resolve(null);
+                };
+                abortSignal?.addEventListener('abort', onAbort, { once: true });
+
+                // Primary: broker event for this approvalId
+                const tryAttachBroker = async () => {
+                  try {
+                    const brokerEvt = (partialCtx as unknown as { broker?: { on?: (t: string, cb: (p: any) => void) => string | void; off?: (t: string, id: string | (() => void)) => void } })?.broker as any;
+                    const globalMod = brokerEvt?.on ? null : await import("../Shared/sockets/registerSocketServer.js").then(m => (m as unknown as { globalBroker?: any }).globalBroker).catch(() => null);
+                    const evtBroker = brokerEvt?.on ? brokerEvt : (globalMod as any);
+                    // Try EventBroker instance fallback if no global
+                    const ebFallback = !evtBroker?.on ? (await import("../EventBroker/eventBrokerGate.js").then(m => (m as any).EventBroker ? new (m as any).EventBroker() : null).catch(() => null)) : null;
+                    const targetBroker = evtBroker?.on ? evtBroker : ebFallback;
+                    if (targetBroker && typeof targetBroker.on === 'function') {
+                      const handler = (payload: any) => {
+                        const pid = payload?.approvalId || payload?.id;
+                        if (pid !== pendingId) return;
+                        if (settled) return;
+                        cleanup();
+                        abortSignal?.removeEventListener('abort', onAbort);
+                        // Fast path: fetch decided row once
+                        approvalGate.getById(pendingId).then(r => resolve(r)).catch(() => resolve(null));
+                      };
+                      try {
+                        const subId = targetBroker.on('approval.decided' as any, handler as any);
+                        off = () => {
+                          try {
+                            if (typeof targetBroker.off === 'function') {
+                              if (typeof subId === 'string') targetBroker.off('approval.decided' as any, subId);
+                              else targetBroker.off('approval.decided' as any, handler as any);
+                            }
+                          } catch {}
+                        };
+                      } catch {
+                        // fallback to poll only
+                      }
+                    }
+                  } catch {}
+                };
+                void tryAttachBroker();
+
+                // Fallback: exponential poll (starts 400ms, doubles to max 2000ms)
+                const poll = async () => {
+                  if (settled) return;
+                  if (abortSignal?.aborted) {
+                    cleanup();
+                    resolve(null);
+                    return;
+                  }
+                  if (Date.now() - startWait > pendingTtl + 2000) {
+                    try { await approvalGate.expirePendingApprovals(); } catch {}
+                    const after = await approvalGate.getById(pendingId).catch(() => null);
+                    cleanup();
+                    abortSignal?.removeEventListener('abort', onAbort);
+                    resolve(after);
+                    return;
+                  }
+                  const current = await approvalGate.getById(pendingId).catch(() => null);
+                  if (!current) {
+                    cleanup();
+                    abortSignal?.removeEventListener('abort', onAbort);
+                    resolve(null);
+                    return;
+                  }
+                  if (current.status === 'approved' || current.status === 'denied' || current.status === 'expired') {
+                    cleanup();
+                    abortSignal?.removeEventListener('abort', onAbort);
+                    resolve(current);
+                    return;
+                  }
+                  if (current.expiresAt && Date.now() >= new Date(current.expiresAt).getTime()) {
+                    try { await approvalGate.expirePendingApprovals(); } catch {}
+                    const after2 = await approvalGate.getById(pendingId).catch(() => current);
+                    cleanup();
+                    abortSignal?.removeEventListener('abort', onAbort);
+                    resolve(after2 ?? ({ ...current, status: 'expired' as const } as typeof current));
+                    return;
+                  }
+                  timer = setTimeout(poll, pollBackoff);
+                  pollBackoff = Math.min(2000, Math.round(pollBackoff * 1.6));
+                };
+                // Kick first poll quickly (300ms) then backoff
+                timer = setTimeout(poll, 300);
+                // Also hard TTL guard
+                setTimeout(() => {
+                  if (settled) return;
+                  poll();
+                }, pendingTtl + 2500).unref?.();
+              });
+            };
+
+            const awaited = await waitForApprovalDecision();
+            if (abortSignal?.aborted || awaited === null) {
+              // Distinguish abort vs disappeared
+              const check = awaited === null && abortSignal?.aborted ? 'approval_cancelled' : 'approval_not_found';
+              try { await runsGate.transition(runId, "running", check); } catch {}
+              if (abortSignal?.aborted) throw new Error(`Tool "${toolId}" approval wait cancelled by user.`);
+              throw new Error(`Approval ${pendingRow.id} disappeared — denying command.`);
             }
+            decidedRow = awaited;
 
             // Emit approval.decided for observers (both grant and deny paths)
             try {

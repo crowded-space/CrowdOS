@@ -1,4 +1,4 @@
-﻿import { relations, sql } from "drizzle-orm";
+import { relations, sql } from "drizzle-orm";
 import {
   bigint,
   bigserial,
@@ -147,7 +147,9 @@ export const runtimeStates = pgTable("runtime_states", {
   errorInfo: jsonb("error_info").$type<{ code: string; message: string; timestamp: string }>(),
   lastHeartbeat: timestamp("last_heartbeat", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-});
+}, (table) => ({
+  agentIdx: index("runtime_states_agent_idx").on(table.agentId),
+}));
 
 // â”€â”€â”€ Legacy Model Profiles (kept for backward compatibility) â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
@@ -259,7 +261,10 @@ export const channels = pgTable("channels", {
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   archivedAt: timestamp("archived_at", { withTimezone: true }),
   archivedReason: text("archived_reason"),
-});
+}, (table) => ({
+  categoryIdx: index("channels_category_idx").on(table.categoryId),
+  archivedPositionIdx: index("channels_archived_position_idx").on(table.archivedAt, table.position),
+}));
 
 export const messages = pgTable("messages", {
   id: text("id").primaryKey(),
@@ -278,6 +283,7 @@ export const messages = pgTable("messages", {
 }, (table) => ({
   channelSequenceIndex: uniqueIndex("messages_channel_sequence_idx").on(table.channelId, table.sequenceNumber),
   channelTimestampIndex: index("messages_channel_timestamp_idx").on(table.channelId, table.timestamp.desc()),
+  channelTsSeqIndex: index("messages_channel_ts_seq_idx").on(table.channelId, table.timestamp.desc(), table.sequenceNumber.desc()),
 }));
 
 // DB-2: per-channel sequence counter advanced atomically via
@@ -333,7 +339,7 @@ export const tokenUsageLog = pgTable("token_usage_log", {
   agentId: text("agent_id").notNull().references(() => agents.id, { onDelete: "cascade" }),
   channelId: text("channel_id").notNull().references(() => channels.id, { onDelete: "cascade" }),
   modelModuleId: text("model_module_id").references(() => modelModules.id, { onDelete: "set null" }),
-  runId: text("run_id").references(() => runs.id, { onDelete: "set null" }),
+  runId: uuid("run_id").references(() => runs.id, { onDelete: "set null" }),
   promptTokens: integer("prompt_tokens").notNull(),
   completionTokens: integer("completion_tokens").notNull(),
   totalTokens: integer("total_tokens").notNull(),
@@ -504,7 +510,7 @@ export const artifacts = pgTable("artifacts", {
   semanticTags: text("semantic_tags").array().notNull().default(sql`'{}'::text[]`),
   metadata: jsonb("metadata").$type<Record<string, unknown>>().notNull().default(jsonbObjectDefault),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-  runId: text("run_id").references(() => runs.id, { onDelete: "cascade" }),
+  runId: uuid("run_id").references(() => runs.id, { onDelete: "cascade" }),
   beforeHash: text("before_hash"),
   afterHash: text("after_hash"),
   patch: text("patch"),
@@ -513,7 +519,7 @@ export const artifacts = pgTable("artifacts", {
 
 export const swarmTasks = pgTable("swarm_tasks", {
   id: text("id").primaryKey(),
-  runId: text("run_id").notNull().references(() => runs.id, { onDelete: "cascade" }),
+  runId: uuid("run_id").notNull().references(() => runs.id, { onDelete: "cascade" }),
   dependsOn: jsonb("depends_on").$type<string[]>().notNull().default(jsonbArrayDefault),
   assigneeTemplate: text("assignee_template").notNull(),
   status: swarmTaskStatusEnum("status").notNull().default("pending"),
@@ -524,8 +530,8 @@ export const swarmTasks = pgTable("swarm_tasks", {
 
 export const delegations = pgTable("delegations", {
   id: text("id").primaryKey(),
-  parentRunId: text("parent_run_id").notNull().references(() => runs.id, { onDelete: "cascade" }),
-  childRunId: text("child_run_id").notNull().references(() => runs.id, { onDelete: "cascade" }),
+  parentRunId: uuid("parent_run_id").notNull().references(() => runs.id, { onDelete: "cascade" }),
+  childRunId: uuid("child_run_id").notNull().references(() => runs.id, { onDelete: "cascade" }),
   depth: integer("depth").notNull(),
   summary: text("summary"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
@@ -533,7 +539,7 @@ export const delegations = pgTable("delegations", {
 
 export const approvalRequests = pgTable("approval_requests", {
   id: text("id").primaryKey(),
-  runId: text("run_id").notNull().references(() => runs.id, { onDelete: "cascade" }),
+  runId: uuid("run_id").notNull().references(() => runs.id, { onDelete: "cascade" }),
   toolName: text("tool_name").notNull(),
   argsPreview: jsonb("args_preview").$type<Record<string, unknown>>(),
   riskClass: approvalRiskClassEnum("risk_class").notNull(),
@@ -918,6 +924,7 @@ export const durableEvents = pgTable("durable_events", {
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 }, (table) => ({
   channelSeqIdx: index("durable_events_channel_seq_idx").on(table.channelId, table.seq),
+  createdAtIdx: index("durable_events_created_at_idx").on(table.createdAt),
 }));
 
 // â”€â”€â”€ Runs (RUN-0): one row per runtime execution â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€

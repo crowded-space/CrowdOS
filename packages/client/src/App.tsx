@@ -3,8 +3,9 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { lazy, Suspense, useEffect, useState } from 'react';
+import { lazy, Suspense, useEffect, useState, useCallback } from 'react';
 import { useCrowdOSStore } from '@/stores/crowd-os-store';
+import { useShallow } from 'zustand/react/shallow';
 import WorkspacePortal from '@/components/portal/WorkspacePortal';
 import WorkspaceSidebar from '@/components/workspace/workspace-sidebar';
 import MainChatArea from '@/components/workspace/main-chat-area';
@@ -12,12 +13,17 @@ import RightSidebar from '@/components/workspace/right-sidebar';
 import BottomNav from '@/components/workspace/mobile/bottom-nav';
 import MobileDrawer from '@/components/workspace/mobile/mobile-drawer';
 import { ToastProvider } from '@/components/ui/toast-provider';
+import ErrorBoundary from '@/components/ui/error-boundary';
 
 // Overlay-only surfaces: kept out of the initial bundle so first paint
 // downloads only what the workspace shell actually needs.
 const AgentProfileModal = lazy(() => import('@/components/workspace/modals/agent-profile-modal'));
 const WorkspaceSettingsModal = lazy(() => import('@/components/workspace/modals/workspace-settings-modal'));
 const OmniSearchModal = lazy(() => import('@/components/workspace/modals/omni-search-modal'));
+
+function SpinnerFallback() {
+  return <div className="flex items-center justify-center p-6 text-zinc-500 text-xs font-mono animate-pulse">Loading…</div>;
+}
 
 export default function App() {
   const { 
@@ -27,13 +33,21 @@ export default function App() {
     setMobileDrawerLeft,
     setMobileDrawerRight,
     fetchWorkspaces
-  } = useCrowdOSStore();
+  } = useCrowdOSStore(useShallow(s => ({
+    activeWorkspaceId: s.activeWorkspaceId,
+    mobileDrawerLeft: s.mobileDrawerLeft,
+    mobileDrawerRight: s.mobileDrawerRight,
+    setMobileDrawerLeft: s.setMobileDrawerLeft,
+    setMobileDrawerRight: s.setMobileDrawerRight,
+    fetchWorkspaces: s.fetchWorkspaces,
+  })));
 
   const [searchOpen, setSearchOpen] = useState(false);
 
+  const stableFetchWorkspaces = useCallback(() => { void fetchWorkspaces(); }, [fetchWorkspaces]);
   useEffect(() => {
-    fetchWorkspaces();
-  }, []);
+    stableFetchWorkspaces();
+  }, [stableFetchWorkspaces]);
 
   // Sync browser history (back/forward) with channel selection
   useEffect(() => {
@@ -102,26 +116,25 @@ export default function App() {
         {/* 3-Panel Content Area */}
         <div className="flex-1 flex overflow-hidden w-full relative isolate">
           
-          {/* Left Sidebar Panel - Desktop (fluid 240–280) */}
-          <div className="hidden lg:flex shrink-0 h-full w-[260px] xl:w-[280px] border-r border-zinc-900/80">
-            <WorkspaceSidebar />
-          </div>
-          {/* Tablet: collapsible 240 */}
-          <div className="hidden md:flex lg:hidden shrink-0 h-full w-[240px] border-r border-zinc-900/60">
-            <WorkspaceSidebar />
+          {/* Left Sidebar Panel — single responsive mount (deduped, w clamp) */}
+          <div className="hidden md:flex shrink-0 h-full w-[clamp(240px,20vw,280px)] border-r border-zinc-900/80">
+            <ErrorBoundary fallback={<div className="p-4 text-xs text-zinc-500">Sidebar failed to load</div>}>
+              <WorkspaceSidebar />
+            </ErrorBoundary>
           </div>
 
           {/* Center Chat Work Area - Desktop/Mobile flow */}
           <div className="flex-1 flex flex-col h-full overflow-hidden min-w-0 bg-[#121214]">
-            <MainChatArea onOpenSearch={() => setSearchOpen(true)} />
+            <ErrorBoundary fallback={<div className="p-6 text-sm text-zinc-400">Chat failed to load</div>}>
+              <MainChatArea onOpenSearch={() => setSearchOpen(true)} />
+            </ErrorBoundary>
           </div>
 
-          {/* Right Sidebar Panel - Desktop: adaptive */}
-          <div className="hidden xl:flex shrink-0 h-full">
-            <RightSidebar />
-          </div>
-          <div className="hidden lg:flex xl:hidden shrink-0 h-full">
-            <RightSidebar />
+          {/* Right Sidebar Panel — single responsive mount */}
+          <div className="hidden lg:flex shrink-0 h-full">
+            <ErrorBoundary fallback={<div className="p-4 text-xs text-zinc-500">Roster failed to load</div>}>
+              <RightSidebar />
+            </ErrorBoundary>
           </div>
 
           {/* Left slide drawer - Mobile/Tablet */}
@@ -148,7 +161,7 @@ export default function App() {
         <BottomNav />
 
         {/* Globally tracked status dialog modals */}
-        <Suspense fallback={null}>
+        <Suspense fallback={<SpinnerFallback />}>
           <AgentProfileModal />
           <WorkspaceSettingsModal />
           <OmniSearchModal open={searchOpen} onClose={() => setSearchOpen(false)} />

@@ -475,6 +475,17 @@ async function ensureSchema(): Promise<void> {
     "create unique index if not exists tools_name_idx on tools(name)",
     "create unique index if not exists workspace_nodes_ws_path_idx on workspace_nodes(workspace_id, path)",
     "do $$ begin alter table workspace_agents add constraint workspace_agents_agent_id_agents_id_fk foreign key (agent_id) references agents(id) on delete cascade; exception when duplicate_object then null; end $$;",
+    // Perf P2 indexes (also in Drizzle schema)
+    "create index if not exists messages_channel_ts_seq_idx on messages(channel_id, timestamp desc, sequence_number desc)",
+    "create index if not exists messages_channel_timestamp_idx on messages(channel_id, timestamp desc)",
+    "create index if not exists channels_category_idx on channels(category_id)",
+    "create index if not exists channels_archived_position_idx on channels(archived_at, position)",
+    "create index if not exists runtime_states_agent_idx on runtime_states(agent_id)",
+    "create index if not exists durable_events_created_at_idx on durable_events(created_at)",
+    // pg_trgm extension + GIN trigram indexes for ILIKE search (approve CREATE EXTENSION)
+    "create extension if not exists pg_trgm",
+    "create index if not exists channels_name_trgm_idx on channels using gin (name gin_trgm_ops)",
+    "create index if not exists messages_content_trgm_idx on messages using gin (content gin_trgm_ops)",
   ];
 
   for (const statement of postTableStatements) {

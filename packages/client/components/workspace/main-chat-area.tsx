@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect, useMemo } from 'react';
-import { motion, AnimatePresence } from 'motion/react';
+import { motion, AnimatePresence, useReducedMotion } from 'motion/react';
 import {
   Hash, Users, Search, Bell, Pin,
   Trash2, Send, PlusCircle, Smile,
@@ -17,7 +17,7 @@ import ConfirmDialog from '@/components/ui/confirm-dialog';
 import EmojiPickerPopover from './emoji-picker-popover';
 import ModeSelector from './mode-selector';
 import ApprovalCard from './messages/approval-card';
-import DiffViewer from './diff-viewer';
+const DiffViewer = React.lazy(() => import('./diff-viewer'));
 
 const BACKEND_URL = '';
 
@@ -130,6 +130,7 @@ export default function MainChatArea({ onOpenSearch }: MainChatAreaProps) {
   } = useCrowdOSStore();
 
   const { showSuccess, showInfo, showError } = useToast();
+  const shouldReduceMotion = useReducedMotion();
 
   const MAX_MESSAGE_LEN = 4000;
   const MAX_ATTACHMENT_SIZE = 5 * 1024 * 1024;
@@ -343,14 +344,20 @@ export default function MainChatArea({ onOpenSearch }: MainChatAreaProps) {
     }
   };
 
-  // Handle scroll events to detect user scroll position
+  // Handle scroll events — rAF-throttled + passive to avoid layout thrash
+  const scrollRafRef = useRef<number | null>(null);
   const handleScroll = () => {
-    if (!scrollContainerRef.current) return;
-    const { scrollTop, scrollHeight, clientHeight } = scrollContainerRef.current;
-    const distanceFromBottom = scrollHeight - scrollTop - clientHeight;
-    setIsUserScrolledUp(distanceFromBottom > 120);
-    void maybeLoadOlder();
+    if (scrollRafRef.current) return;
+    scrollRafRef.current = requestAnimationFrame(() => {
+      scrollRafRef.current = null;
+      if (!scrollContainerRef.current) return;
+      const { scrollTop, scrollHeight, clientHeight } = scrollContainerRef.current;
+      const distanceFromBottom = scrollHeight - scrollTop - clientHeight;
+      setIsUserScrolledUp(distanceFromBottom > 120);
+      void maybeLoadOlder();
+    });
   };
+  useEffect(() => () => { if (scrollRafRef.current) cancelAnimationFrame(scrollRafRef.current); }, []);
 
   const scrollToBottom = (smooth = true) => {
     endRef.current?.scrollIntoView({ behavior: smooth ? 'smooth' : 'auto' });
@@ -836,7 +843,9 @@ export default function MainChatArea({ onOpenSearch }: MainChatAreaProps) {
           if (diffArtifacts.length > 0 && latestRunId) {
             return (
               <div className="mx-auto max-w-3xl w-full">
-                <DiffViewer runId={latestRunId} />
+                <React.Suspense fallback={<div className="p-3 text-xs text-zinc-500 animate-pulse">Loading diffs…</div>}>
+                  <DiffViewer runId={latestRunId} />
+                </React.Suspense>
               </div>
             );
           }
@@ -985,12 +994,12 @@ export default function MainChatArea({ onOpenSearch }: MainChatAreaProps) {
                 <AnimatePresence>
                   {selectedMentions.map((ag) => (
                     <motion.div
-                      layout
+                      layout={!shouldReduceMotion}
                       layoutId={`mention-${ag.id}`}
                       initial={{ opacity: 0, scale: 0.8 }}
                       animate={{ opacity: 1, scale: 1 }}
                       exit={{ opacity: 0, scale: 0.8 }}
-                      transition={{ type: "spring", stiffness: 400, damping: 25 }}
+                      transition={shouldReduceMotion ? { duration: 0.12 } : { type: "spring", stiffness: 400, damping: 25 }}
                       key={ag.id}
                       className="relative flex items-center gap-2 pl-2.5 pr-[68px] py-1.5 min-h-[36px] rounded-lg bg-[#0e0e11] border border-zinc-800 text-[11px] w-fit shadow-sm group"
                     >
@@ -1029,10 +1038,11 @@ export default function MainChatArea({ onOpenSearch }: MainChatAreaProps) {
                 <AnimatePresence>
                   {attachments.map((att) => (
                     <motion.div
-                      layout
+                      layout={!shouldReduceMotion}
                       initial={{ opacity: 0, scale: 0.8 }}
                       animate={{ opacity: 1, scale: 1 }}
                       exit={{ opacity: 0, scale: 0.8 }}
+                      transition={shouldReduceMotion ? { duration: 0.12 } : undefined}
                       key={att.id}
                       className="relative flex items-center gap-2 pl-2.5 pr-9 py-1.5 min-h-[36px] rounded-lg bg-zinc-950 border border-zinc-800 text-[11px] w-fit shadow-sm"
                       id={`preview-bubble-${att.id}`}
@@ -1061,12 +1071,12 @@ export default function MainChatArea({ onOpenSearch }: MainChatAreaProps) {
                   <div className="flex flex-wrap justify-end gap-2 shrink-0">
                     {stickyMentions.map((ag) => (
                       <motion.div
-                        layout
+                        layout={!shouldReduceMotion}
                         layoutId={`mention-${ag.id}`}
                         initial={{ opacity: 0, scale: 0.8 }}
                         animate={{ opacity: 1, scale: 1 }}
                         exit={{ opacity: 0, scale: 0.8 }}
-                        transition={{ type: "spring", stiffness: 400, damping: 25 }}
+                        transition={shouldReduceMotion ? { duration: 0.12 } : { type: "spring", stiffness: 400, damping: 25 }}
                         key={`sticky-${ag.id}`}
                         className="relative flex items-center gap-2 pl-2.5 pr-9 py-1.5 min-h-[36px] rounded-lg bg-indigo-500/10 border border-indigo-500/20 text-[11px] w-fit shadow-sm"
                       >

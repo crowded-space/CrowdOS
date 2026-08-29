@@ -70,11 +70,26 @@ const FileTreeNode: React.FC<{
     setIsOpen(!isOpen);
   };
 
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      toggleOpen();
+    } else if (e.key === 'ArrowRight' && !isOpen) {
+      setIsOpen(true);
+      if (children.length === 0) toggleOpen();
+    } else if (e.key === 'ArrowLeft' && isOpen) {
+      setIsOpen(false);
+    }
+  };
+
   if (node.type === 'folder') {
     return (
-      <div className="select-none">
+      <div className="select-none" role="treeitem" aria-expanded={isOpen}>
         <button
           onClick={toggleOpen}
+          onKeyDown={handleKeyDown}
+          aria-expanded={isOpen}
+          aria-controls={`tree-${node.path}`}
           className="w-full flex items-center gap-2 py-2.5 px-2 hover:bg-zinc-900/60 rounded-xl cursor-pointer transition text-zinc-300 hover:text-zinc-100 text-left touch-manipulation active:scale-[0.99]"
           style={{ paddingLeft: `${ level * 14 + 10 }px` }}
         >
@@ -91,7 +106,7 @@ const FileTreeNode: React.FC<{
           <span className="text-[13px] font-medium tracking-[-0.01em] truncate">{node.name}</span>
         </button>
         {isOpen && children.length > 0 && (
-          <div className="flex flex-col gap-0.5 mt-0.5">
+          <div id={`tree-${node.path}`} role="group" className="flex flex-col gap-0.5 mt-0.5">
             {children.map((child, i) => (
               <FileTreeNode key={i} node={child} level={level + 1} selectedFile={selectedFile} activeWorkspaceId={activeWorkspaceId} onSelectFile={onSelectFile} />
             ))}
@@ -105,7 +120,10 @@ const FileTreeNode: React.FC<{
 
   return (
     <button
+      role="treeitem"
+      aria-selected={isSelected}
       onClick={() => onSelectFile && onSelectFile(node)}
+      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onSelectFile && onSelectFile(node); } }}
       className={`group w-full flex items-center gap-2.5 py-2.5 px-2 rounded-xl cursor-pointer transition select-none text-left touch-manipulation active:scale-[0.99] ${
         isSelected 
           ? 'bg-indigo-600 text-white shadow-md border border-indigo-500/20' 
@@ -207,8 +225,8 @@ export default function FileExplorer() {
         <span className="ml-auto w-2 h-2 rounded-full bg-emerald-500 shadow-[0_0_6px_rgba(16,185,129,0.6)] animate-pulse" />
       </div>
 
-      {/* File Tree */}
-      <div className="flex-1 overflow-y-auto w-full py-2 px-1 scrollbar-thin">
+      {/* File Tree — a11y tree semantics */}
+      <div role="tree" aria-label="Workspace files" className="flex-1 overflow-y-auto w-full py-2 px-1 scrollbar-thin">
         {isLoading ? (
           <div className="flex items-center justify-center h-full text-xs text-zinc-500 animate-pulse">
             Connecting...

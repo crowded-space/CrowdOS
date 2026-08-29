@@ -92,4 +92,6 @@ export interface AgentRegistryFilters {
   authorityLevel?: AuthorityLevel;
   status?: AgentStatus;
   isTemplate?: boolean;
+  limit?: number;
+  cursor?: string | null;
 }

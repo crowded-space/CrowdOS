@@ -1,13 +1,23 @@
-import React, { useState, useMemo } from 'react';
-import { motion, AnimatePresence } from 'motion/react';
+import React, { useState, useMemo, useCallback, lazy, Suspense } from 'react';
+import { motion, AnimatePresence, useReducedMotion } from 'motion/react';
 import { useCrowdOSStore } from '@/stores/crowd-os-store';
-import PresenceIndicator from './ui/presence-indicator';
-import { Sparkles, BarChart3, Database, Coins, Activity, Network } from 'lucide-react';
-import FileExplorer from './file-explorer';
+import { useShallow } from 'zustand/react/shallow';
+import { BarChart3, Database, Coins, Activity, Network } from 'lucide-react';
+import AgentRow from './agent-row';
+const FileExplorer = lazy(() => import('./file-explorer'));
 
 export default function RightSidebar() {
-  const { agents, messages, activeChannelId, activeWorkspaceId, workspaces, openAgentProfileModal, rightSidebarOpen } = useCrowdOSStore();
-  const { totalTokensConsumed } = useCrowdOSStore();
+  const { agents, messages, activeChannelId, activeWorkspaceId, workspaces, openAgentProfileModal, rightSidebarOpen } = useCrowdOSStore(useShallow(s => ({
+    agents: s.agents,
+    messages: s.messages,
+    activeChannelId: s.activeChannelId,
+    activeWorkspaceId: s.activeWorkspaceId,
+    workspaces: s.workspaces,
+    openAgentProfileModal: s.openAgentProfileModal,
+    rightSidebarOpen: s.rightSidebarOpen,
+  })));
+  const { totalTokensConsumed } = useCrowdOSStore(useShallow(s => ({ totalTokensConsumed: s.totalTokensConsumed })));
+  const shouldReduceMotion = useReducedMotion();
   const [telemetryTab, setTelemetryTab] = useState<'channel' | 'global'>('global');
   const [ledger, setLedger] = useState<{ totalTokens: number; totalCostUsd: number } | null>(null);
 
@@ -103,50 +113,29 @@ export default function RightSidebar() {
   const tierL2 = agents.filter(ag => ag.level === 2);
   const tierL3 = agents.filter(ag => ag.level === 3);
 
-  // Group level tags
-  const levelStyles: Record<number, { text: string; bg: string; border: string }> = {
-    0: { text: 'text-cyan-400', bg: 'bg-cyan-500/10', border: 'border-cyan-500/25' },
-    1: { text: 'text-rose-400', bg: 'bg-rose-500/10', border: 'border-rose-500/25' },
-    2: { text: 'text-indigo-400', bg: 'bg-indigo-500/10', border: 'border-indigo-500/25' },
-    3: { text: 'text-emerald-400', bg: 'bg-emerald-500/10', border: 'border-emerald-500/25' }
-  };
+  // Group level tags — hoisted to AgentRow component (memoized)
+  const handleOpenAgent = useCallback((id: string) => openAgentProfileModal(id), [openAgentProfileModal]);
 
-  const AgentRow = ({ id, name, species, status, level, avatar, isOmniscient }: any) => {
-    const meta = levelStyles[level] || { text: 'text-zinc-400', bg: 'bg-zinc-800', border: 'border-zinc-700' };
+  // Respect reduced-motion: disable AnimatePresence spring when user prefers reduced motion
+  const MotionDiv: any = shouldReduceMotion ? 'div' : motion.div;
 
+  if (shouldReduceMotion) {
+    // Reduced-motion: no AnimatePresence spring, plain divs preserve UX quality statically
+    if (!rightSidebarOpen) {
+      return (
+        <div className="w-[260px] flex flex-col h-full overflow-hidden shrink-0 border-l border-zinc-900 border-x-0">
+          <Suspense fallback={<div className="p-4 text-xs text-zinc-500 animate-pulse">Loading sandbox…</div>}>
+            <FileExplorer />
+          </Suspense>
+        </div>
+      );
+    }
     return (
-      <button
-        onClick={() => openAgentProfileModal(id)}
-        className="w-full flex items-center gap-3 px-2.5 py-2.5 min-h-[52px] hover:bg-zinc-900/60 active:bg-zinc-900 rounded-xl transition-colors text-left cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500/30 border border-transparent hover:border-zinc-800/60 touch-manipulation active:scale-[0.99]"
-        id={`agent-row-${id}`}
-      >
-        {/* Border mapped to Level-Color */}
-        <div className={`relative w-9 h-9 rounded-xl flex items-center justify-center bg-zinc-950 border ${meta.border} select-none text-[15px] font-sans shrink-0 shadow-sm`}>
-          {avatar || '🤖'}
-          {/* Presence cutout Dot */}
-          <div className="absolute -bottom-1 -right-1 bg-[#0c0c0e] rounded-full p-0.5">
-            <PresenceIndicator status={status} size="sm" />
-          </div>
-        </div>
-
-        <div className="min-w-0 leading-snug flex-1">
-          <div className="text-[13px] font-semibold text-zinc-100 truncate flex items-center gap-1.5 font-sans tracking-[-0.01em]">
-            <span className={`${meta.text}`}>{name}</span>
-            {isOmniscient && (
-              <span className="inline-flex items-center px-1.5 py-0.5 rounded-full text-[9px] font-extrabold font-mono bg-cyan-500/10 text-cyan-400 border border-cyan-500/20 tracking-tight leading-none">
-                👁️ OMNI
-              </span>
-            )}
-          </div>
-          <div className="text-[11px] text-zinc-500 font-sans flex items-center gap-1.5">
-            <span>{species}</span>
-            <span className="w-1 h-1 rounded-full bg-zinc-700" />
-            <span className="font-mono text-[10px] uppercase font-semibold tracking-wide px-1.5 py-0.5 rounded-full bg-zinc-900 border border-zinc-800 text-zinc-400">L{level}</span>
-          </div>
-        </div>
-      </button>
+      <div id="right-sidebar" className="w-[260px] bg-[#0c0c0e]/95 border-l border-zinc-900 flex flex-col h-full overflow-hidden select-none shrink-0">
+        {renderRoster()}
+      </div>
     );
-  };
+  }
 
   return (
     <AnimatePresence mode="wait">
@@ -159,7 +148,9 @@ export default function RightSidebar() {
           transition={{ duration: 0.15 }}
           className="w-[260px] flex flex-col h-full overflow-hidden shrink-0 border-l border-zinc-900 border-x-0"
         >
-          <FileExplorer />
+          <Suspense fallback={<div className="p-4 text-xs text-zinc-500 animate-pulse">Loading sandbox…</div>}>
+            <FileExplorer />
+          </Suspense>
         </motion.div>
       ) : (
         <motion.div 
@@ -171,6 +162,16 @@ export default function RightSidebar() {
           id="right-sidebar"
           className="w-[260px] bg-[#0c0c0e]/95 border-l border-zinc-900 flex flex-col h-full overflow-hidden select-none shrink-0"
         >
+          {renderRoster()}
+        </motion.div>
+      )}
+    </AnimatePresence>
+  );
+
+  function renderRoster() {
+    return (
+      <>
+
       {/* Title — larger, calmer */}
       <div className="px-4 py-3.5 border-b border-zinc-900 flex items-center justify-between shrink-0 select-none">
         <h2 className="text-[11px] font-mono tracking-[0.08em] font-bold text-zinc-400 flex items-center gap-2 uppercase">
@@ -193,7 +194,7 @@ export default function RightSidebar() {
               <span className="ml-auto text-[10px] font-mono font-semibold bg-cyan-500/10 border border-cyan-500/20 text-cyan-300 px-1.5 py-0.5 rounded-full">{tierL0.length}</span>
             </h3>
             <div className="space-y-1">
-              {tierL0.map(ag => <AgentRow key={ag.id} {...ag} />)}
+              {tierL0.map(ag => <AgentRow key={ag.id} {...ag} onOpen={handleOpenAgent} />)}
             </div>
           </div>
         )}
@@ -207,7 +208,7 @@ export default function RightSidebar() {
               <span className="ml-auto text-[10px] font-mono font-semibold bg-rose-500/10 border border-rose-500/20 text-rose-300 px-1.5 py-0.5 rounded-full">{tierL1.length}</span>
             </h3>
             <div className="space-y-1">
-              {tierL1.map(ag => <AgentRow key={ag.id} {...ag} />)}
+              {tierL1.map(ag => <AgentRow key={ag.id} {...ag} onOpen={handleOpenAgent} />)}
             </div>
           </div>
         )}
@@ -221,7 +222,7 @@ export default function RightSidebar() {
               <span className="ml-auto text-[10px] font-mono font-semibold bg-indigo-500/10 border border-indigo-500/20 text-indigo-300 px-1.5 py-0.5 rounded-full">{tierL2.length}</span>
             </h3>
             <div className="space-y-1">
-              {tierL2.map(ag => <AgentRow key={ag.id} {...ag} />)}
+              {tierL2.map(ag => <AgentRow key={ag.id} {...ag} onOpen={handleOpenAgent} />)}
             </div>
           </div>
         )}
@@ -235,7 +236,7 @@ export default function RightSidebar() {
               <span className="ml-auto text-[10px] font-mono font-semibold bg-emerald-500/10 border border-emerald-500/20 text-emerald-300 px-1.5 py-0.5 rounded-full">{tierL3.length}</span>
             </h3>
             <div className="space-y-1">
-              {tierL3.map(ag => <AgentRow key={ag.id} {...ag} />)}
+              {tierL3.map(ag => <AgentRow key={ag.id} {...ag} onOpen={handleOpenAgent} />)}
             </div>
           </div>
         )}
@@ -285,7 +286,7 @@ export default function RightSidebar() {
               <span>Tokens</span>
             </div>
             <div className="text-[13px] font-semibold text-zinc-100 font-mono mt-1.5 tracking-tight">
-              {calculatedTokens.toLocaleString()}
+              {ledger === null && telemetryTab === 'global' ? <span className="inline-block h-4 w-16 skeleton" /> : calculatedTokens.toLocaleString()}
             </div>
           </div>
 
@@ -320,8 +321,7 @@ export default function RightSidebar() {
           </div>
         </div>
       </div>
-    </motion.div>
-    )}
-    </AnimatePresence>
-  );
+      </>
+    );
+  }
 }

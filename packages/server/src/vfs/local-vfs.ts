@@ -120,11 +120,31 @@ export class LocalVFS implements VirtualFS {
 
   async read(path: string): Promise<string> {
     const absPath = this.resolve(path);
+    const stat = await fs.stat(absPath).catch(() => null);
+    const MAX_READ_BYTES = 1_048_576; // 1MB cap — prevents OOM from large files into LLM context
+    if (stat && stat.size > MAX_READ_BYTES) {
+      const handle = await fs.open(absPath, 'r');
+      try {
+        const buf = Buffer.alloc(MAX_READ_BYTES);
+        await handle.read(buf, 0, MAX_READ_BYTES, 0);
+        return buf.toString('utf8') + `\n\n[TRUNCATED: file ${stat.size} bytes, showing first ${MAX_READ_BYTES} bytes]`;
+      } finally { await handle.close(); }
+    }
     return fs.readFile(absPath, "utf8");
   }
 
   async readBinary(path: string): Promise<Buffer> {
     const absPath = this.resolve(path);
+    const stat = await fs.stat(absPath).catch(() => null);
+    const MAX_READ_BYTES = 1_048_576;
+    if (stat && stat.size > MAX_READ_BYTES) {
+      const handle = await fs.open(absPath, 'r');
+      try {
+        const buf = Buffer.alloc(MAX_READ_BYTES);
+        const { bytesRead } = await handle.read(buf, 0, MAX_READ_BYTES, 0);
+        return buf.subarray(0, bytesRead);
+      } finally { await handle.close(); }
+    }
     return fs.readFile(absPath);
   }
 
@@ -302,12 +322,14 @@ export class LocalVFS implements VirtualFS {
     const absPath = this.resolve(path);
     const entries = await fs.readdir(absPath, { withFileTypes: true });
 
-    // Stat entries concurrently — serial fs.stat per entry was an N+1 bottleneck
-    // on large directories (P2-1).
-    const nodes = await Promise.all(
-      entries
-        .filter((entry) => entry.name !== ".crowdos")
-        .map(async (entry): Promise<FileNode> => {
+    // Bounded stat concurrency (32) — prevents EMFILE on large dirs (was unbounded Promise.all)
+    const filtered = entries.filter((entry) => entry.name !== ".crowdos");
+    const nodes: FileNode[] = [];
+    const BOUNDED_CONCURRENCY = 32;
+    for (let i = 0; i < filtered.length; i += BOUNDED_CONCURRENCY) {
+      const batch = filtered.slice(i, i + BOUNDED_CONCURRENCY);
+      const batchNodes = await Promise.all(
+        batch.map(async (entry): Promise<FileNode> => {
           const entryPath = join(absPath, entry.name);
           const stat = await fs.stat(entryPath);
           return {
@@ -318,8 +340,10 @@ export class LocalVFS implements VirtualFS {
             mimeType: entry.isFile() ? guessMimeType(entry.name) : null,
             updatedAt: stat.mtime,
           };
-        })
-    );
+        }),
+      );
+      nodes.push(...batchNodes);
+    }
 
     nodes.sort((a, b) => {
       // Directories first, then alphabetical

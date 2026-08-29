@@ -31,9 +31,17 @@ function emitWorkspaceSync(): void {
 }
 
 export async function categoryRoutes(app: FastifyInstance) {
-  // GET /api/categories - List all categories with nested channels
-  app.get("/api/categories", async () => {
+  // GET /api/categories - List categories with nested channels, limit+cursor compat (capped 200)
+  app.get("/api/categories", async (req: any) => {
     const db = getDb();
+    const limitRaw = req.query?.limit != null ? Number(req.query.limit) : 200;
+    const limit = Math.min(200, Math.max(1, Number.isFinite(limitRaw) ? limitRaw : 200));
+    const cursorRaw = req.query?.cursor ?? req.query?.offset;
+    let offset = 0;
+    if (cursorRaw != null) {
+      const parsed = Number(cursorRaw);
+      if (Number.isFinite(parsed) && parsed >= 0) offset = Math.floor(parsed);
+    }
     const list = await db.query.categories.findMany({
       with: {
         channels: {
@@ -41,6 +49,8 @@ export async function categoryRoutes(app: FastifyInstance) {
         },
       },
       orderBy: (table, { asc }) => [asc(table.position)],
+      limit,
+      offset,
     });
     return list;
   });
@@ -106,7 +116,7 @@ export async function categoryRoutes(app: FastifyInstance) {
     updateCategory,
   );
 
-  // DELETE /api/categories/:id - Delete a category
+  // DELETE /api/categories/:id - Delete a category (transactional: channels + category atomically)
   app.delete<{ Params: { id: string } }>(
     "/api/categories/:id",
     { schema: { params: paramIdSchema } },
@@ -120,12 +130,16 @@ export async function categoryRoutes(app: FastifyInstance) {
         return reply.status(404).send({ error: "Not Found", message: "Category not found" });
       }
 
-      await db.delete(channels).where(eq(channels.categoryId, request.params.id));
-      const deleted = await db
-        .delete(categories)
-        .where(eq(categories.id, request.params.id))
-        .returning();
-      if (deleted.length === 0) {
+      const { withTransaction } = await import("../Shared/config/database.js");
+      const result = await withTransaction(async (tx) => {
+        await tx.delete(channels).where(eq(channels.categoryId, request.params.id));
+        const deleted = await tx
+          .delete(categories)
+          .where(eq(categories.id, request.params.id))
+          .returning();
+        return deleted;
+      });
+      if (result.length === 0) {
         return reply.status(404).send({ error: "Not Found", message: "Category not found" });
       }
       emitWorkspaceSync();

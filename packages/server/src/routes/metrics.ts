@@ -2,6 +2,7 @@ import type { FastifyInstance } from "fastify";
 
 import { authGate } from "../Shared/auth/authGate.js";
 import { getMetricsSnapshot } from "../Shared/core/perfMetrics.js";
+import { observabilityGate } from "../Observability/observabilityGate.js";
 
 /**
  * OBS-1: GET /metrics — perfMetrics latency snapshot (p50/p95 per stage).
@@ -17,6 +18,17 @@ export async function metricsRoutes(app: FastifyInstance) {
   const adminPreHandler = process.env.WORKSPACE_ADMIN_TOKEN ? authGate.requireAdmin : undefined;
 
   app.get("/metrics", { preHandler: adminPreHandler }, async () => {
-    return { metrics: getMetricsSnapshot() };
+    const traceStats = (() => {
+      try { return observabilityGate.getTraceStats(); } catch { return null; }
+    })();
+    return { metrics: getMetricsSnapshot(), traces: traceStats };
+  });
+
+  // Alias under /api for client parity (frontend fetches /api/metrics via proxy)
+  app.get("/api/metrics", { preHandler: adminPreHandler }, async () => {
+    const traceStats = (() => {
+      try { return observabilityGate.getTraceStats(); } catch { return null; }
+    })();
+    return { metrics: getMetricsSnapshot(), traces: traceStats };
   });
 }

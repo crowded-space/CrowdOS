@@ -83,9 +83,18 @@ export class AgentRegistry {
       whereClauses.push(eq(agents.isTemplate, filters.isTemplate));
     }
 
+    const limit = filters.limit != null ? Math.min(200, Math.max(1, filters.limit)) : 200;
+    let offset = 0;
+    if (filters.cursor) {
+      const parsed = Number(filters.cursor);
+      if (Number.isFinite(parsed) && parsed >= 0) offset = Math.floor(parsed);
+    }
+
     const records = await db.query.agents.findMany({
       where: whereClauses.length > 0 ? and(...whereClauses) : undefined,
       orderBy: (table, { asc }) => [asc(table.authorityLevel), asc(table.name)],
+      limit,
+      offset,
     });
 
     return records.map(mapAgentProfile);

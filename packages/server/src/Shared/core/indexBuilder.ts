@@ -82,13 +82,16 @@ export class IndexBuilder {
 
     const indices = await db.select().from(channelIndex);
 
-    const staleIndices = [];
+    const staleIndices: typeof indices = [];
     if (deltaIndexEnabled()) {
-      for (const idx of indices) {
-        if (idx.status === "degraded" || (await this.pendingDeltaCount(idx.channelId, idx.lastSeq)) >= STALE_DRIFT_THRESHOLD) {
-          staleIndices.push(idx);
-        }
-      }
+      const checks = await Promise.all(
+        indices.map(async (idx) => {
+          if (idx.status === "degraded") return { idx, stale: true };
+          const count = await this.pendingDeltaCount(idx.channelId, idx.lastSeq);
+          return { idx, stale: count >= STALE_DRIFT_THRESHOLD };
+        }),
+      );
+      for (const { idx, stale } of checks) if (stale) staleIndices.push(idx);
     } else {
       for (const idx of indices) {
         if (idx.status === "degraded" || idx.messageCountSinceIndex >= STALE_DRIFT_THRESHOLD) {

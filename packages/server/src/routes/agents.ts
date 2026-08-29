@@ -32,6 +32,8 @@ export async function agentRoutes(app: FastifyInstance) {
         authorityLevel: request.query.authorityLevel as 0 | 1 | 2 | 3 | undefined,
         status: request.query.status,
         isTemplate: request.query.isTemplate,
+        limit: request.query.limit,
+        cursor: request.query.cursor ?? null,
       }),
   );
 

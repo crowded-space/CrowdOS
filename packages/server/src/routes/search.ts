@@ -1,6 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
-import { ilike, or, desc } from "drizzle-orm";
+import { ilike, or, desc, sql } from "drizzle-orm";
 import { getDb } from "../Shared/config/database.js";
 import { channels, messages } from "../db/schema.js";
 
@@ -21,8 +21,37 @@ export async function searchRoutes(app: FastifyInstance) {
     },
     async (request) => {
       const { q, limit } = request.query;
-      const searchPattern = `%${q.trim()}%`;
+      const trimmed = q.trim();
+      const searchPattern = `%${trimmed}%`;
       const db = getDb();
+
+      // pg_trgm similarity ranking: when extension is available, order by similarity descending
+      // to surface best matches first while still using the gin_trgm_ops index (ILIKE %pat% already hits it).
+      // Fallback is plain ILIKE without similarity if pg_trgm not installed — both paths are fast with the new indexes.
+      const trySimilarity = async () => {
+        try {
+          const [matchedChannels, matchedMessages] = await Promise.all([
+            db.execute(sql`SELECT id, name, category_id AS "categoryId", type, position, created_at AS "createdAt", archived_at AS "archivedAt", similarity(name, ${trimmed}) AS sim FROM channels WHERE name ILIKE ${searchPattern} ORDER BY sim DESC, position ASC LIMIT ${limit}`),
+            db.execute(sql`SELECT id, channel_id AS "channelId", author_id AS "authorId", author_name AS "authorName", author_level AS "authorLevel", author_type AS "authorType", content, is_internal_monologue AS "isInternalMonologue", sequence_number AS "sequenceNumber", timestamp, similarity(content, ${trimmed}) AS sim FROM messages WHERE content ILIKE ${searchPattern} OR author_name ILIKE ${searchPattern} ORDER BY sim DESC, timestamp DESC LIMIT ${limit}`),
+          ]);
+          // drizzle execute returns { rows } on postgres-js
+          const chanRows = (matchedChannels as unknown as { rows?: unknown[] }).rows ?? (matchedChannels as unknown as unknown[]);
+          const msgRows = (matchedMessages as unknown as { rows?: unknown[] }).rows ?? (matchedMessages as unknown as unknown[]);
+          // Strip sim before returning
+          const stripSim = (r: Record<string, unknown>) => { const { sim, ...rest } = r; return rest; };
+          return {
+            channels: (Array.isArray(chanRows) ? chanRows : []).map((r) => stripSim(r as Record<string, unknown>)),
+            messages: (Array.isArray(msgRows) ? msgRows : []).map((r) => stripSim(r as Record<string, unknown>)),
+          };
+        } catch {
+          return null;
+        }
+      };
+
+      const ranked = await trySimilarity();
+      if (ranked) {
+        return { query: q, channels: ranked.channels, messages: ranked.messages };
+      }
 
       const [matchedChannels, matchedMessages] = await Promise.all([
         db
