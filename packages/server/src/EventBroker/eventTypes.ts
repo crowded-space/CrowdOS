@@ -79,6 +79,7 @@ export interface RunQueuedEventPayload {
   runId: string;
   channelId: string;
   agentId: string;
+  workspaceId?: string | null;
 }
 
 export interface RunCompensationsEventPayload {
@@ -198,6 +199,8 @@ export interface BrokerEvent<TType extends BrokerEventType = BrokerEventType> {
   seq?: number | null;
   type: TType;
   channelId?: string;
+  /** Tenant scope: first-class routing field. Absent = genuinely global. */
+  workspaceId?: string | null;
   payload: BrokerEventMap[TType];
   timestamp: Date;
 }
@@ -213,6 +216,7 @@ export interface EventEnvelope<TType extends BrokerEventType = BrokerEventType> 
   seq?: number | null;
   timestamp: Date;
   type: TType;
+  workspaceId?: string | null;
   payload: BrokerEventMap[TType];
 }
 

@@ -1,4 +1,5 @@
-import { describe, expect, it, vi, afterEach } from "vitest";
+import { beforeEach, describe, expect, it, vi, afterEach } from "vitest";
+import * as databaseModule from "../../Shared/config/database.js";
 
 vi.hoisted(() => {
   process.env.__SOCKET_FAKE_DB__ = "1";
@@ -53,6 +54,15 @@ afterEach(() => {
 });
 
 describe("CAN-1 · CodingRuntime kill-mid-stream", () => {
+  beforeEach(() => {
+    // persistMessage resolves message tenancy from the channel row.
+    const testDb = (databaseModule as any).__socketTestDb as {
+      store: { channels: Record<string, unknown>[] };
+      reset(): void;
+    } | undefined;
+    testDb?.reset();
+    testDb?.store.channels.push({ id: "ch-cancel", workspaceId: "default", name: "cancel" });
+  });
   it("abort during a hung stream → status 'cancelled', no retries, no leaked timers", async () => {
     let attempts = 0;
     const hangAdapter: IProviderAdapter = {

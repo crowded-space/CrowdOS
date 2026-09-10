@@ -7,6 +7,8 @@ import {
   MalformedCursorError
 } from "../Messages/messageGate.js";
 import type { GetMessagesParams, GetMessagesQuery } from "../Messages/messageGate.js";
+import { channelGate } from "../Channels/channelGate.js";
+import { workspaceGate } from "../Workspace/workspaceGate.js";
 
 export async function messageRoutes(app: FastifyInstance) {
   // GET /api/channels/:channelId/messages
@@ -24,10 +26,20 @@ export async function messageRoutes(app: FastifyInstance) {
     async (request, reply) => {
       const { channelId } = request.params;
       const { includeMonologue, before, limit } = request.query;
+      const workspaceId = workspaceGate.resolveHttpWorkspaceId(request as any);
+      const channel = await channelGate.get(channelId);
+      if (!channel || (channel as { workspaceId?: string | null }).workspaceId !== workspaceId) {
+        return reply.status(404).send({
+          statusCode: 404,
+          error: "Not Found",
+          message: "Channel not found",
+        });
+      }
       try {
         return await getChannelMessagesPage(channelId, includeMonologue ?? false, {
           limit,
-          before: parseBeforeCursor(before)
+          before: parseBeforeCursor(before),
+          workspaceId,
         });
       } catch (err) {
         if (err instanceof MalformedCursorError) {

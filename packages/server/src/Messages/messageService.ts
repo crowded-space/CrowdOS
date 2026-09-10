@@ -202,10 +202,12 @@ function mergeMessageRows(list: Array<typeof messages.$inferSelect>, channelId: 
   return mergedList;
 }
 
-export async function getChannelMessages(channelId: string, includeMonologue: boolean) {
+export async function getChannelMessages(channelId: string, includeMonologue: boolean, opts: { workspaceId?: string } = {}) {
   const db = getDb();
   const list = await db.query.messages.findMany({
-    where: eq(messages.channelId, channelId),
+    where: opts.workspaceId
+      ? and(eq(messages.channelId, channelId), eq(messages.workspaceId, opts.workspaceId))
+      : eq(messages.channelId, channelId),
     orderBy: (table, { asc }) => [asc(table.sequenceNumber)],
   });
 
@@ -215,17 +217,22 @@ export async function getChannelMessages(channelId: string, includeMonologue: bo
 export async function getChannelMessagesPage(
   channelId: string,
   includeMonologue: boolean,
-  opts: { limit?: number; before?: { timestamp: Date; seq: number } } = {}
+  opts: { limit?: number; before?: { timestamp: Date; seq: number }; workspaceId?: string } = {}
 ): Promise<ChannelMessagesPage> {
   const db = getDb();
   const limit = Math.min(Math.max(Math.trunc(opts.limit ?? DEFAULT_PAGE_LIMIT), 1), MAX_PAGE_LIMIT);
 
+  const scopeFilter = opts.workspaceId ? eq(messages.workspaceId, opts.workspaceId) : undefined;
+  const channelFilter = eq(messages.channelId, channelId);
   const keysetFilter = opts.before
     ? and(
-        eq(messages.channelId, channelId),
+        channelFilter,
+        ...(scopeFilter ? [scopeFilter] : []),
         sql`(${messages.timestamp}, ${messages.sequenceNumber}) < (${opts.before.timestamp.toISOString()}::timestamptz, ${opts.before.seq})`
       )
-    : eq(messages.channelId, channelId);
+    : scopeFilter
+      ? and(channelFilter, scopeFilter)
+      : channelFilter;
 
   const rows = await db.query.messages.findMany({
     where: keysetFilter,

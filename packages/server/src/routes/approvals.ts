@@ -2,27 +2,37 @@ import type { FastifyInstance } from "fastify";
 import { authGate } from "../Shared/auth/authGate.js";
 import { approvalGate } from "../Approvals/approvalGate.js";
 import { runsGate } from "../Runs/runsGate.js";
+import { workspaceGate } from "../Workspace/workspaceGate.js";
 
 export async function approvalsRoutes(app: FastifyInstance) {
   // List approvals for a run
   app.get("/api/approvals", { preHandler: authGate.requireRole("viewer") }, async (request, reply) => {
     const { runId } = request.query as { runId?: string };
     if (!runId) return reply.status(400).send({ error: "runId query required" });
+    const workspaceId = workspaceGate.resolveHttpWorkspaceId(request as any);
+    const run = await runsGate.getById(runId);
+    if (!run) return reply.status(404).send({ error: "run not found" });
+    if (run.workspaceId !== workspaceId) return reply.status(403).send({ error: "Run does not belong to this workspace" });
     const rows = await approvalGate.listByRun(runId);
     return reply.send({ runId, approvals: rows });
   });
 
   app.get("/api/approvals/:id", { preHandler: authGate.requireRole("viewer") }, async (request, reply) => {
     const { id } = request.params as { id: string };
+    const workspaceId = workspaceGate.resolveHttpWorkspaceId(request as any);
     const row = await approvalGate.getById(id);
     if (!row) return reply.status(404).send({ error: "approval not found" });
+    const run = await runsGate.getById(row.runId);
+    if (!run || run.workspaceId !== workspaceId) return reply.status(403).send({ error: "Approval does not belong to this workspace" });
     return reply.send({ approval: row });
   });
 
   app.get("/api/runs/:id/approvals", { preHandler: authGate.requireRole("viewer") }, async (request, reply) => {
     const { id } = request.params as { id: string };
+    const workspaceId = workspaceGate.resolveHttpWorkspaceId(request as any);
     const run = await runsGate.getById(id);
     if (!run) return reply.status(404).send({ error: "run not found" });
+    if (run.workspaceId !== workspaceId) return reply.status(403).send({ error: "Run does not belong to this workspace" });
     const rows = await approvalGate.listByRun(id);
     return reply.send({ runId: id, approvals: rows });
   });
@@ -43,6 +53,11 @@ export async function approvalsRoutes(app: FastifyInstance) {
     const row = await approvalGate.getById(id);
     if (!row) return reply.status(404).send({ error: "approval not found" });
     if (row.status !== "pending") return reply.status(409).send({ error: `approval already ${row.status}` });
+    const decisionWorkspace = workspaceGate.resolveHttpWorkspaceId(request as any);
+    const decisionRun = await runsGate.getById(row.runId);
+    if (!decisionRun || decisionRun.workspaceId !== decisionWorkspace) {
+      return reply.status(403).send({ error: "Approval does not belong to this workspace" });
+    }
 
     const updated = await approvalGate.decide(id, { decision, decidedBy, scope, expiresAt });
     if (!updated) return reply.status(409).send({ error: "decision failed (concurrent update?)" });
@@ -70,7 +85,7 @@ export async function approvalsRoutes(app: FastifyInstance) {
       };
       const run = await runsGate.getById(updated.runId);
       channelIdForRun = run?.channelId;
-      (targetBroker as unknown as { emit: (t: string, p: unknown, o?: unknown) => void }).emit("approval.decided" as never, payload as never, channelIdForRun ? { channelId: channelIdForRun } as never : undefined as never);
+      (targetBroker as unknown as { emit: (t: string, p: unknown, o?: unknown) => void }).emit("approval.decided" as never, payload as never, channelIdForRun ? { channelId: channelIdForRun, workspaceId: run?.workspaceId } as never : undefined as never);
     } catch {}
 
     // APR-1 policy: run continues after decision (does not cancel). If the run

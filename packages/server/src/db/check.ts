@@ -65,6 +65,7 @@ async function checkDatabaseRoundTrip(): Promise<void> {
 
   await db.insert(channels).values({
     id: channelId,
+    workspaceId: "default",
     categoryId: null,
     name: `roundtrip-${channelId.slice(0, 8)}`,
     type: "standard",
@@ -76,6 +77,7 @@ async function checkDatabaseRoundTrip(): Promise<void> {
 
   await db.insert(messages).values({
     id: messageId,
+    workspaceId: "default",
     channelId,
     authorId: agentId,
     authorName: "Roundtrip Agent",

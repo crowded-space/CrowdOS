@@ -41,11 +41,17 @@ describe.skipIf(!DATABASE_URL)("PERF-5 · keyset pagination page walk (real dev 
 
     await client`delete from "channels" where "id" = ${CHANNEL_ID}`;
     await client`
-      insert into "channels" ("id", "name", "type", "created_by", "position")
-      values (${CHANNEL_ID}, ${CHANNEL_ID}, 'standard', 'perf5-test', 0)
+      insert into "workspaces" ("id", "name", "owner_id", "status", "root_path")
+      values ('default', 'Default Workspace', 'human_operator', 'ACTIVE', 'sandbox/default')
+      on conflict ("id") do nothing
+    `;
+    await client`
+      insert into "channels" ("id", "workspace_id", "name", "type", "created_by", "position")
+      values (${CHANNEL_ID}, 'default', ${CHANNEL_ID}, 'standard', 'perf5-test', 0)
     `;
     const rows = Array.from({ length: TOTAL }, (_, i) => ({
       id: `perf5-${String(i + 1).padStart(4, "0")}-${randomUUID().slice(0, 8)}`,
+      workspaceId: "default",
       channelId: CHANNEL_ID,
       authorId: "perf5-user",
       authorName: "PERF5 Seeder",

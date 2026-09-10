@@ -87,7 +87,7 @@ describe.skipIf(!probe.ok)("runsRepository against local dev DB (RUN-1)", () => 
     const run = await repo!.createRun({
       agentId: "run1-int-agent",
       channelId: "run1-int-channel",
-      workspaceId: null,
+      workspaceId: "default",
       runtimeType: "agentic",
     });
     expect(run).not.toBeNull();
@@ -137,8 +137,7 @@ describe.skipIf(!probe.ok)("runsRepository against local dev DB (RUN-1)", () => 
   it("drives the cancel walk created -> cancelling -> cancelled via the legacy cancel port", async () => {
     const run = await repo!.createRun({
       agentId: "run1-int-agent",
-      channelId: "run1-int-channel",
-      runtimeType: "agentic",
+      channelId: "run1-int-channel",      workspaceId: "default",      runtimeType: "agentic",
     });
     createdRunIds.push(run!.id);
 
@@ -152,8 +151,7 @@ describe.skipIf(!probe.ok)("runsRepository against local dev DB (RUN-1)", () => 
   it("fails a starting run through the fail wrapper with an error code", async () => {
     const run = await repo!.createRun({
       agentId: "run1-int-agent",
-      channelId: "run1-int-channel",
-      runtimeType: "agentic",
+      channelId: "run1-int-channel",      workspaceId: "default",      runtimeType: "agentic",
     });
     createdRunIds.push(run!.id);
 

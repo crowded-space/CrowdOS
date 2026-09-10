@@ -84,10 +84,19 @@ export class LibrarianRuntime {
   async execute(broker: EventBroker, channelId: string, librarianAgent: AgentProfile, userMsgContent: string): Promise<void> {
     const db = getDb();
 
+    // Librarian tenancy follows the invoking channel (hard error, no default).
+    const originChannel = await db.query.channels.findFirst({
+      where: eq(channels.id, channelId),
+    });
+    const libWorkspace = (originChannel as { workspaceId?: string | null } | null)?.workspaceId;
+    if (!libWorkspace) {
+      throw new Error(`[LibrarianRuntime] Refusing to execute in channel ${channelId} without workspace scope.`);
+    }
+
     // 1. Set status to working & thinking
     await db.update(agents).set({ status: "working" }).where(eq(agents.id, librarianAgent.id));
-    broker.emit("agent:status", { agentId: librarianAgent.id, status: "working" });
-    broker.emit("agent:thinking", { agentId: librarianAgent.id, channelId }, { channelId });
+    broker.emit("agent:status", { agentId: librarianAgent.id, status: "working" }, { channelId, workspaceId: libWorkspace });
+    broker.emit("agent:thinking", { agentId: librarianAgent.id, channelId }, { channelId, workspaceId: libWorkspace });
 
     const contentLower = userMsgContent.toLowerCase();
 
@@ -98,13 +107,13 @@ export class LibrarianRuntime {
       if (contentLower.includes("help") || contentLower.includes("status")) {
         replyContent = await this.handleHelpCommand();
       } else if (contentLower.includes("index all") || contentLower.includes("index everything") || contentLower.includes("refresh index")) {
-        replyContent = await this.handleIndexAll(broker, librarianAgent, channelId);
+        replyContent = await this.handleIndexAll(broker, librarianAgent, channelId, libWorkspace);
       } else if (contentLower.includes("index")) {
         // Try to parse channel name
         const match = userMsgContent.match(/#([\w-]+)/) || userMsgContent.match(/index\s+([\w-]+)/);
         if (match) {
           const channelName = match[1];
-          replyContent = await this.handleIndexChannel(broker, librarianAgent, channelId, channelName);
+          replyContent = await this.handleIndexChannel(broker, librarianAgent, channelId, channelName, libWorkspace);
         } else {
           replyContent = `⚠️ Could not parse channel name from your index command. Please specify a channel name, e.g., \`@Librarian index #general-chat\`.`;
         }
@@ -112,7 +121,7 @@ export class LibrarianRuntime {
         const queryMatch = userMsgContent.match(/search\s+['"]?([^'"]+)['"]?/i);
         if (queryMatch) {
           const query = queryMatch[1];
-          replyContent = await this.handleSearchCommand(query);
+          replyContent = await this.handleSearchCommand(query, libWorkspace);
         } else {
           replyContent = `⚠️ Please specify a search query, e.g., \`@Librarian search "react build"\`.`;
         }
@@ -132,13 +141,14 @@ Available commands:
 
     // Stream and save final message
     const streamDelay = 200;
-    broker.emit("message:stream", { channelId, agentId: librarianAgent.id, chunk: replyContent }, { channelId });
+    broker.emit("message:stream", { channelId, agentId: librarianAgent.id, chunk: replyContent }, { channelId, workspaceId: libWorkspace });
 
     setTimeout(async () => {
       const repMsg = await withTransaction(async (tx) => {
         const sequenceNumber = await allocateSequence(channelId, 1, tx);
         const msg: ChannelMessage = {
           id: monotonicUlid(),
+          workspaceId: libWorkspace,
           channelId,
           authorId: librarianAgent.id,
           authorName: librarianAgent.name,
@@ -156,7 +166,7 @@ Available commands:
         });
         return msg;
       });
-      broker.emit("message:new", repMsg, { channelId });
+      broker.emit("message:new", repMsg, { channelId, workspaceId: libWorkspace });
 
       // Token Tracking & Loop Check
       const promptTokens = Math.ceil(userMsgContent.length / 4);
@@ -167,7 +177,7 @@ Available commands:
       }
 
       await db.update(agents).set({ status: "idle" }).where(eq(agents.id, librarianAgent.id));
-      broker.emit("agent:status", { agentId: librarianAgent.id, status: "idle" });
+      broker.emit("agent:status", { agentId: librarianAgent.id, status: "idle" }, { channelId, workspaceId: libWorkspace });
     }, streamDelay);
   }
 
@@ -403,10 +413,11 @@ Available commands:
   /**
    * Command: index all
    */
-  private async handleIndexAll(broker: EventBroker, librarianAgent: AgentProfile, originChannelId: string): Promise<string> {
+  private async handleIndexAll(broker: EventBroker, librarianAgent: AgentProfile, originChannelId: string, workspaceId: string): Promise<string> {
     const db = getDb();
+    // Indexing never crosses the workspace boundary.
     const allChannels = await db.query.channels.findMany({
-      where: isNull(channels.archivedAt),
+      where: and(isNull(channels.archivedAt), eq(channels.workspaceId, workspaceId)),
     });
     
     console.log(`[LibrarianRuntime] Starting workspace-wide indexing across ${allChannels.length} channels...`);
@@ -428,10 +439,10 @@ Available commands:
   /**
    * Command: index #channel
    */
-  private async handleIndexChannel(broker: EventBroker, librarianAgent: AgentProfile, originChannelId: string, channelName: string): Promise<string> {
+  private async handleIndexChannel(broker: EventBroker, librarianAgent: AgentProfile, originChannelId: string, channelName: string, workspaceId: string): Promise<string> {
     const db = getDb();
     const chan = await db.query.channels.findFirst({
-      where: eq(channels.name, channelName),
+      where: and(eq(channels.name, channelName), eq(channels.workspaceId, workspaceId)),
     });
 
     if (!chan) {
@@ -445,9 +456,15 @@ Available commands:
   /**
    * Command: search "query"
    */
-  private async handleSearchCommand(query: string): Promise<string> {
+  private async handleSearchCommand(query: string, workspaceId: string): Promise<string> {
     const db = getDb();
-    const indices = await db.select().from(channelIndex);
+    // Search only indices whose channel lives in this workspace.
+    const wsChannels = await db.query.channels.findMany({
+      where: eq(channels.workspaceId, workspaceId),
+    });
+    const wsChannelIds = new Set(wsChannels.map((c) => c.id));
+    const allIndices = await db.select().from(channelIndex);
+    const indices = allIndices.filter((idx) => wsChannelIds.has(idx.channelId));
     
     const matching = indices.filter(idx => 
       idx.topicSummary.toLowerCase().includes(query.toLowerCase()) || 

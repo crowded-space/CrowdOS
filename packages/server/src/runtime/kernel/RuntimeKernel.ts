@@ -170,6 +170,19 @@ export class RuntimeKernel {
     const msgId = monotonicUlid()
     const timestamp = new Date()
 
+    // Message tenancy follows its channel — resolve once, hard error when
+    // the channel has no workspace scope (never silently stamp "default").
+    const { getDb } = await import("../../Shared/config/database.js")
+    const { channels } = await import("../../db/schema.js")
+    const { eq } = await import("drizzle-orm")
+    const ownerChannel = await getDb().query.channels.findFirst({
+      where: eq(channels.id, channelId),
+    })
+    const messageWorkspace = (ownerChannel as { workspaceId?: string | null } | null)?.workspaceId
+    if (!messageWorkspace) {
+      throw new Error(`[RuntimeKernel] Refusing to persist message in channel ${channelId} without workspace scope.`)
+    }
+
     // DB-2: sequence reservation and the dependent message insert commit
     // atomically — a failed insert rolls the reservation back, so no 23505
     // and no gaps under concurrent writers.
@@ -180,6 +193,7 @@ export class RuntimeKernel {
         const seq = await allocateSequence(channelId, 1, tx)
         await tx.insert(messages).values({
           id: msgId,
+          workspaceId: messageWorkspace,
           channelId,
           authorId: agentId,
           authorName: agentName,
@@ -210,6 +224,7 @@ export class RuntimeKernel {
       'message:new',
       {
         id: msgId,
+        workspaceId: messageWorkspace,
         channelId,
         authorId: agentId,
         authorName: agentName,
@@ -223,7 +238,7 @@ export class RuntimeKernel {
         sequenceNumber,
         timestamp,
       },
-      { channelId }
+      { channelId, workspaceId: messageWorkspace }
     )
 
     return sequenceNumber
@@ -251,7 +266,25 @@ export class RuntimeKernel {
     if (status === 'working') markAgentWorking(agentId)
     else markAgentIdle(agentId)
 
-    broker.emit('agent:status', { agentId, status })
+    // Status is catalog-level truth, but delivery fans out per mounted
+    // workspace so tenants without this agent never see the event.
+    try {
+      const { getDb } = await import("../../Shared/config/database.js")
+      const { workspaceAgents } = await import("../../db/schema.js")
+      const { eq } = await import("drizzle-orm")
+      const mounts = await getDb().query.workspaceAgents.findMany({
+        where: eq(workspaceAgents.agentId, agentId),
+      })
+      if (mounts.length > 0) {
+        for (const mount of mounts) {
+          broker.emit('agent:status', { agentId, status }, { workspaceId: mount.workspaceId })
+        }
+      } else {
+        broker.emit('agent:status', { agentId, status })
+      }
+    } catch {
+      broker.emit('agent:status', { agentId, status })
+    }
   }
 
   streamChunk(

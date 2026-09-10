@@ -9,6 +9,11 @@ export interface RunJobData extends EnqueueRunInput {}
 
 async function processRunJob(job: Job<RunJobData>): Promise<unknown> {
   const { channelId, agentId, messageId, userInput, workspaceId, runId } = job.data;
+  // Workspace-owned execution: the job must carry an explicit workspace —
+  // never silently fall back to "default".
+  if (typeof workspaceId !== "string" || workspaceId.trim() === "") {
+    throw new Error(`[runWorker] Job ${job.id ?? runId ?? "?"} missing workspaceId; refusing to execute without tenant scope.`);
+  }
   const resumeContext = (job.data as unknown as { resumeContext?: unknown; resumeFrom?: unknown }).resumeContext ?? (job.data as unknown as { resumeContext?: unknown; resumeFrom?: unknown }).resumeFrom ?? null;
 
   const [{ runtimeGate }, { agentGate }, { EventBroker }] = await Promise.all([
@@ -37,7 +42,7 @@ async function processRunJob(job: Job<RunJobData>): Promise<unknown> {
   const result = await (runtimeGate as unknown as { execute: (req: unknown) => Promise<unknown> }).execute({
     agent,
     channelId,
-    workspaceId: workspaceId ?? "default",
+    workspaceId,
     userInput,
     broker,
     explicitRuntime: undefined,

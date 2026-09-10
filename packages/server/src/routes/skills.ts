@@ -1,4 +1,4 @@
-﻿import type { FastifyInstance } from "fastify";
+import type { FastifyInstance } from "fastify";
 import {
   skillsGate,
   createSkillSchema,
@@ -10,6 +10,7 @@ import {
 } from "../Skills/skillsGate.js";
 import { globalBroker } from "../Shared/sockets/registerSocketServer.js";
 
+// Skills are global (see agents.ts): catalog mutations fan out globally.
 function emitWorkspaceSync(): void {
   globalBroker?.emit("workspace:sync", {});
 }

@@ -39,6 +39,7 @@ const TABLE_KEYS = [
   "runtime_states",
   "task_files",
   "messages",
+  "workspace_agents",
   "channel_index",
   "compressed_summaries",
 ] as const;
@@ -431,6 +432,7 @@ function seedTemplateAgent(id: string, name: string, subtype: "worker" | "superv
 function seedChannel(id: string, name: string): void {
   store.channels.push({
     id,
+    workspaceId: "default",
     categoryId: null,
     name,
     type: "standard",
@@ -721,8 +723,8 @@ describe("DB-3 · librarian honesty on provider failure", () => {
     expect(help).toContain("no_model_configured");
 
     const search = await (
-      runtime as unknown as { handleSearchCommand(q: string): Promise<string> }
-    ).handleSearchCommand("flagged");
+      runtime as unknown as { handleSearchCommand(q: string, workspaceId: string): Promise<string> }
+    ).handleSearchCommand("flagged", "default");
     expect(search).toContain("DEGRADED INDEX");
     expect(search).toContain("no_model_configured");
   });

@@ -40,3 +40,31 @@ export {
   assertCanExecute,
   validateAgentAccess,
 };
+import {
+  WorkspaceContextRequiredError,
+  requireWorkspaceId,
+  assertWorkspaceMatch,
+  assertWorkspaceExists,
+  getMountedAgentIds,
+  resolveHttpWorkspaceId,
+  requireHttpWorkspace,
+} from "./workspaceContext.js";
+
+export {
+  WorkspaceContextRequiredError,
+  requireWorkspaceId,
+  assertWorkspaceMatch,
+  assertWorkspaceExists,
+  getMountedAgentIds,
+  resolveHttpWorkspaceId,
+  requireHttpWorkspace,
+};
+
+export const workspaceGate = {
+  requireId: requireWorkspaceId,
+  assertMatch: assertWorkspaceMatch,
+  assertExists: assertWorkspaceExists,
+  getMountedAgentIds,
+  resolveHttpWorkspaceId,
+  requireHttpWorkspace,
+};

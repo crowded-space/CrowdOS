@@ -30,6 +30,7 @@ import { allocateSequence } from "../core/sequenceNumber.js";
 import { monotonicUlid } from "../core/ulid.js";
 import { logMetric } from "../core/structuredLog.js";
 import { queueGate } from "../../Queue/queueGate.js";
+import { workspaceGate } from "../../Workspace/workspaceGate.js";
 
 const mentionParser = new MentionParser();
 const agentRegistry = new AgentRegistry();
@@ -137,12 +138,13 @@ function endRun(key: string, entry: ActiveRunEntry): void {
 
 // Agent execution is handled by RuntimeExecutor
 
-async function triggerSystemWarning(broker: EventBroker, channelId: string, content: string): Promise<void> {
+async function triggerSystemWarning(broker: EventBroker, channelId: string, content: string, workspaceId: string): Promise<void> {
   // DB-2: reservation + insert commit atomically (no SELECT-MAX+1 race).
   const warningMsg = await withTransaction(async (tx) => {
     const sequenceNumber = await allocateSequence(channelId, 1, tx);
     const msg: ChannelMessage = {
       id: monotonicUlid(),
+      workspaceId,
       channelId,
       authorId: "system",
       authorName: "System Warning",
@@ -161,19 +163,34 @@ async function triggerSystemWarning(broker: EventBroker, channelId: string, cont
     return msg;
   });
 
-  broker.emit("message:new", warningMsg, { channelId });
+  broker.emit("message:new", warningMsg, { channelId, workspaceId });
 }
 
-async function emitRuntimeSnapshot(target: any): Promise<void> {
+async function emitRuntimeSnapshot(target: any, workspaceId?: string): Promise<void> {
   const t0 = performance.now();
   try {
     const db = getDb();
-    const [dbWorkspaces, dbAgents, dbOverrides, activeSpawns] = await Promise.all([
-      db.query.workspaces.findMany(),
+    // Roster source of truth: agents mounted into the workspace. Without a
+    // workspace scope we emit metadata only — never a global tenant roster.
+    const mountedIds = workspaceId ? new Set(await workspaceGate.getMountedAgentIds(workspaceId)) : new Set<string>();
+    const [dbWorkspaces, dbAgents, dbChannels, dbCategories, dbOverrides, activeSpawns] = await Promise.all([
+      workspaceId
+        ? db.query.workspaces.findMany({ where: eq(workspaces.id, workspaceId) })
+        : db.query.workspaces.findMany(),
       db.query.agents.findMany({ where: isNull(agents.archivedAt) }),
+      workspaceId
+        ? db.query.channels.findMany({ where: eq(channels.workspaceId, workspaceId) })
+        : Promise.resolve([] as typeof channels.$inferSelect[]),
+      workspaceId
+        ? db.query.categories.findMany({ where: eq(categories.workspaceId, workspaceId) })
+        : Promise.resolve([] as typeof categories.$inferSelect[]),
       db.query.runtimeOverrides.findMany(),
       db.query.spawnRequests.findMany({ where: (table, { eq }) => eq(table.status, "in_progress") }),
     ]);
+    const scopedAgents = workspaceId ? dbAgents.filter((ag) => mountedIds.has(ag.id)) : [];
+    const scopedOverrides = workspaceId
+      ? dbOverrides.filter((ov) => mountedIds.has(ov.targetAgentId))
+      : [];
 
     const swarms = activeSpawns.map(spawn => ({
       swarmId: spawn.id,
@@ -202,7 +219,19 @@ async function emitRuntimeSnapshot(target: any): Promise<void> {
         createdAt: (ws.createdAt as Date)?.toISOString?.() ?? new Date().toISOString(),
         updatedAt: (ws.updatedAt as Date)?.toISOString?.() ?? new Date().toISOString(),
       })),
-      agents: dbAgents.map(ag => ({
+      channels: dbChannels.map(ch => ({
+        id: ch.id,
+        name: ch.name,
+        categoryId: ch.categoryId,
+        type: ch.type,
+        position: ch.position,
+      })),
+      categories: dbCategories.map(cat => ({
+        id: cat.id,
+        name: cat.name,
+        position: cat.position,
+      })),
+      agents: scopedAgents.map(ag => ({
         id: ag.id,
         name: ag.name,
         title: ag.title,
@@ -228,7 +257,7 @@ async function emitRuntimeSnapshot(target: any): Promise<void> {
         cpuUsagePercent: cpuPercent,
         lastUpdated: new Date().toISOString(),
       })),
-      overrides: dbOverrides.map(ov => ({
+      overrides: scopedOverrides.map(ov => ({
         id: ov.id,
         agentId: ov.targetAgentId,
         type: ov.overrideType === "runtime_patch" ? "instruction" : "model",
@@ -327,7 +356,9 @@ export function registerSocketServer(httpServer: HttpServer, broker: EventBroker
 
   broker.onAny((event) => {
     const channelId = (event as any).channelId || (event.payload as any)?.channelId;
-    const workspaceId = (event.payload as any)?.workspaceId;
+    // Workspace scope is first-class on the event; payload fallback kept for
+    // emitters that still embed it (e.g. run.status_changed).
+    const workspaceId = (event as any).workspaceId ?? (event.payload as any)?.workspaceId ?? null;
 
     // EVT-0: emit the full envelope — correlation fields at top level, payload nested
     const envelope: EventEnvelope = {
@@ -335,6 +366,7 @@ export function registerSocketServer(httpServer: HttpServer, broker: EventBroker
       seq: event.seq ?? null,
       timestamp: event.timestamp,
       type: event.type,
+      workspaceId: workspaceId ?? null,
       payload: event.payload,
     };
 
@@ -342,6 +374,7 @@ export function registerSocketServer(httpServer: HttpServer, broker: EventBroker
       void getDb().insert(durableEvents).values({
         eventId: event.eventId,
         type: event.type,
+        workspaceId: workspaceId ?? null,
         channelId: channelId ?? null,
         agentId: (event.payload as any)?.agentId ?? null,
         payload: event.payload as Record<string, unknown>,
@@ -395,14 +428,20 @@ export function registerSocketServer(httpServer: HttpServer, broker: EventBroker
   }
 
   // Periodic snapshot broadcast to prevent drift (every 15 seconds).
-  // Skipped entirely when no clients are connected — avoids 4 full-table
-  // queries per tick burning DB capacity in an idle server.
+  // Skipped entirely when no clients are connected — avoids full-table
+  // queries per tick burning DB capacity in an idle server. Snapshots are
+  // emitted per workspace room so tenants never receive each other's rosters.
   // QUE-2: when bullmq mode, this local timer is replaced by the maintenance
   // repeatable `snapshot-full` (15s) so API does not burn DB while idle.
   if (!isBullMqMode) {
     const snapshotInterval = setInterval(() => {
-      if (io.sockets.sockets.size > 0) {
-        emitRuntimeSnapshot(io);
+      if (io.sockets.sockets.size === 0) return;
+      const seen = new Set<string>();
+      for (const socket of io.sockets.sockets.values()) {
+        const wid = (socket.data as { workspaceId?: string } | undefined)?.workspaceId;
+        if (!wid || seen.has(wid)) continue;
+        seen.add(wid);
+        void emitRuntimeSnapshot(io.to(`workspace:${wid}`), wid);
       }
     }, 15000);
     snapshotInterval.unref?.();
@@ -442,13 +481,17 @@ export function registerSocketServer(httpServer: HttpServer, broker: EventBroker
       socket.emit("error" as any, { code, message });
     };
 
-    // Server-side room admission checks (SEC-2). The schema has no per-user
-    // channel membership/visibility model; the strongest real rule available is:
-    // verified key identity + channel/workspace must exist server-side via gates.
+    // Server-side room admission checks (SEC-2). Channels are workspace-owned:
+    // verified key identity + channel must exist AND belong to the socket's
+    // current workspace. Open rollback mode keeps the legacy existence check.
     const canJoinChannelRoom = async (cid: string): Promise<boolean> => {
       if (identity.mode === "open") return true;
       try {
-        return Boolean(await channelGate.get(cid));
+        const channel = await channelGate.get(cid);
+        if (!channel) return false;
+        const current = socket.data.workspaceId as string | undefined;
+        if (!current) return false;
+        return (channel as { workspaceId?: string | null }).workspaceId === current;
       } catch {
         return false;
       }
@@ -473,7 +516,7 @@ export function registerSocketServer(httpServer: HttpServer, broker: EventBroker
       } catch (err) {
         if (err instanceof DuplicateRunError) {
           console.log(`[Socket] Duplicate trigger rejected for @${req.agent.name} in #${req.channelId}`);
-          await triggerSystemWarning(broker, req.channelId, err.message);
+          await triggerSystemWarning(broker, req.channelId, err.message, (req as { workspaceId?: string }).workspaceId ?? (socket.data.workspaceId as string));
           return null;
         }
         throw err;
@@ -496,8 +539,11 @@ export function registerSocketServer(httpServer: HttpServer, broker: EventBroker
       // were never persisted so they are naturally excluded.
       if (DURABLE_EVENTS_ENABLED) {
         try {
+          const wid = socket.data.workspaceId as string | undefined;
           const recent = await getDb().query.durableEvents.findMany({
-            where: and(eq(durableEvents.channelId, cid)),
+            where: wid
+              ? and(eq(durableEvents.channelId, cid), eq(durableEvents.workspaceId, wid))
+              : eq(durableEvents.channelId, cid),
             orderBy: [desc(durableEvents.seq)],
             limit: 50,
           });
@@ -508,6 +554,7 @@ export function registerSocketServer(httpServer: HttpServer, broker: EventBroker
               seq: row.seq,
               timestamp: row.createdAt,
               type: row.type as BrokerEventType,
+              workspaceId: (row as { workspaceId?: string | null }).workspaceId ?? null,
               payload: row.payload as never,
             };
             socket.emit(row.type as any, envelope as any);
@@ -525,12 +572,20 @@ export function registerSocketServer(httpServer: HttpServer, broker: EventBroker
         deny("workspace_not_found", `Unknown or inaccessible workspace ${wid}`);
         return;
       }
+      // Workspace rooms are exclusive: leaving the old room first prevents
+      // cross-workspace event leakage after a switch.
+      const previous = socket.data.workspaceId as string | undefined;
+      if (previous && previous !== wid) {
+        socket.leave(`workspace:${previous}`);
+      }
       socket.join(`workspace:${wid}`);
       socket.data.workspaceId = wid;
+      // Refresh the roster for the new workspace immediately.
+      void emitRuntimeSnapshot(socket, wid);
     });
 
     // Immediately emit snapshot on connection (scoped to socket only)
-    emitRuntimeSnapshot(socket);
+    void emitRuntimeSnapshot(socket, socket.data.workspaceId as string | undefined);
 
     // User-initiated cancellation (HM2/CAN-1): abort in-flight runs for a
     // channel, optionally scoped to a single agent. Every active controller for
@@ -546,7 +601,7 @@ export function registerSocketServer(httpServer: HttpServer, broker: EventBroker
         if (agentId && runAgent !== agentId) continue;
         for (const entry of entries) {
           cancelled++;
-          broker.emit("agent:status", { agentId: runAgent, status: "idle" }, { channelId });
+          broker.emit("agent:status", { agentId: runAgent, status: "idle" }, { channelId, workspaceId: (socket.data.workspaceId as string | undefined) ?? null });
           entry.controller.abort(new Error(`Run cancelled by user (channel=${channelId}).`));
         }
       }
@@ -563,6 +618,19 @@ export function registerSocketServer(httpServer: HttpServer, broker: EventBroker
 
       const db = getDb();
       const { channelId, content } = payload as any;
+      // Workspace-owned execution requires an explicit workspace — no silent default.
+      const workspaceId = socket.data.workspaceId as string | undefined;
+      if (!workspaceId) {
+        deny("workspace_required", "Join a workspace before sending messages.");
+        return;
+      }
+      // Resolve through the gate (honors workspace scoping in prod and
+      // test doubles alike) — never trust a bare channel id.
+      const targetChannel = await channelGate.get(channelId);
+      if (!targetChannel || (targetChannel as { workspaceId?: string | null }).workspaceId !== workspaceId) {
+        deny("channel_not_found", `Unknown or inaccessible channel ${channelId}`);
+        return;
+      }
       const rawMode = (payload as any).mode ?? (payload as any).runtimeMode;
       const explicitRuntime = composerModeToRuntime(rawMode);
       if (explicitRuntime) {
@@ -594,6 +662,7 @@ export function registerSocketServer(httpServer: HttpServer, broker: EventBroker
           const sequenceNumber = await allocateSequence(channelId, 1, tx);
           const msg: ChannelMessage = {
             id: monotonicUlid(),
+            workspaceId,
             channelId,
             authorId,
             authorName,
@@ -612,10 +681,11 @@ export function registerSocketServer(httpServer: HttpServer, broker: EventBroker
           return msg;
         });
 
-        broker.emit("message:new", userMsg, { channelId });
+        broker.emit("message:new", userMsg, { channelId, workspaceId });
 
-        // 3. Process mentions and triggers
-        const allAgents = await agentRegistry.list({ isTemplate: false });
+        // 3. Process mentions and triggers — roster is the mounted set only.
+        const mountedIds = new Set(await workspaceGate.getMountedAgentIds(workspaceId));
+        const allAgents = (await agentRegistry.list({ isTemplate: false })).filter((a) => mountedIds.has(a.id));
 
         console.log(`[Socket] user:message received in channel ${channelId}: "${content}" (resolved mentions: ${resolvedMentions.length})`);
 
@@ -627,11 +697,11 @@ export function registerSocketServer(httpServer: HttpServer, broker: EventBroker
         // message ordering never depends on completion order.
         const dispatchAgent = async (agent: AgentProfile, announce: string): Promise<void> => {
           if (agent.status === "paused") {
-            await triggerSystemWarning(broker, channelId, `Agent @${agent.name} is currently paused.`);
+            await triggerSystemWarning(broker, channelId, `Agent @${agent.name} is currently paused.`, workspaceId);
             return;
           }
           if (agent.status === "offline") {
-            await triggerSystemWarning(broker, channelId, `Agent @${agent.name} is currently offline.`);
+            await triggerSystemWarning(broker, channelId, `Agent @${agent.name} is currently offline.`, workspaceId);
             return;
           }
           console.log(announce);
@@ -640,7 +710,7 @@ export function registerSocketServer(httpServer: HttpServer, broker: EventBroker
             res = await runOrReportBusy({
               agent,
               channelId,
-              workspaceId: 'default',
+              workspaceId,
               userInput: content,
               broker,
               explicitRuntime,
@@ -648,7 +718,7 @@ export function registerSocketServer(httpServer: HttpServer, broker: EventBroker
             });
           } catch (err: any) {
             console.error(`[Socket] Execution failed for agent @${agent.name}:`, err?.message || err);
-            await triggerSystemWarning(broker, channelId, `System error processing @${agent.name}: ${err?.message || err}`);
+            await triggerSystemWarning(broker, channelId, `System error processing @${agent.name}: ${err?.message || err}`, workspaceId);
             return;
           }
           if (!res) return;
@@ -656,7 +726,7 @@ export function registerSocketServer(httpServer: HttpServer, broker: EventBroker
             console.log(`[Socket] Run cancelled for agent @${agent.name}`);
           } else if (res.status === 'failed') {
             console.error(`[Socket] Execution failed for agent @${agent.name}:`, res.finalResponse);
-            await triggerSystemWarning(broker, channelId, res.finalResponse);
+            await triggerSystemWarning(broker, channelId, res.finalResponse, workspaceId);
           }
         };
 
@@ -679,15 +749,14 @@ export function registerSocketServer(httpServer: HttpServer, broker: EventBroker
               }
             }
           } else {
-            const channel = await db.query.channels.findFirst({
-              where: eq(channels.id, channelId),
-            });
+            // targetChannel was workspace-verified above; reuse it (no second lookup).
+            const channel = targetChannel;
             let targetAgents: typeof allAgents = [];
             if (channel?.categoryId) {
               const category = await db.query.categories.findFirst({
                 where: eq(categories.id, channel.categoryId),
               });
-              if (category?.ownedByAgentId) {
+              if (category && (category as { workspaceId?: string | null }).workspaceId === workspaceId && category?.ownedByAgentId) {
                 const ownerAgent = allAgents.find(a => a.id === category.ownedByAgentId);
                 if (ownerAgent && ownerAgent.status !== "offline" && ownerAgent.status !== "paused") {
                   targetAgents.push(ownerAgent);
@@ -710,11 +779,11 @@ export function registerSocketServer(httpServer: HttpServer, broker: EventBroker
           const enqueueTasks: Array<() => Promise<void>> = [];
           for (const agent of agentsToEnqueue) {
             if (agent.status === "paused") {
-              enqueueTasks.push(async () => { await triggerSystemWarning(broker, channelId, `Agent @${agent.name} is currently paused.`); });
+              enqueueTasks.push(async () => { await triggerSystemWarning(broker, channelId, `Agent @${agent.name} is currently paused.`, workspaceId); });
               continue;
             }
             if (agent.status === "offline") {
-              enqueueTasks.push(async () => { await triggerSystemWarning(broker, channelId, `Agent @${agent.name} is currently offline.`); });
+              enqueueTasks.push(async () => { await triggerSystemWarning(broker, channelId, `Agent @${agent.name} is currently offline.`, workspaceId); });
               continue;
             }
             enqueueTasks.push(async () => {
@@ -726,14 +795,14 @@ export function registerSocketServer(httpServer: HttpServer, broker: EventBroker
                   agentId: agent.id,
                   messageId: userMsg.id,
                   userInput: content,
-                  workspaceId: "default",
+                  workspaceId,
                 });
-                broker.emit("run.queued" as never, { runId: provisionalRunId, channelId, agentId: agent.id } as never, { channelId });
+                broker.emit("run.queued" as never, { runId: provisionalRunId, channelId, agentId: agent.id, workspaceId } as never, { channelId, workspaceId });
                 console.log(`[Socket][Queue] Enqueued run ${provisionalRunId} for @${agent.name} in #${channelId} (msg ${userMsg.id})`);
               } catch (err: unknown) {
                 const msg = err instanceof Error ? err.message : String(err);
                 console.error(`[Socket][Queue] Failed to enqueue agent @${agent.name}:`, msg);
-                await triggerSystemWarning(broker, channelId, `System error queueing @${agent.name}: ${msg}`);
+                await triggerSystemWarning(broker, channelId, `System error queueing @${agent.name}: ${msg}`, workspaceId);
               }
             });
           }
@@ -764,9 +833,8 @@ export function registerSocketServer(httpServer: HttpServer, broker: EventBroker
               }
             }
           } else {
-            const channel = await db.query.channels.findFirst({
-              where: eq(channels.id, channelId),
-            });
+            // targetChannel was workspace-verified above; reuse it (no second lookup).
+            const channel = targetChannel;
 
             let targetAgents: typeof allAgents = [];
 
@@ -774,7 +842,7 @@ export function registerSocketServer(httpServer: HttpServer, broker: EventBroker
               const category = await db.query.categories.findFirst({
                 where: eq(categories.id, channel.categoryId),
               });
-              if (category?.ownedByAgentId) {
+              if (category && (category as { workspaceId?: string | null }).workspaceId === workspaceId && category?.ownedByAgentId) {
                 const ownerAgent = allAgents.find(a => a.id === category.ownedByAgentId);
                 if (ownerAgent && ownerAgent.status !== "offline" && ownerAgent.status !== "paused") {
                   targetAgents.push(ownerAgent);
@@ -821,7 +889,7 @@ export function registerSocketServer(httpServer: HttpServer, broker: EventBroker
         }
       } catch (error: any) {
         console.error("Error in user:message handler:", error);
-        await triggerSystemWarning(broker, channelId, `System error processing message: ${error?.message || error}`);
+        await triggerSystemWarning(broker, channelId, `System error processing message: ${error?.message || error}`, workspaceId);
       }
     });
 
@@ -848,6 +916,12 @@ export function registerSocketServer(httpServer: HttpServer, broker: EventBroker
           return;
         }
         const { run, checkpoint } = result;
+        // Ownership: a socket may only resume runs from its own workspace.
+        const resumeWorkspace = socket.data.workspaceId as string | undefined;
+        if (!resumeWorkspace || run.workspaceId !== resumeWorkspace) {
+          socket.emit("error" as any, { code: "forbidden", message: "Run does not belong to this workspace." });
+          return;
+        }
         const resumeContext = checkpoint ? { watermarkSeq: checkpoint.watermarkSeq, completedCallIds: checkpoint.completedCallIds, historyRef: checkpoint.historyRef, updatedAt: checkpoint.updatedAt } : { watermarkSeq: 0, completedCallIds: [] as string[] };
         const queueMode = queueGate.mode();
         if (queueMode === "bullmq") {
@@ -858,7 +932,7 @@ export function registerSocketServer(httpServer: HttpServer, broker: EventBroker
             agentId: run.agentId,
             messageId,
             userInput: "",
-            workspaceId: run.workspaceId ?? undefined,
+            workspaceId: workspaceGate.requireId(run.workspaceId),
             // @ts-ignore
             resumeContext,
             // @ts-ignore
@@ -890,7 +964,7 @@ export function registerSocketServer(httpServer: HttpServer, broker: EventBroker
           void (runtimeGate as unknown as { execute: (req: unknown) => Promise<unknown> }).execute({
             agent,
             channelId: run.channelId,
-            workspaceId: run.workspaceId ?? "default",
+            workspaceId: workspaceGate.requireId(run.workspaceId),
             userInput: "",
             broker,
             runId: run.id,
@@ -915,10 +989,15 @@ export function registerSocketServer(httpServer: HttpServer, broker: EventBroker
       }
       try {
         const { runsGate } = await import("../../Runs/runsGate.js");
+        const run = await runsGate.getById(runId);
+        if (!run || run.workspaceId !== (socket.data.workspaceId as string | undefined)) {
+          socket.emit("error" as any, { code: "forbidden", message: "Run does not belong to this workspace." });
+          return;
+        }
         const entries = await runsGate.listCompensations(runId);
         const { EventBroker } = await import("../../EventBroker/eventBrokerGate.js");
         const broker = new EventBroker();
-        broker.emit("run.compensations" as never, { runId, entries: entries.map(e => ({ id: e.id, seq: e.seq, toolName: e.toolName, targetPath: e.targetPath, inverseOp: e.inverseOp as unknown as { op: string; path: string }, createdAt: e.createdAt.toISOString() })) } as never, { channelId: (await runsGate.getById(runId))?.channelId } as never);
+        broker.emit("run.compensations" as never, { runId, entries: entries.map(e => ({ id: e.id, seq: e.seq, toolName: e.toolName, targetPath: e.targetPath, inverseOp: e.inverseOp as unknown as { op: string; path: string }, createdAt: e.createdAt.toISOString() })) } as never, { channelId: run.channelId, workspaceId: run.workspaceId } as never);
         socket.emit("run:compensations" as any, { runId, entries });
       } catch (err) {
         console.error("[Socket] run:compensations:list failed:", err);
@@ -940,6 +1019,11 @@ export function registerSocketServer(httpServer: HttpServer, broker: EventBroker
       }
       try {
         const { runsGate } = await import("../../Runs/runsGate.js");
+        const run = await runsGate.getById(runId);
+        if (!run || run.workspaceId !== (socket.data.workspaceId as string | undefined)) {
+          socket.emit("error" as any, { code: "forbidden", message: "Run does not belong to this workspace." });
+          return;
+        }
         const result = await runsGate.undoCompensation(runId, compId);
         if (!result.ok) {
           socket.emit("error" as any, { code: "undo_failed", message: result.error });
@@ -949,8 +1033,7 @@ export function registerSocketServer(httpServer: HttpServer, broker: EventBroker
         socket.emit("run:compensations" as any, { runId, entries });
         const { EventBroker } = await import("../../EventBroker/eventBrokerGate.js");
         const broker = new EventBroker();
-        const run = await runsGate.getById(runId);
-        broker.emit("run.compensations" as never, { runId, entries: entries.map(e => ({ id: e.id, seq: e.seq, toolName: e.toolName, targetPath: e.targetPath, inverseOp: e.inverseOp as unknown as { op: string; path: string }, createdAt: e.createdAt.toISOString() })) } as never, { channelId: run?.channelId } as never);
+        broker.emit("run.compensations" as never, { runId, entries: entries.map(e => ({ id: e.id, seq: e.seq, toolName: e.toolName, targetPath: e.targetPath, inverseOp: e.inverseOp as unknown as { op: string; path: string }, createdAt: e.createdAt.toISOString() })) } as never, { channelId: run.channelId, workspaceId: run.workspaceId } as never);
       } catch (err) {
         console.error("[Socket] run:compensation:undo failed:", err);
         socket.emit("error" as any, { code: "undo_failed", message: err instanceof Error ? err.message : String(err) });
@@ -993,6 +1076,10 @@ export function registerSocketServer(httpServer: HttpServer, broker: EventBroker
         try {
           const { runsGate } = await import("../../Runs/runsGate.js");
           const run = await runsGate.getById(updated.runId);
+          if (!run || run.workspaceId !== (socket.data.workspaceId as string | undefined)) {
+            socket.emit("error" as any, { code: "forbidden", message: "Run does not belong to this workspace." });
+            return;
+          }
           channelIdForRun = run?.channelId;
           broker.emit("approval.decided" as never, {
             runId: updated.runId,
@@ -1003,7 +1090,7 @@ export function registerSocketServer(httpServer: HttpServer, broker: EventBroker
             scope: updated.scope,
             riskClass: updated.riskClass,
             channelId: channelIdForRun,
-          } as never, channelIdForRun ? { channelId: channelIdForRun } as never : undefined as never);
+          } as never, channelIdForRun ? { channelId: channelIdForRun, workspaceId: run.workspaceId } as never : undefined as never);
         } catch {}
         // APR-1: ensure run resumes even if no live poller (orphaned). Poller also transitions, so idempotent.
         try {
@@ -1034,6 +1121,12 @@ export function registerSocketServer(httpServer: HttpServer, broker: EventBroker
         }
       }
       try {
+        const { runsGate } = await import("../../Runs/runsGate.js");
+        const run = await runsGate.getById(runId);
+        if (!run || run.workspaceId !== (socket.data.workspaceId as string | undefined)) {
+          socket.emit("error" as any, { code: "forbidden", message: "Run does not belong to this workspace." });
+          return;
+        }
         const { approvalGate } = await import("../../Approvals/approvalGate.js");
         const rows = await approvalGate.listByRun(runId);
         socket.emit("approval:list:result" as any, { runId, approvals: rows });

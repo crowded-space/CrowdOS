@@ -42,6 +42,16 @@ export class EscalationChain {
     const db = getDb();
     console.log(`[EscalationChain] Escalating error from @${agent.name} (L${agent.authorityLevel}): ${errorMessage}`);
 
+    // Escalation tenancy follows its channel (hard error, no silent default).
+    const { channels } = await import("../db/schema.js");
+    const escChannel = await db.query.channels.findFirst({
+      where: eq(channels.id, channelId),
+    });
+    const escWorkspace = (escChannel as { workspaceId?: string | null } | null)?.workspaceId;
+    if (!escWorkspace) {
+      throw new Error(`[EscalationChain] Refusing to escalate in channel ${channelId} without workspace scope.`);
+    }
+
     // Emit real-time escalation:created event to the projection layer
     broker.emit("escalation:created", {
       id: `esc-${Date.now()}`,
@@ -50,7 +60,7 @@ export class EscalationChain {
       message: errorMessage,
       timestamp: new Date().toISOString(),
       details: { channelId }
-    });
+    }, { channelId, workspaceId: escWorkspace });
 
     // If loop was detected, trigger a formal Swarm Strike
     if (errorType === "LOOP_DETECTED") {
@@ -61,13 +71,13 @@ export class EscalationChain {
         reason: "Infinite self-loop detected. 3 consecutive generated outputs show high lexical similarity >= 0.9.",
         channelId,
         timestamp: new Date().toISOString()
-      });
+      }, { channelId, workspaceId: escWorkspace });
     }
 
     // 1. Pause the failing agent
     await db.update(agents).set({ status: "paused" }).where(eq(agents.id, agent.id));
-    broker.emit("agent:status", { agentId: agent.id, status: "paused" });
-    broker.emit("agent:paused", { agentId: agent.id, reason: `${errorType}: ${errorMessage}` });
+    broker.emit("agent:status", { agentId: agent.id, status: "paused" }, { channelId, workspaceId: escWorkspace });
+    broker.emit("agent:paused", { agentId: agent.id, reason: `${errorType}: ${errorMessage}` }, { channelId, workspaceId: escWorkspace });
 
     // Update RuntimeState
     const [state] = await db.select().from(runtimeStates).where(eq(runtimeStates.agentId, agent.id)).limit(1);
@@ -114,6 +124,7 @@ export class EscalationChain {
 
         const escMsg: ChannelMessage = {
           id: monotonicUlid(),
+          workspaceId: escWorkspace,
           channelId,
           authorId: "system",
           authorName: "System Safety Monitor",
@@ -130,18 +141,19 @@ export class EscalationChain {
           ...escMsg,
           authorLevel: String(escMsg.authorLevel),
         });
-        broker.emit("message:new", escMsg, { channelId });
+        broker.emit("message:new", escMsg, { channelId, workspaceId: escWorkspace });
 
         // Trigger active target agent status
         await db.update(agents).set({ status: "working" }).where(eq(agents.id, targetAgent.id));
-        broker.emit("agent:status", { agentId: targetAgent.id, status: "working" });
-        broker.emit("agent:thinking", { agentId: targetAgent.id, channelId }, { channelId });
+        broker.emit("agent:status", { agentId: targetAgent.id, status: "working" }, { channelId, workspaceId: escWorkspace });
+        broker.emit("agent:thinking", { agentId: targetAgent.id, channelId }, { channelId, workspaceId: escWorkspace });
 
         setTimeout(async () => {
           const replyContent = `I am @${targetAgent.name}, L${targetAgent.authorityLevel} Coordinator. I have taken over the error escalation from @${agent.name}. Examining error stack and initializing fallback pipelines.`;
           const replySeq = await getNextSequenceNumber(channelId);
           const replyMsg: ChannelMessage = {
             id: monotonicUlid(),
+            workspaceId: escWorkspace,
             channelId,
             authorId: targetAgent.id,
             authorName: targetAgent.name,
@@ -158,10 +170,10 @@ export class EscalationChain {
             ...replyMsg,
             authorLevel: String(replyMsg.authorLevel),
           });
-          broker.emit("message:new", replyMsg, { channelId });
+          broker.emit("message:new", replyMsg, { channelId, workspaceId: escWorkspace });
 
           await db.update(agents).set({ status: "idle" }).where(eq(agents.id, targetAgent.id));
-          broker.emit("agent:status", { agentId: targetAgent.id, status: "idle" });
+          broker.emit("agent:status", { agentId: targetAgent.id, status: "idle" }, { channelId, workspaceId: escWorkspace });
         }, 1200);
 
         return;
@@ -173,6 +185,7 @@ export class EscalationChain {
 
     const userMsg: ChannelMessage = {
       id: monotonicUlid(),
+      workspaceId: escWorkspace,
       channelId,
       authorId: "system",
       authorName: "System Warning",
@@ -189,7 +202,7 @@ export class EscalationChain {
       ...userMsg,
       authorLevel: String(userMsg.authorLevel),
     });
-    broker.emit("message:new", userMsg, { channelId });
-    broker.emit("budget:exceeded", { profileId: agent.modelModuleId || "default", pausedAgents: [agent.id] }, { channelId });
+    broker.emit("message:new", userMsg, { channelId, workspaceId: escWorkspace });
+    broker.emit("budget:exceeded", { profileId: agent.modelModuleId || "default", pausedAgents: [agent.id] }, { channelId, workspaceId: escWorkspace });
   }
 }

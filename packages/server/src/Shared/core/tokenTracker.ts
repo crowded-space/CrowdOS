@@ -52,6 +52,15 @@ export class TokenTracker {
   ): Promise<boolean> {
     const db = getDb();
     const totalTokens = promptTokens + completionTokens;
+    // Workspace scope for event delivery (budgets themselves stay global).
+    let trackWorkspace: string | null = null;
+    try {
+      const { channels } = await import("../../db/schema.js");
+      const ch = await db.query.channels.findFirst({
+        where: eq(channels.id, channelId),
+      });
+      trackWorkspace = (ch as { workspaceId?: string | null } | null)?.workspaceId ?? null;
+    } catch {}
 
     // MODEL-1: incremental cost (USD per 1k tokens). Budget units stay
     // TOKEN-denominated, so cost is logged for analytics only.
@@ -85,7 +94,7 @@ export class TokenTracker {
     const ledger = await TokenTracker.incrementBudgetLedger(totalTokens);
     if (!ledger) {
       // No settings row: nothing to enforce, keep legacy no-op semantics
-      broker.emit("workspace:sync", {}, { channelId });
+      broker.emit("workspace:sync", {}, { channelId, workspaceId: trackWorkspace });
       return false;
     }
 
@@ -94,7 +103,7 @@ export class TokenTracker {
     console.log(`[TokenTracker] Consumed tokens: ${consumedTokens} / ${globalSoftCap}`);
 
     // Emit live usage sync to frontend
-    broker.emit("workspace:sync", {}, { channelId });
+    broker.emit("workspace:sync", {}, { channelId, workspaceId: trackWorkspace });
 
     // 3. Exceeded check
     if (consumedTokens >= globalSoftCap) {
@@ -126,7 +135,7 @@ export class TokenTracker {
         broker.emit(
           "budget:warning",
           { profileId: modelModuleId || "default", usage: consumedTokens, cap: globalSoftCap },
-          { channelId },
+          { channelId, workspaceId: trackWorkspace },
         );
       }
 
@@ -134,6 +143,7 @@ export class TokenTracker {
         const sequenceNumber = await allocateSequence(channelId, 1, tx);
         const msg: ChannelMessage = {
           id: monotonicUlid(),
+          workspaceId: trackWorkspace ?? "default",
           channelId,
           authorId: "system",
           authorName: "System Warning",
@@ -151,7 +161,7 @@ export class TokenTracker {
         });
         return msg;
       });
-      broker.emit("message:new", warnMsg, { channelId });
+      broker.emit("message:new", warnMsg, { channelId, workspaceId: trackWorkspace });
     } else {
       TokenTracker.budgetWarningState.warned = false;
       TokenTracker.budgetWarningState.cap = globalSoftCap;

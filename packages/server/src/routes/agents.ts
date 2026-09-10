@@ -15,6 +15,8 @@ import type {
 } from "../Agents/agentGate.js";
 import { globalBroker } from "../Shared/sockets/registerSocketServer.js";
 
+// Agents are a global catalog (roster membership lives in workspace_agents),
+// so catalog mutations intentionally fan out globally.
 function emitWorkspaceSync(): void {
   globalBroker?.emit("workspace:sync", {});
 }

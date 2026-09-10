@@ -6,8 +6,10 @@ import { randomUUID } from "node:crypto";
 import { getDb } from "../Shared/config/database.js";
 import { categories, channels } from "../db/schema.js";
 import { globalBroker } from "../Shared/sockets/registerSocketServer.js";
+import { workspaceGate } from "../Workspace/workspaceGate.js";
 
 const createCategorySchema = z.object({
+  workspaceId: z.string().min(1),
   name: z.string().min(1),
   ownedByAgentId: z.string().nullable().optional(),
   embeddingProfileId: z.string().nullable().optional(),
@@ -26,14 +28,15 @@ const paramIdSchema = z.object({
   id: z.string().min(1),
 });
 
-function emitWorkspaceSync(): void {
-  globalBroker?.emit("workspace:sync", {});
+function emitWorkspaceSync(workspaceId: string): void {
+  globalBroker?.emit("workspace:sync", {}, { workspaceId });
 }
 
 export async function categoryRoutes(app: FastifyInstance) {
   // GET /api/categories - List categories with nested channels, limit+cursor compat (capped 200)
   app.get("/api/categories", async (req: any) => {
     const db = getDb();
+    const workspaceId = workspaceGate.resolveHttpWorkspaceId(req);
     const limitRaw = req.query?.limit != null ? Number(req.query.limit) : 200;
     const limit = Math.min(200, Math.max(1, Number.isFinite(limitRaw) ? limitRaw : 200));
     const cursorRaw = req.query?.cursor ?? req.query?.offset;
@@ -43,6 +46,7 @@ export async function categoryRoutes(app: FastifyInstance) {
       if (Number.isFinite(parsed) && parsed >= 0) offset = Math.floor(parsed);
     }
     const list = await db.query.categories.findMany({
+      where: eq(categories.workspaceId, workspaceId),
       with: {
         channels: {
           orderBy: (table, { asc }) => [asc(table.position)],
@@ -60,12 +64,18 @@ export async function categoryRoutes(app: FastifyInstance) {
     "/api/categories",
     { schema: { body: createCategorySchema } },
     async (request, reply) => {
+      try {
+        await workspaceGate.assertExists(request.body.workspaceId);
+      } catch {
+        return reply.status(400).send({ error: "Bad Request", message: `Unknown workspace: ${request.body.workspaceId}` });
+      }
       const db = getDb();
       const id = randomUUID();
       const [res] = await db
         .insert(categories)
         .values({
           id,
+          workspaceId: request.body.workspaceId,
           name: request.body.name,
           ownedByAgentId: request.body.ownedByAgentId ?? null,
           embeddingProfileId: request.body.embeddingProfileId ?? null,
@@ -73,7 +83,7 @@ export async function categoryRoutes(app: FastifyInstance) {
           position: request.body.position,
         })
         .returning();
-      emitWorkspaceSync();
+      emitWorkspaceSync(request.body.workspaceId);
       return reply.status(201).send(res);
     }
   );
@@ -83,6 +93,16 @@ export async function categoryRoutes(app: FastifyInstance) {
     reply: FastifyReply,
   ) {
     const db = getDb();
+    const workspaceId = workspaceGate.resolveHttpWorkspaceId(request as any);
+    const existing = await db.query.categories.findFirst({
+      where: eq(categories.id, request.params.id),
+    });
+    if (!existing) {
+      return reply.status(404).send({ error: "Not Found", message: "Category not found" });
+    }
+    if ((existing as { workspaceId?: string | null }).workspaceId !== workspaceId) {
+      return reply.status(403).send({ error: "Forbidden", message: "Category does not belong to this workspace" });
+    }
     const updateData: Partial<typeof categories.$inferInsert> = {};
 
     if (request.body.name !== undefined) updateData.name = request.body.name;
@@ -100,7 +120,7 @@ export async function categoryRoutes(app: FastifyInstance) {
       return reply.status(404).send({ error: "Not Found", message: "Category not found" });
     }
 
-    emitWorkspaceSync();
+    emitWorkspaceSync(workspaceId);
     return updated;
   }
 
@@ -122,12 +142,16 @@ export async function categoryRoutes(app: FastifyInstance) {
     { schema: { params: paramIdSchema } },
     async (request, reply) => {
       const db = getDb();
+      const workspaceId = workspaceGate.resolveHttpWorkspaceId(request as any);
       const existing = await db.query.categories.findFirst({
         where: eq(categories.id, request.params.id),
       });
 
       if (!existing) {
         return reply.status(404).send({ error: "Not Found", message: "Category not found" });
+      }
+      if ((existing as { workspaceId?: string | null }).workspaceId !== workspaceId) {
+        return reply.status(403).send({ error: "Forbidden", message: "Category does not belong to this workspace" });
       }
 
       const { withTransaction } = await import("../Shared/config/database.js");
@@ -142,7 +166,7 @@ export async function categoryRoutes(app: FastifyInstance) {
       if (result.length === 0) {
         return reply.status(404).send({ error: "Not Found", message: "Category not found" });
       }
-      emitWorkspaceSync();
+      emitWorkspaceSync(workspaceId);
       return reply.status(204).send();
     }
   );

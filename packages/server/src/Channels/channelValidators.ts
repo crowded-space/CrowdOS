@@ -3,6 +3,7 @@ import { z } from "zod";
 export const channelTypeSchema = z.enum(["standard", "pair_private", "archived"]);
 
 export const createChannelSchema = z.object({
+  workspaceId: z.string().min(1),
   categoryId: z.string().nullable().optional(),
   name: z.string().min(1),
   type: channelTypeSchema.default("standard"),

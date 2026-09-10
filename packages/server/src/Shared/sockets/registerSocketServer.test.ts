@@ -15,6 +15,8 @@ type DbStore = {
   channels: Record<string, unknown>[];
   workspaces: Record<string, unknown>[];
   agents: Record<string, unknown>[];
+  workspaceAgents: Record<string, unknown>[];
+  durableEvents: Record<string, unknown>[];
 };
 
 interface Harness {
@@ -100,6 +102,8 @@ async function setup(
 
   socketTestDb.reset();
   socketTestGate.setOverride(null);
+  // Default workspace row for the strict-auth existence check.
+  socketTestDb.store.workspaces.push({ id: "default", name: "Default Workspace", status: "ACTIVE" });
 
   const broker = new brokerModule.EventBroker();
   const httpServer = createServer();
@@ -133,7 +137,8 @@ async function setup(
   ): Promise<{ client: ClientSocket; error?: Error }> => {
     return new Promise((resolve) => {
       const client = io(`http://127.0.0.1:${port}`, {
-        auth: opts.auth,
+        // Strict auth requires an explicit, existing workspace in the handshake.
+        auth: { workspaceId: "default", ...opts.auth },
         transports: ["websocket"],
         reconnection: false,
         timeout: 5000,
@@ -191,11 +196,11 @@ describe("SEC-2 · socket trust & room isolation", () => {
   it("ignores impersonated identity claims — author identity is server-derived", async () => {
     const harness = await setup();
     const connect = connectOf(harness);
-    harness.setChannelOverride(async (id: string) => (id === "chA" ? { id: "chA", name: "general" } : null));
+    harness.setChannelOverride(async (id: string) => (id === "chA" ? { id: "chA", name: "general", workspaceId: "default" } : null));
 
     const { key, record } = await seedKey(harness);
     const { client, error } = await connect({
-      auth: { key, userId: "victim-admin", workspaceId: "someone-elses-ws" },
+      auth: { key, userId: "victim-admin" },
     });
     expect(error).toBeUndefined();
 
@@ -215,7 +220,7 @@ describe("SEC-2 · socket trust & room isolation", () => {
   it("room isolation: a socket without a membership grant receives no channel A events", async () => {
     const harness = await setup();
     const connect = connectOf(harness);
-    harness.setChannelOverride(async (id: string) => (id === "chA" ? { id: "chA", name: "general" } : null));
+    harness.setChannelOverride(async (id: string) => (id === "chA" ? { id: "chA", name: "general", workspaceId: "default" } : null));
 
     const { key: keyA } = await seedKey(harness, "member-key");
     const { key: keyB } = await seedKey(harness, "outsider-key");
@@ -278,6 +283,7 @@ describe("SEC-2 · socket trust & room isolation", () => {
       SOCKET_MSG_RATE_REFILL: "1",
     });
     const connect = connectOf(harness);
+    harness.setChannelOverride(async (id: string) => (id === "chThrottle" ? { id, name: "t", workspaceId: "default" } : null));
 
     const { key } = await seedKey(harness);
     const session = await connect({ auth: { key } });
@@ -299,7 +305,7 @@ describe("SEC-2 · socket trust & room isolation", () => {
   it("disconnect releases rooms and per-socket state without cancelling runs", async () => {
     const harness = await setup();
     const connect = connectOf(harness);
-    harness.setChannelOverride(async (id: string) => (id === "chA" ? { id: "chA", name: "general" } : null));
+    harness.setChannelOverride(async (id: string) => (id === "chA" ? { id: "chA", name: "general", workspaceId: "default" } : null));
 
     const { key } = await seedKey(harness);
     const session = await connect({ auth: { key } });
@@ -324,6 +330,68 @@ describe("SEC-2 · socket trust & room isolation", () => {
 
     client.emit("channel:join", { channelId: "anything-goes" });
     await waitFor(() => harness.io.sockets.adapter.rooms.has("channel:anything-goes"));
+  });
+
+  it("rejects strict handshake for an unknown workspace (no silent default)", async () => {
+    const harness = await setup();
+    const connect = connectOf(harness);
+    const { key } = await seedKey(harness);
+    const { error } = await connect({ auth: { key, workspaceId: "ghost-ws" } });
+    expect(error?.message).toMatch(/Unauthorized|Unknown workspace/);
+  });
+
+  it("workspace:join is exclusive — old workspace room is left", async () => {
+    const harness = await setup();
+    const connect = connectOf(harness);
+    harness.store.workspaces.push({ id: "ws-b", name: "B", status: "ACTIVE" });
+
+    const { key } = await seedKey(harness);
+    const session = await connect({ auth: { key } });
+    expect(session.error).toBeUndefined();
+    expect(harness.io.sockets.adapter.rooms.has("workspace:default")).toBe(true);
+
+    session.client.emit("workspace:join", { workspaceId: "ws-b" });
+    await waitFor(() => harness.io.sockets.adapter.rooms.has("workspace:ws-b"));
+    expect(harness.io.sockets.adapter.rooms.has("workspace:default")).toBe(false);
+  });
+
+  it("denies joining a channel from another workspace", async () => {
+    const harness = await setup();
+    const connect = connectOf(harness);
+    harness.setChannelOverride(async (id: string) =>
+      id === "chForeign" ? { id: "chForeign", name: "foreign", workspaceId: "ws-other" } : null,
+    );
+
+    const { key } = await seedKey(harness);
+    const session = await connect({ auth: { key } });
+    expect(session.error).toBeUndefined();
+
+    const errors: any[] = [];
+    session.client.on("error" as any, (payload: any) => errors.push(payload));
+
+    session.client.emit("channel:join", { channelId: "chForeign" });
+    await waitFor(() => errors.find((e) => e.code === "channel_not_found"));
+    expect(harness.io.sockets.adapter.rooms.has("channel:chForeign")).toBe(false);
+  });
+
+  it("snapshot roster contains only agents mounted in the socket workspace", async () => {
+    const harness = await setup();
+    const connect = connectOf(harness);
+    seedAgent(harness.store, "agent-in", "Insider");
+    seedAgent(harness.store, "agent-out", "Outsider", "default", false);
+
+    const { key } = await seedKey(harness);
+    const session = await connect({ auth: { key } });
+    expect(session.error).toBeUndefined();
+
+    const snapshots: any[] = [];
+    session.client.on("runtime:snapshot" as any, (payload: any) => snapshots.push(payload));
+    // Trigger a fresh snapshot via workspace re-join (connection snapshot may predate the listener).
+    session.client.emit("workspace:join", { workspaceId: "default" });
+    const snapshot = await waitFor(() => snapshots.find((s) => Array.isArray(s?.agents)));
+    const names = snapshot.agents.map((a: any) => a.name);
+    expect(names).toContain("Insider");
+    expect(names).not.toContain("Outsider");
   });
 });
 
@@ -423,7 +491,7 @@ function makeHangingExecutor() {
   };
 }
 
-function seedAgent(store: DbStore, id: string, name: string): void {
+function seedAgent(store: DbStore, id: string, name: string, workspaceId = "default", mount = true): void {
   store.agents.push({
     id,
     name,
@@ -433,6 +501,16 @@ function seedAgent(store: DbStore, id: string, name: string): void {
     isTemplate: false,
     workspaceId: "default",
   });
+  // Roster membership: the agent must be mounted into the workspace.
+  // (The in-memory fake ignores WHERE clauses, so unmounted means no row.)
+  if (mount) {
+    store.workspaceAgents.push({
+      id: `wsa-${id}`,
+      workspaceId,
+      agentId: id,
+      scope: "shared",
+    });
+  }
 }
 
 describe("CAN-1 · cancellation & duplicate-trigger integrity", () => {
@@ -441,7 +519,7 @@ describe("CAN-1 · cancellation & duplicate-trigger integrity", () => {
     const harness = await setup({}, { executeRun: hang.executor as any });
     try {
       const connect = connectOf(harness);
-      harness.setChannelOverride(async (id: string) => (id === "chA" ? { id: "chA", name: "general" } : null));
+      harness.setChannelOverride(async (id: string) => (id === "chA" ? { id: "chA", name: "general", workspaceId: "default" } : null));
       seedAgent(harness.store, "agent-canary", "Tester");
 
       const { key } = await seedKey(harness);
@@ -484,7 +562,7 @@ describe("CAN-1 · cancellation & duplicate-trigger integrity", () => {
     const harness = await setup({}, { executeRun: hang.executor as any });
     try {
       const connect = connectOf(harness);
-      harness.setChannelOverride(async (id: string) => (id === "chB" ? { id: "chB", name: "build" } : null));
+      harness.setChannelOverride(async (id: string) => (id === "chB" ? { id: "chB", name: "build", workspaceId: "default" } : null));
       seedAgent(harness.store, "agent-busy", "Builder");
 
       const { key } = await seedKey(harness);
@@ -511,7 +589,7 @@ describe("CAN-1 · cancellation & duplicate-trigger integrity", () => {
     const harness = await setup({}, { executeRun: hang.executor as any });
     try {
       const connect = connectOf(harness);
-      harness.setChannelOverride(async (id: string) => (id === "chC" ? { id: "chC", name: "ops" } : null));
+      harness.setChannelOverride(async (id: string) => (id === "chC" ? { id: "chC", name: "ops", workspaceId: "default" } : null));
       seedAgent(harness.store, "agent-alpha", "Alpha");
       seedAgent(harness.store, "agent-beta", "Beta");
 
@@ -547,7 +625,7 @@ describe("CAN-1 · cancellation & duplicate-trigger integrity", () => {
     const harness = await setup({}, { executeRun: hang.executor as any });
     try {
       const connect = connectOf(harness);
-      harness.setChannelOverride(async (id: string) => (id === "chD" ? { id: "chD", name: "bg" } : null));
+      harness.setChannelOverride(async (id: string) => (id === "chD" ? { id: "chD", name: "bg", workspaceId: "default" } : null));
       seedAgent(harness.store, "agent-bg", "Runner");
 
       const { key } = await seedKey(harness);
@@ -622,7 +700,7 @@ describe("PERF-1 · parallel mention dispatch", () => {
     const metrics = captureMetrics();
     try {
       const connect = connectOf(harness);
-      harness.setChannelOverride(async (id: string) => (id === "chP1" ? { id: "chP1", name: "perf" } : null));
+      harness.setChannelOverride(async (id: string) => (id === "chP1" ? { id: "chP1", name: "perf", workspaceId: "default" } : null));
       seedAgent(harness.store, "agent-alpha", "Alpha");
       seedAgent(harness.store, "agent-beta", "Beta");
       seedAgent(harness.store, "agent-gamma", "Gamma");
@@ -657,7 +735,7 @@ describe("PERF-1 · parallel mention dispatch", () => {
     const metrics = captureMetrics();
     try {
       const connect = connectOf(harness);
-      harness.setChannelOverride(async (id: string) => (id === "chS1" ? { id: "chS1", name: "serial" } : null));
+      harness.setChannelOverride(async (id: string) => (id === "chS1" ? { id: "chS1", name: "serial", workspaceId: "default" } : null));
       seedAgent(harness.store, "agent-alpha", "Alpha");
       seedAgent(harness.store, "agent-beta", "Beta");
       seedAgent(harness.store, "agent-gamma", "Gamma");
@@ -689,7 +767,7 @@ describe("PERF-1 · parallel mention dispatch", () => {
     const harness = await setup({}, { executeRun: delayed.executor as any });
     try {
       const connect = connectOf(harness);
-      harness.setChannelOverride(async (id: string) => (id === "chX1" ? { id: "chX1", name: "isolation" } : null));
+      harness.setChannelOverride(async (id: string) => (id === "chX1" ? { id: "chX1", name: "isolation", workspaceId: "default" } : null));
       seedAgent(harness.store, "agent-alpha", "Alpha");
       seedAgent(harness.store, "agent-beta", "Beta");
       seedAgent(harness.store, "agent-gamma", "Gamma");
@@ -747,7 +825,7 @@ describe("PERF-1 · parallel mention dispatch", () => {
     const harness = await setup({}, { executeRun: executor as any });
     try {
       const connect = connectOf(harness);
-      harness.setChannelOverride(async (id: string) => (id === "chB1" ? { id: "chB1", name: "busy" } : null));
+      harness.setChannelOverride(async (id: string) => (id === "chB1" ? { id: "chB1", name: "busy", workspaceId: "default" } : null));
       seedAgent(harness.store, "agent-beta", "Beta");
       seedAgent(harness.store, "agent-gamma", "Gamma");
 

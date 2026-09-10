@@ -5,6 +5,7 @@ export type MessageAuthorType = "user" | "agent" | "system";
 
 export interface ChannelMessage {
   id: string;
+  workspaceId: string;
   channelId: string;
   authorId: string;
   authorName: string;

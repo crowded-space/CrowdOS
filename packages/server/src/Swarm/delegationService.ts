@@ -82,8 +82,11 @@ export async function summarizeChildResult(
   let artifactRef: string | null = null;
   try {
     const { artifactsGate } = await import("../Artifacts/artifactsGate.js");
+    if (!opts.workspaceId) {
+      throw new Error("[delegationService] summarizeChildResult missing workspaceId; refusing to attribute artifacts without tenant scope.");
+    }
     const art = await artifactsGate.create({
-      workspaceId: opts.workspaceId ?? "default",
+      workspaceId: opts.workspaceId,
       producerAgent: opts.producerAgent ?? "system",
       type: "report",
       contentRef: fullOutput.slice(0, 20000),

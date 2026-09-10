@@ -243,16 +243,20 @@ export const agentTools = pgTable("agent_tools", {
 
 export const categories = pgTable("categories", {
   id: text("id").primaryKey(),
+  workspaceId: text("workspace_id").notNull().references(() => workspaces.id, { onDelete: "cascade" }),
   name: text("name").notNull(),
   ownedByAgentId: text("owned_by_agent_id").references(() => agents.id, { onDelete: "set null" }),
   embeddingProfileId: text("embedding_profile_id").references(() => embeddingModelProfiles.id),
   createdBy: text("created_by").notNull(),
   position: integer("position").notNull(),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-});
+}, (table) => ({
+  workspaceIdx: index("categories_workspace_idx").on(table.workspaceId),
+}));
 
 export const channels = pgTable("channels", {
   id: text("id").primaryKey(),
+  workspaceId: text("workspace_id").notNull().references(() => workspaces.id, { onDelete: "cascade" }),
   categoryId: text("category_id").references(() => categories.id, { onDelete: "cascade" }),
   name: text("name").notNull(),
   type: channelTypeEnum("type").notNull().default("standard"),
@@ -264,10 +268,12 @@ export const channels = pgTable("channels", {
 }, (table) => ({
   categoryIdx: index("channels_category_idx").on(table.categoryId),
   archivedPositionIdx: index("channels_archived_position_idx").on(table.archivedAt, table.position),
+  workspaceIdx: index("channels_workspace_idx").on(table.workspaceId),
 }));
 
 export const messages = pgTable("messages", {
   id: text("id").primaryKey(),
+  workspaceId: text("workspace_id").notNull().references(() => workspaces.id, { onDelete: "cascade" }),
   channelId: text("channel_id").notNull().references(() => channels.id, { onDelete: "cascade" }),
   authorId: text("author_id").notNull(),
   authorName: text("author_name").notNull(),
@@ -284,6 +290,7 @@ export const messages = pgTable("messages", {
   channelSequenceIndex: uniqueIndex("messages_channel_sequence_idx").on(table.channelId, table.sequenceNumber),
   channelTimestampIndex: index("messages_channel_timestamp_idx").on(table.channelId, table.timestamp.desc()),
   channelTsSeqIndex: index("messages_channel_ts_seq_idx").on(table.channelId, table.timestamp.desc(), table.sequenceNumber.desc()),
+  workspaceIdx: index("messages_workspace_idx").on(table.workspaceId),
 }));
 
 // DB-2: per-channel sequence counter advanced atomically via
@@ -918,6 +925,7 @@ export const durableEvents = pgTable("durable_events", {
   seq: bigserial("seq", { mode: "number" }).primaryKey(),
   eventId: text("event_id").notNull(),
   type: text("type").notNull(),
+  workspaceId: text("workspace_id").references(() => workspaces.id, { onDelete: "cascade" }),
   channelId: text("channel_id"),
   agentId: text("agent_id"),
   payload: jsonb("payload").notNull(),
@@ -925,6 +933,7 @@ export const durableEvents = pgTable("durable_events", {
 }, (table) => ({
   channelSeqIdx: index("durable_events_channel_seq_idx").on(table.channelId, table.seq),
   createdAtIdx: index("durable_events_created_at_idx").on(table.createdAt),
+  workspaceIdx: index("durable_events_workspace_idx").on(table.workspaceId),
 }));
 
 // â”€â”€â”€ Runs (RUN-0): one row per runtime execution â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -967,7 +976,7 @@ export const runs = pgTable("runs", {
   parentRunId: uuid("parent_run_id").references((): any => runs.id, { onDelete: "set null" }),
   agentId: text("agent_id").notNull(),
   channelId: text("channel_id").notNull(),
-  workspaceId: text("workspace_id"),
+  workspaceId: text("workspace_id").notNull().references(() => workspaces.id, { onDelete: "cascade" }),
   runtimeType: text("runtime_type").notNull(),
   status: runStatusEnum("status").notNull().default("running"),
   errorCode: text("error_code"),
@@ -977,6 +986,7 @@ export const runs = pgTable("runs", {
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 }, (table) => ({
   runsChannelIdx: index("runs_channel_idx").on(table.channelId),
+  runsWorkspaceIdx: index("runs_workspace_idx").on(table.workspaceId),
 }));
 
 export const runsCompensation = pgTable("runs_compensation", {

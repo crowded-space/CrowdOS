@@ -20,12 +20,13 @@ export class EventBroker {
   emit<TType extends BrokerEventType>(
     type: TType,
     payload: BrokerEventMap[TType],
-    options?: { channelId?: string },
+    options?: { channelId?: string; workspaceId?: string | null },
   ): BrokerEvent<TType> {
     const event: BrokerEvent<TType> = {
       eventId: randomUUID(),
       type,
       channelId: options?.channelId,
+      workspaceId: options?.workspaceId ?? (payload as unknown as { workspaceId?: string | null })?.workspaceId ?? null,
       payload,
       timestamp: new Date(),
     };

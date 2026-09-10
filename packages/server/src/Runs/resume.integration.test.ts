@@ -66,7 +66,7 @@ afterAll(async () => {
 
 describe.skipIf(!probe.ok)("RES-1 resume + checkpoint + compensation integration (real DB)", () => {
   it("checkpoint merge appends ids and updates watermark", async () => {
-    const run = await repo!.createRun({ agentId: "res1-agent", channelId: "res1-channel", runtimeType: "agentic" });
+    const run = await repo!.createRun({ agentId: "res1-agent", channelId: "res1-channel", workspaceId: "default", runtimeType: "agentic" });
     expect(run).not.toBeNull();
     created.push(run!.id);
     await repo!.touchCheckpoint(run!.id, { watermarkSeq: 5, completedCallIds: ["call-1"] });
@@ -81,7 +81,7 @@ describe.skipIf(!probe.ok)("RES-1 resume + checkpoint + compensation integration
   });
 
   it("compensation journal records and undoes correctly", async () => {
-    const run = await repo!.createRun({ agentId: "res1-agent", channelId: "res1-channel", runtimeType: "agentic" });
+    const run = await repo!.createRun({ agentId: "res1-agent", channelId: "res1-channel", workspaceId: "default", runtimeType: "agentic" });
     created.push(run!.id);
     const inverse = repo!.buildCompensationInverse({ existed: true, priorContent: "prior content for undo", path: "/tmp/resume-test.txt" });
     const entry = await repo!.addCompensation(run!.id, { toolName: "write_file", targetPath: "/tmp/resume-test.txt", inverseOp: inverse });
@@ -100,7 +100,7 @@ describe.skipIf(!probe.ok)("RES-1 resume + checkpoint + compensation integration
   });
 
   it("orphan sweep flips running→orphaned→resumable and resume re-queues", async () => {
-    const run = await repo!.createRun({ agentId: "res1-agent", channelId: "res1-channel", runtimeType: "agentic" });
+    const run = await repo!.createRun({ agentId: "res1-agent", channelId: "res1-channel", workspaceId: "default", runtimeType: "agentic" });
     created.push(run!.id);
     // walk to running
     await repo!.applyTransition(run!.id, "starting");
@@ -130,7 +130,7 @@ describe.skipIf(!probe.ok)("RES-1 resume + checkpoint + compensation integration
   });
 
   it("resumeRun validates only resumable", async () => {
-    const run = await repo!.createRun({ agentId: "res1-agent", channelId: "res1-channel", runtimeType: "agentic" });
+    const run = await repo!.createRun({ agentId: "res1-agent", channelId: "res1-channel", workspaceId: "default", runtimeType: "agentic" });
     created.push(run!.id);
     await repo!.applyTransition(run!.id, "starting");
     const attempt = await gate!.resumeRun(run!.id);

@@ -53,8 +53,8 @@ describe.skipIf(!DATABASE_URL)("DB-2 · channel_sequences atomic allocation (rea
     await db.execute(sql`delete from "channels" where "id" like 'db2-concurrency-%'`);
     for (const channelId of [channelA, channelB]) {
       await db.execute(sql`
-        insert into "channels" ("id", "name", "type", "created_by", "position")
-        values (${channelId}, ${channelId}, 'standard', 'db2-test', 0)
+        insert into "channels" ("id", "workspace_id", "name", "type", "created_by", "position")
+        values (${channelId}, 'default', ${channelId}, 'standard', 'db2-test', 0)
         on conflict ("id") do nothing
       `);
     }
@@ -112,9 +112,9 @@ describe.skipIf(!DATABASE_URL)("DB-2 · channel_sequences atomic allocation (rea
           const id = monotonicUlid();
           await tx.execute(sql`
             insert into "messages"
-              ("id", "channel_id", "author_id", "author_name", "author_level", "author_type", "content", "sequence_number")
+              ("id", "workspace_id", "channel_id", "author_id", "author_name", "author_level", "author_type", "content", "sequence_number")
             values (
-              ${id}, ${channelB}, 'db2-test-agent', 'DB-2 Concurrency Test', '0', 'agent',
+              ${id}, 'default', ${channelB}, 'db2-test-agent', 'DB-2 Concurrency Test', '0', 'agent',
               'DB-2 concurrency probe', ${sequenceNumber}
             )
           `);

@@ -21,7 +21,11 @@ async function handleScheduledTrigger(job: Job<ScheduledJobData>): Promise<void>
   const data = job.data as ScheduledJobData;
   const channelId = data.channelId || "general";
   const content = data.message || `⏰ Scheduled task: ${data.task}`;
-  const workspaceId = data.workspaceId || "default";
+  // Scheduled execution is workspace-owned: no silent "default" fallback.
+  if (typeof data.workspaceId !== "string" || data.workspaceId.trim() === "") {
+    throw new Error(`[schedulerWorker] Job ${job.id ?? data.id ?? "?"} missing workspaceId; refusing to execute without tenant scope.`);
+  }
+  const workspaceId = data.workspaceId;
 
   // Persist + emit a real system message into the channel (honest firing).
   // We reuse the same transactional sequence pattern as the socket layer (DB-2)
@@ -36,6 +40,22 @@ async function handleScheduledTrigger(job: Job<ScheduledJobData>): Promise<void>
     broker = new EventBroker();
   }
 
+  // The target channel must belong to the job's workspace; otherwise skip.
+  try {
+    const { channels } = await import("../db/schema.js");
+    const { getDb } = await import("../Shared/config/database.js");
+    const target = await getDb().query.channels.findFirst({
+      where: (await import("drizzle-orm")).eq(channels.id, channelId),
+    });
+    if (!target || (target as { workspaceId?: string | null }).workspaceId !== workspaceId) {
+      console.warn(`[schedulerWorker] Skipping job ${job.id ?? data.id ?? "?"}: channel ${channelId} not in workspace ${workspaceId}.`);
+      return;
+    }
+  } catch (err) {
+    console.error("[schedulerWorker] Channel scope check failed:", (err as Error)?.message || err);
+    return;
+  }
+
   // Try to persist message transactionally
   try {
     const { withTransaction } = await import("../Shared/config/database.js");
@@ -47,6 +67,7 @@ async function handleScheduledTrigger(job: Job<ScheduledJobData>): Promise<void>
       const seq = await (allocateSequence as (cid: string, n: number, t: unknown) => Promise<number>)(channelId, 1, tx);
       const msg = {
         id: monotonicUlid(),
+        workspaceId,
         channelId,
         authorId: "system-scheduler",
         authorName: "Scheduler",
@@ -64,11 +85,12 @@ async function handleScheduledTrigger(job: Job<ScheduledJobData>): Promise<void>
       });
       return msg;
     });
-    (broker as unknown as { emit: (t: string, p: unknown, o?: unknown) => void }).emit("message:new", persisted as unknown as never, { channelId });
+    (broker as unknown as { emit: (t: string, p: unknown, o?: unknown) => void }).emit("message:new", persisted as unknown as never, { channelId, workspaceId });
   } catch {
     // Ephemeral fallback when DB not reachable (e.g., in-memory test fake without messages table)
     const ephemeral = {
       id: (job.id as string) || data.id || `sched-${Date.now()}`,
+      workspaceId,
       channelId,
       authorId: "system-scheduler",
       authorName: "Scheduler",
@@ -81,7 +103,7 @@ async function handleScheduledTrigger(job: Job<ScheduledJobData>): Promise<void>
       timestamp: new Date(),
     };
     try {
-      (broker as unknown as { emit: (t: string, p: unknown, o?: unknown) => void }).emit("message:new", ephemeral as unknown as never, { channelId });
+      (broker as unknown as { emit: (t: string, p: unknown, o?: unknown) => void }).emit("message:new", ephemeral as unknown as never, { channelId, workspaceId });
     } catch {}
   }
 
@@ -93,7 +115,7 @@ async function handleScheduledTrigger(job: Job<ScheduledJobData>): Promise<void>
       task: data.task,
       cron: data.cron ?? null,
       triggeredAt: new Date().toISOString(),
-    } as unknown as never, { channelId });
+    } as unknown as never, { channelId, workspaceId });
   } catch {}
 
   // Optional: if a target agent was requested, we could enqueue a run here.

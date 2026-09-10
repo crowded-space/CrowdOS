@@ -1,8 +1,12 @@
-import { eq, isNull } from "drizzle-orm";
+import { and, eq, isNull } from "drizzle-orm";
 import { randomUUID } from "node:crypto";
 import { getDb } from "../Shared/config/database.js";
 import { categories, channels } from "../db/schema.js";
 import type { CreateChannelBody, UpdateChannelBody } from "./channelValidators.js";
+
+export interface ChannelScope {
+  workspaceId?: string;
+}
 
 export async function categoryExists(categoryId: string): Promise<boolean> {
   const db = getDb();
@@ -12,7 +16,7 @@ export async function categoryExists(categoryId: string): Promise<boolean> {
   return Boolean(category);
 }
 
-export async function listChannels(opts?: { limit?: number; cursor?: string | null }) {
+export async function listChannels(opts?: { limit?: number; cursor?: string | null } & ChannelScope) {
   const db = getDb();
   const limit = Math.min(200, Math.max(1, opts?.limit ?? 200));
   // Cursor is offset-based for backward compat; future is keyset on (position,id)
@@ -22,7 +26,9 @@ export async function listChannels(opts?: { limit?: number; cursor?: string | nu
     if (Number.isFinite(parsed) && parsed >= 0) offset = Math.floor(parsed);
   }
   return db.query.channels.findMany({
-    where: isNull(channels.archivedAt),
+    where: opts?.workspaceId
+      ? and(isNull(channels.archivedAt), eq(channels.workspaceId, opts.workspaceId))
+      : isNull(channels.archivedAt),
     orderBy: (table, { asc }) => [asc(table.position)],
     limit,
     offset,
@@ -31,14 +37,21 @@ export async function listChannels(opts?: { limit?: number; cursor?: string | nu
 
 export async function createChannel(body: CreateChannelBody) {
   const db = getDb();
-  if (body.categoryId && !(await categoryExists(body.categoryId))) {
-    return { error: "category", categoryId: body.categoryId } as const;
+  if (body.categoryId) {
+    // Category must exist AND live in the same workspace.
+    const category = await db.query.categories.findFirst({
+      where: eq(categories.id, body.categoryId),
+    });
+    if (!category || (category as { workspaceId?: string | null }).workspaceId !== body.workspaceId) {
+      return { error: "category", categoryId: body.categoryId } as const;
+    }
   }
 
-  // Duplicate name validation within same category scope
+  // Duplicate name validation within same category + workspace scope
   const existingSameName = await db.query.channels.findFirst({
     where: (table, { and, eq, isNull }) => and(
       eq(table.name, body.name.trim().toLowerCase()),
+      eq(table.workspaceId, body.workspaceId),
       body.categoryId ? eq(table.categoryId, body.categoryId) : isNull(table.categoryId)
     )
   });
@@ -51,6 +64,7 @@ export async function createChannel(body: CreateChannelBody) {
     .insert(channels)
     .values({
       id,
+      workspaceId: body.workspaceId,
       categoryId: body.categoryId ?? null,
       name: body.name,
       type: body.type,
@@ -68,13 +82,21 @@ export async function getChannel(id: string) {
   });
 }
 
-export async function updateChannel(id: string, body: UpdateChannelBody) {
+export async function updateChannel(id: string, body: UpdateChannelBody, scope?: ChannelScope) {
   const db = getDb();
   const existing = await getChannel(id);
   if (!existing) return { notFound: true } as const;
+  if (scope?.workspaceId && (existing as { workspaceId?: string | null }).workspaceId !== scope.workspaceId) {
+    return { forbidden: true } as const;
+  }
 
-  if (body.categoryId && !(await categoryExists(body.categoryId))) {
-    return { error: "category", categoryId: body.categoryId } as const;
+  if (body.categoryId) {
+    const category = await db.query.categories.findFirst({
+      where: eq(categories.id, body.categoryId),
+    });
+    if (!category || (category as { workspaceId?: string | null }).workspaceId !== (existing as { workspaceId?: string }).workspaceId) {
+      return { error: "category", categoryId: body.categoryId } as const;
+    }
   }
 
   const updateData: Partial<typeof channels.$inferInsert> = {};
@@ -95,10 +117,13 @@ export async function updateChannel(id: string, body: UpdateChannelBody) {
   return { channel: updated } as const;
 }
 
-export async function deleteChannel(id: string) {
+export async function deleteChannel(id: string, scope?: ChannelScope) {
   const db = getDb();
   const existing = await getChannel(id);
   if (!existing) return { notFound: true } as const;
+  if (scope?.workspaceId && (existing as { workspaceId?: string | null }).workspaceId !== scope.workspaceId) {
+    return { forbidden: true } as const;
+  }
 
   if (existing.categoryId === null && existing.name.toLowerCase() === "general") {
     return { conflictGeneral: true } as const;

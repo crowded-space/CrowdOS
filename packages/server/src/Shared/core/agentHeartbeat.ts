@@ -72,8 +72,26 @@ export async function sweepOrphans(broker: EventBroker): Promise<void> {
         .set({ status: "paused", errorInfo: { code: "ORPHANED", message: "Heartbeat expired; run presumed dead.", timestamp: new Date().toISOString() } })
         .where(eq(runtimeStates.agentId, state.agentId));
 
-      broker.emit("agent:status", { agentId: state.agentId, status: "paused" } as never);
-      broker.emit("agent:paused", { agentId: state.agentId, reason: "Heartbeat expired; run presumed dead." });
+      // Agent status is catalog-level, but delivery is per mounted workspace
+      // so tenants without this agent never see the event.
+      try {
+        const { workspaceAgents } = await import("../../db/schema.js");
+        const mounts = await db.query.workspaceAgents.findMany({
+          where: eq(workspaceAgents.agentId, state.agentId),
+        });
+        if (mounts.length > 0) {
+          for (const mount of mounts) {
+            broker.emit("agent:status", { agentId: state.agentId, status: "paused" } as never, { workspaceId: mount.workspaceId } as never);
+          }
+          broker.emit("agent:paused", { agentId: state.agentId, reason: "Heartbeat expired; run presumed dead." });
+        } else {
+          broker.emit("agent:status", { agentId: state.agentId, status: "paused" } as never);
+          broker.emit("agent:paused", { agentId: state.agentId, reason: "Heartbeat expired; run presumed dead." });
+        }
+      } catch {
+        broker.emit("agent:status", { agentId: state.agentId, status: "paused" } as never);
+        broker.emit("agent:paused", { agentId: state.agentId, reason: "Heartbeat expired; run presumed dead." });
+      }
     }
   } catch (err) {
     console.error("[Heartbeat] Orphan sweep failed:", (err as any)?.message || err);

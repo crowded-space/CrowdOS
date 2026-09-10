@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 
 import { and, eq, isNull } from "drizzle-orm";
@@ -10,6 +11,8 @@ import {
   modelModules,
   instructionModules,
   toolkitModules,
+  workspaceAgents,
+  workspaces,
   workspaceSettings,
   categories,
 } from "./schema.js";
@@ -187,6 +190,27 @@ export async function seed(): Promise<void> {
     console.log("Librarian agent already exists.");
   }
 
+  const existingWorkspace = await db.query.workspaces.findFirst({
+    where: eq(workspaces.id, "default"),
+  });
+  if (!existingWorkspace) {
+    await db.insert(workspaces).values({
+      id: "default",
+      name: "Default Workspace",
+      ownerId: "human_operator",
+      status: "ACTIVE",
+      rootPath: join(process.cwd(), "sandbox", "default").replace(/\\/g, "/"),
+      permissions: { network: false, shell: false, maxAgents: 8 },
+      constraints: { networkAccess: false, shellExecution: true, memoryLimitMb: 512, cpuLimit: 1 },
+      metadata: {},
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+    console.log("Seeded default workspace.");
+  } else {
+    console.log("Default workspace already exists.");
+  }
+
   // â”€â”€â”€ Workspace Settings â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const existingSettings = await db.select().from(workspaceSettings).where(eq(workspaceSettings.id, "default")).execute();
   if (existingSettings.length === 0) {
@@ -209,6 +233,7 @@ export async function seed(): Promise<void> {
   if (!existingGeneralChannel) {
     await db.insert(channels).values({
       id: randomUUID(),
+      workspaceId: "default",
       categoryId: null,
       name: "general",
       type: "standard",
@@ -233,6 +258,7 @@ export async function seed(): Promise<void> {
       catId = randomUUID();
       await db.insert(categories).values({
         id: catId,
+        workspaceId: "default",
         name,
         createdBy: "user",
         position,
@@ -252,6 +278,7 @@ export async function seed(): Promise<void> {
       if (!existingChan) {
         await db.insert(channels).values({
           id: randomUUID(),
+          workspaceId: "default",
           categoryId: catId,
           name: chan.name,
           type: "standard",
@@ -275,6 +302,28 @@ export async function seed(): Promise<void> {
     { name: "arch-design", position: 1 },
     { name: "execution-logs", position: 2 },
   ]);
+
+  // ─── Default roster mounts (workspace_agents is the roster source of truth) ─
+  const mountAgent = async (agentName: string) => {
+    const row = await db.query.agents.findFirst({ where: eq(agents.name, agentName) });
+    if (!row) return;
+    const mounted = await db.query.workspaceAgents.findFirst({
+      where: and(eq(workspaceAgents.workspaceId, "default"), eq(workspaceAgents.agentId, row.id)),
+    });
+    if (!mounted) {
+      await db.insert(workspaceAgents).values({
+        id: `wsa_${randomUUID().slice(0, 8)}`,
+        workspaceId: "default",
+        agentId: row.id,
+        scope: "shared",
+        permissions: { read: true, write: false, execute: false },
+        createdAt: new Date(),
+      });
+      console.log(`Mounted agent ${agentName} to default workspace.`);
+    }
+  };
+  await mountAgent("default-assistant");
+  await mountAgent("Librarian");
 }
 
 const invokedDirectly = process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;

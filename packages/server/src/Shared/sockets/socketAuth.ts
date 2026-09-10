@@ -93,10 +93,28 @@ export async function resolveSocketIdentity(handshake: {
       record = null;
     }
     if (!record) return null;
+    // Workspace comes from the handshake request (auth claim or header),
+    // verified against the registry — never silently forced to "default".
+    const requested =
+      claimStr(auth, "workspaceId") || headerStr(headers, "x-workspace-id") || "";
+    if (!requested) return null;
+    try {
+      const { getDb } = await import("../config/database.js");
+      const { workspaces } = await import("../../db/schema.js");
+      const { eq } = await import("drizzle-orm");
+      const ws = await getDb().query.workspaces.findFirst({
+        where: eq(workspaces.id, requested),
+      });
+      // Compare ids explicitly (not just truthiness) so stores that ignore
+      // the WHERE clause still enforce the check.
+      if (!ws || (ws as { id?: string }).id !== requested) return null;
+    } catch {
+      return null;
+    }
     return {
       mode: "apikey",
       userId: `apikey:${record.id}`,
-      workspaceId: "default",
+      workspaceId: requested,
       keyId: record.id,
       label: record.label,
       role: record.role,

@@ -12,6 +12,7 @@ import {
   taskFiles,
   runtimeStates,
   categories,
+  workspaceAgents,
 } from "../db/schema.js";
 import type { EventBroker } from "../EventBroker/eventBrokerGate.js";
 import type { AgentProfile } from "./agentTypes.js";
@@ -99,6 +100,11 @@ export class AgentSpawnManager {
       where: eq(channels.id, originChannelId),
     });
     const categoryId = originCh?.categoryId || null;
+    // Pair channels inherit the origin channel's workspace (hard error, no default).
+    const spawnWorkspace = (originCh as { workspaceId?: string | null } | null)?.workspaceId;
+    if (!spawnWorkspace) {
+      throw new Error(`[AgentSpawnManager] Origin channel ${originChannelId} has no workspace scope.`);
+    }
 
     const reportItems: AggregationReportItem[] = [];
 
@@ -119,7 +125,8 @@ export class AgentSpawnManager {
           supervisorTemplate,
           categoryId,
           params.failurePolicy,
-          params.maxRetries
+          params.maxRetries,
+          spawnWorkspace
         );
       });
 
@@ -205,7 +212,8 @@ export class AgentSpawnManager {
     supervisorTemplate: any,
     categoryId: string | null,
     failurePolicy: SpawnFailurePolicy,
-    maxRetries: number
+    maxRetries: number,
+    workspaceId: string
   ): Promise<AggregationReportItem> {
     const db = getDb();
 
@@ -215,6 +223,7 @@ export class AgentSpawnManager {
 
     await db.insert(channels).values({
       id: pairChannelId,
+      workspaceId,
       categoryId,
       name: pairChannelName,
       type: "pair_private",
@@ -224,7 +233,7 @@ export class AgentSpawnManager {
     });
 
     // Notify client store to refresh sidebar
-    broker.emit("workspace:sync", {}, { channelId: pairChannelId });
+    broker.emit("workspace:sync", {}, { channelId: pairChannelId, workspaceId });
 
     // 2. Spawn the Worker and Supervisor agent instances with UNIQUE names to satisfy unique index constraint
     const workerId = `agent-worker-${subtask.id}-${randomUUID().slice(0, 4)}`;
@@ -287,12 +296,30 @@ export class AgentSpawnManager {
       activeChannelId: pairChannelId,
       createdAt: new Date(),
     });
+
+    // Mount spawned instances into the workspace so they join its roster.
+    await db.insert(workspaceAgents).values({
+      id: `wsa_${randomUUID().slice(0, 8)}`,
+      workspaceId,
+      agentId: workerId,
+      scope: "ephemeral",
+      permissions: { read: true, write: false, execute: false },
+      createdAt: new Date(),
+    });
+    await db.insert(workspaceAgents).values({
+      id: `wsa_${randomUUID().slice(0, 8)}`,
+      workspaceId,
+      agentId: spvId,
+      scope: "ephemeral",
+      permissions: { read: true, write: false, execute: false },
+      createdAt: new Date(),
+    });
     // Broadcast spawn event so the UI can display pair status
     broker.emit("agent:spawned", {
       pairs: [workerId, spvId],
       channelId: pairChannelId,
       batchNum: Math.floor(Date.now() / 1000) % 100,
-    }, { channelId: pairChannelId });
+    }, { channelId: pairChannelId, workspaceId });
 
 
     // 3. Persist Task File record
@@ -320,6 +347,7 @@ export class AgentSpawnManager {
     const welcomeMsgId = monotonicUlid();
     await db.insert(messages).values({
       id: welcomeMsgId,
+      workspaceId,
       channelId: pairChannelId,
       authorId: "system",
       authorName: "System Coordinator",
@@ -333,6 +361,7 @@ export class AgentSpawnManager {
     });
     broker.emit("message:new", {
       id: welcomeMsgId,
+      workspaceId,
       channelId: pairChannelId,
       authorId: "system",
       authorName: "System Coordinator",
@@ -343,7 +372,7 @@ export class AgentSpawnManager {
       isInternalMonologue: false,
       sequenceNumber: startSeq,
       timestamp: new Date(),
-    }, { channelId: pairChannelId });
+    }, { channelId: pairChannelId, workspaceId });
 
     // 4. Execution Loop (Retry policies and supervisor feedback)
     while (retryCount <= maxRetries) {
@@ -353,6 +382,7 @@ export class AgentSpawnManager {
         const retryMsgId = monotonicUlid();
         await db.insert(messages).values({
           id: retryMsgId,
+          workspaceId,
           channelId: pairChannelId,
           authorId: "system",
           authorName: "System Coordinator",
@@ -366,6 +396,7 @@ export class AgentSpawnManager {
         });
         broker.emit("message:new", {
           id: retryMsgId,
+          workspaceId,
           channelId: pairChannelId,
           authorId: "system",
           authorName: "System Coordinator",
@@ -376,7 +407,7 @@ export class AgentSpawnManager {
           isInternalMonologue: false,
           sequenceNumber: retrySeq,
           timestamp: new Date(),
-        }, { channelId: pairChannelId });
+        }, { channelId: pairChannelId, workspaceId });
       }
 
       // Update task file status
@@ -384,8 +415,8 @@ export class AgentSpawnManager {
 
       // --- RUN WORKER ---
       await db.update(agents).set({ status: "working" }).where(eq(agents.id, workerId));
-      broker.emit("agent:status", { agentId: workerId, status: "working" });
-      broker.emit("agent:thinking", { agentId: workerId, channelId: pairChannelId }, { channelId: pairChannelId });
+      broker.emit("agent:status", { agentId: workerId, status: "working" }, { channelId: pairChannelId, workspaceId });
+      broker.emit("agent:thinking", { agentId: workerId, channelId: pairChannelId }, { channelId: pairChannelId, workspaceId });
 
       // Legacy path: simulated execution (retired) — gated by SWARM_LEGACY, honest delay noted
       await new Promise((resolve) => setTimeout(resolve, 50));
@@ -404,11 +435,12 @@ export class AgentSpawnManager {
       }
 
       // Stream Worker response
-      broker.emit("message:stream", { channelId: pairChannelId, agentId: workerId, chunk: workerOutput }, { channelId: pairChannelId });
+      broker.emit("message:stream", { channelId: pairChannelId, agentId: workerId, chunk: workerOutput }, { channelId: pairChannelId, workspaceId });
 
       const wSeq = await getNextSequenceNumber(pairChannelId);
       const workerMsg: ChannelMessage = {
         id: monotonicUlid(),
+        workspaceId,
         channelId: pairChannelId,
         authorId: workerId,
         authorName: uniqueWorkerName,
@@ -425,15 +457,15 @@ export class AgentSpawnManager {
         ...workerMsg,
         authorLevel: String(workerMsg.authorLevel),
       });
-      broker.emit("message:new", workerMsg, { channelId: pairChannelId });
+      broker.emit("message:new", workerMsg, { channelId: pairChannelId, workspaceId });
 
       await db.update(agents).set({ status: "idle" }).where(eq(agents.id, workerId));
-      broker.emit("agent:status", { agentId: workerId, status: "idle" });
+      broker.emit("agent:status", { agentId: workerId, status: "idle" }, { channelId: pairChannelId, workspaceId });
 
       // --- RUN SUPERVISOR ---
       await db.update(agents).set({ status: "working" }).where(eq(agents.id, spvId));
-      broker.emit("agent:status", { agentId: spvId, status: "working" });
-      broker.emit("agent:thinking", { agentId: spvId, channelId: pairChannelId }, { channelId: pairChannelId });
+      broker.emit("agent:status", { agentId: spvId, status: "working" }, { channelId: pairChannelId, workspaceId });
+      broker.emit("agent:thinking", { agentId: spvId, channelId: pairChannelId }, { channelId: pairChannelId, workspaceId });
 
       await new Promise((resolve) => setTimeout(resolve, 50));
 
@@ -449,11 +481,12 @@ export class AgentSpawnManager {
       }
       void subtask;
 
-      broker.emit("message:stream", { channelId: pairChannelId, agentId: spvId, chunk: supervisorEvaluation }, { channelId: pairChannelId });
+      broker.emit("message:stream", { channelId: pairChannelId, agentId: spvId, chunk: supervisorEvaluation }, { channelId: pairChannelId, workspaceId });
 
       const sSeq = await getNextSequenceNumber(pairChannelId);
       const spvMsg: ChannelMessage = {
         id: monotonicUlid(),
+        workspaceId,
         channelId: pairChannelId,
         authorId: spvId,
         authorName: uniqueSpvName,
@@ -470,10 +503,10 @@ export class AgentSpawnManager {
         ...spvMsg,
         authorLevel: String(spvMsg.authorLevel),
       });
-      broker.emit("message:new", spvMsg, { channelId: pairChannelId });
+      broker.emit("message:new", spvMsg, { channelId: pairChannelId, workspaceId });
 
       await db.update(agents).set({ status: "idle" }).where(eq(agents.id, spvId));
-      broker.emit("agent:status", { agentId: spvId, status: "idle" });
+      broker.emit("agent:status", { agentId: spvId, status: "idle" }, { channelId: pairChannelId, workspaceId });
 
       if (finalVerdict === "success") {
         break;
@@ -490,8 +523,8 @@ export class AgentSpawnManager {
     const subtaskStatus = finalVerdict === "success" ? "completed" : "failed";
 
     // Broadcast despawn events before cleanup so UI can update
-    broker.emit("agent:despawned", { agentId: workerId }, { channelId: pairChannelId });
-    broker.emit("agent:despawned", { agentId: spvId }, { channelId: pairChannelId });
+    broker.emit("agent:despawned", { agentId: workerId }, { channelId: pairChannelId, workspaceId });
+    broker.emit("agent:despawned", { agentId: spvId }, { channelId: pairChannelId, workspaceId });
 
     // --- AUTO-CLEANUP STAGE (DB-3: archive spawn evidence, never destroy it) ---
     console.log(`[AgentSpawnManager] Initiating cleanup for pair ${subtask.id}...`);
@@ -516,7 +549,7 @@ export class AgentSpawnManager {
     await db.update(channels).set(archivePatch).where(eq(channels.id, pairChannelId));
 
     // Notify client store of the deleted channel
-    broker.emit("workspace:sync", {}, { channelId: pairChannelId });
+    broker.emit("workspace:sync", {}, { channelId: pairChannelId, workspaceId });
 
     return {
       subtaskId: subtask.id,

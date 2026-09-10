@@ -12,7 +12,7 @@ export interface CreateRunInput {
   parentRunId?: string | null;
   agentId: string;
   channelId: string;
-  workspaceId?: string | null;
+  workspaceId: string;
   runtimeType: string;
 }
 
@@ -48,7 +48,7 @@ export async function createRun(input: CreateRunInput): Promise<RunRow | null> {
       parentRunId: input.parentRunId ?? null,
       agentId: input.agentId,
       channelId: input.channelId,
-      workspaceId: input.workspaceId ?? null,
+      workspaceId: input.workspaceId,
       runtimeType: input.runtimeType,
       status: "created",
     })

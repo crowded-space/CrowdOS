@@ -56,6 +56,7 @@ import type {
 import { globalBroker } from "../Shared/sockets/registerSocketServer.js";
 import { redactSecrets } from "../Shared/core/redact.js";
 
+// Modules are global (see agents.ts): catalog mutations fan out globally.
 function emitWorkspaceSync(): void {
   globalBroker?.emit("workspace:sync", {});
 }

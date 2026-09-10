@@ -21,6 +21,14 @@ describe('DB-5 structured tool-call records round-trip', () => {
   it('extracts identical tool cards from structured column and legacy emoji strings', async () => {
     const broker = new EventBroker();
     const kernel = new RuntimeKernel();
+    // persistMessage resolves message tenancy from the channel row.
+    const databaseModule = await import('../Shared/config/database.js');
+    const testDb = (databaseModule as any).__socketTestDb as {
+      store: { channels: Record<string, unknown>[] };
+      reset(): void;
+    };
+    testDb.reset();
+    testDb.store.channels.push({ id: CHANNEL_ID, workspaceId: 'default', name: 'roundtrip' });
     const messageNewPayloads: Array<{ id: string; content: string; toolCalls?: StructuredToolCall[] }> = [];
     broker.on('message:new', undefined, (event: any) => {
       messageNewPayloads.push({ id: event.payload.id, content: event.payload.content, toolCalls: event.payload.toolCalls });

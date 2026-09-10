@@ -14,9 +14,10 @@ import type {
   ChannelParams
 } from "../Channels/channelGate.js";
 import { globalBroker } from "../Shared/sockets/registerSocketServer.js";
+import { workspaceGate } from "../Workspace/workspaceGate.js";
 
-function emitWorkspaceSync(): void {
-  globalBroker?.emit("workspace:sync", {});
+function emitWorkspaceSync(workspaceId: string): void {
+  globalBroker?.emit("workspace:sync", {}, { workspaceId });
 }
 
 export async function channelRoutes(app: FastifyInstance) {
@@ -24,7 +25,8 @@ export async function channelRoutes(app: FastifyInstance) {
   app.get("/api/channels", async (req: any) => {
     const limit = req.query?.limit != null ? Number(req.query.limit) : undefined;
     const cursor = req.query?.cursor ?? req.query?.offset ?? null;
-    return listChannels({ limit, cursor: cursor != null ? String(cursor) : null });
+    const workspaceId = workspaceGate.resolveHttpWorkspaceId(req);
+    return listChannels({ limit, cursor: cursor != null ? String(cursor) : null, workspaceId });
   });
 
   // POST /api/channels - Create a channel under a category
@@ -32,6 +34,11 @@ export async function channelRoutes(app: FastifyInstance) {
     "/api/channels",
     { schema: { body: createChannelSchema } },
     async (request, reply) => {
+      try {
+        await workspaceGate.assertExists(request.body.workspaceId);
+      } catch {
+        return reply.status(400).send({ error: "Bad Request", message: `Unknown workspace: ${request.body.workspaceId}` });
+      }
       const result = await createChannel(request.body);
       if ("error" in result) {
         return reply.status(400).send({
@@ -39,7 +46,7 @@ export async function channelRoutes(app: FastifyInstance) {
           message: `Category not found: ${result.categoryId}`,
         });
       }
-      emitWorkspaceSync();
+      emitWorkspaceSync(request.body.workspaceId);
       return reply.status(201).send(result.channel);
     }
   );
@@ -48,9 +55,13 @@ export async function channelRoutes(app: FastifyInstance) {
     request: FastifyRequest<{ Params: ChannelParams; Body: UpdateChannelBody }>,
     reply: FastifyReply,
   ) {
-    const result = await updateChannel(request.params.id, request.body);
+    const workspaceId = workspaceGate.resolveHttpWorkspaceId(request as any);
+    const result = await updateChannel(request.params.id, request.body, { workspaceId });
     if ("notFound" in result) {
       return reply.status(404).send({ error: "Not Found", message: "Channel not found" });
+    }
+    if ("forbidden" in result) {
+      return reply.status(403).send({ error: "Forbidden", message: "Channel does not belong to this workspace" });
     }
     if ("error" in result) {
       return reply.status(400).send({
@@ -59,7 +70,7 @@ export async function channelRoutes(app: FastifyInstance) {
       });
     }
 
-    emitWorkspaceSync();
+    emitWorkspaceSync(workspaceId);
     return result.channel;
   }
 
@@ -82,9 +93,13 @@ export async function channelRoutes(app: FastifyInstance) {
     "/api/channels/:id",
     { schema: { params: paramIdSchema } },
     async (request, reply) => {
-      const result = await deleteChannel(request.params.id);
+      const workspaceId = workspaceGate.resolveHttpWorkspaceId(request as any);
+      const result = await deleteChannel(request.params.id, { workspaceId });
       if ("notFound" in result) {
         return reply.status(404).send({ error: "Not Found", message: "Channel not found" });
+      }
+      if ("forbidden" in result) {
+        return reply.status(403).send({ error: "Forbidden", message: "Channel does not belong to this workspace" });
       }
       if ("conflictGeneral" in result) {
         return reply.status(409).send({
@@ -93,7 +108,7 @@ export async function channelRoutes(app: FastifyInstance) {
         });
       }
 
-      emitWorkspaceSync();
+      emitWorkspaceSync(workspaceId);
       return reply.status(204).send();
     }
   );
