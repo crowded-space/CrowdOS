@@ -1,7 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
-import { observabilityGate } from "../Observability/observabilityGate.js";
-import { authGate } from "../Shared/auth/authGate.js";
+import { observabilityGate } from "../observability/observability-gate.js";
+import { authGate } from "../shared/auth/auth-gate.js";
 
 const traceQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(200).optional(),
@@ -39,7 +39,7 @@ export async function observabilityRoutes(app: FastifyInstance) {
     return { traces, stats };
   });
 
-  // Cost ledger
+  // Cost ledger — single fetch; the rollup is derived pure from the same rows.
   app.get("/api/observability/cost/ledger", { preHandler: adminPreHandler }, async (request) => {
     const query = costQuerySchema.parse((request.query as Record<string, unknown>) ?? {});
     const ledger = await observabilityGate.getPerRunCostLedger({
@@ -48,11 +48,7 @@ export async function observabilityRoutes(app: FastifyInstance) {
       agentId: query.agentId ?? null,
       limit: query.limit ?? 100,
     });
-    const rollup = await observabilityGate.getPerRunRollup({
-      runId: query.runId ?? null,
-      channelId: query.channelId ?? null,
-      limit: query.limit ?? 100,
-    });
+    const rollup = observabilityGate.rollupFromEntries(ledger);
     return { ledger, rollup, count: ledger.length };
   });
 

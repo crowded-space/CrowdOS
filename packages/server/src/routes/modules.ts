@@ -39,7 +39,7 @@ import {
   updateCapabilitiesModule,
   deleteCapabilitiesModule,
   findReferencingAgent
-} from "../Modules/moduleGate.js";
+} from "../modules/module-gate.js";
 import type {
   CreateModelModuleBody,
   UpdateModelModuleBody,
@@ -52,29 +52,42 @@ import type {
   CreateCapabilitiesModuleBody,
   UpdateCapabilitiesModuleBody,
   ModuleParams
-} from "../Modules/moduleGate.js";
-import { globalBroker } from "../Shared/sockets/registerSocketServer.js";
-import { redactSecrets } from "../Shared/core/redact.js";
+} from "../modules/module-gate.js";
+import { globalBroker } from "../shared/sockets/register-socket-server.js";
+import { redactSecrets } from "../shared/core/redact.js";
+import { maybeSend304 } from "../shared/core/http-cache.js";
 
-// Modules are global (see agents.ts): catalog mutations fan out globally.
 function emitWorkspaceSync(): void {
   globalBroker?.emit("workspace:sync", {});
 }
 
+function parseListQuery(query: unknown): { limit: number; offset: number } {
+  const q = (query ?? {}) as { limit?: unknown; offset?: unknown };
+  const rawLimit = Number(q.limit);
+  const rawOffset = Number(q.offset);
+  const limit = Number.isFinite(rawLimit) ? Math.min(500, Math.max(1, Math.floor(rawLimit))) : 500;
+  const offset = Number.isFinite(rawOffset) ? Math.max(0, Math.floor(rawOffset)) : 0;
+  return { limit, offset };
+}
+
 export async function moduleRoutes(app: FastifyInstance) {
   // GET /api/modules - Return all modules aggregated — redact secrets (P0-2)
-  app.get("/api/modules", async () => {
-    const all = await listAllModules();
-    return {
+  app.get("/api/modules", async (request, reply) => {
+    const all = await listAllModules(parseListQuery(request.query));
+    const body = {
       ...all,
       modelModules: (all.modelModules as unknown[]).map((m) => redactSecrets(m as Record<string, unknown>)),
     };
+    if (maybeSend304(request, reply, body)) return;
+    return body;
   });
 
   // --- Model Modules ---
-  app.get("/api/modules/model", async () => {
-    const list = await listModelModules();
-    return (list as unknown[]).map((m) => redactSecrets(m as Record<string, unknown>));
+  app.get("/api/modules/model", async (request, reply) => {
+    const list = await listModelModules(parseListQuery(request.query));
+    const body = (list as unknown[]).map((m) => redactSecrets(m as Record<string, unknown>));
+    if (maybeSend304(request, reply, body)) return;
+    return body;
   });
 
   app.get<{ Params: ModuleParams }>(
@@ -83,7 +96,9 @@ export async function moduleRoutes(app: FastifyInstance) {
     async (request, reply) => {
       const res = await getModelModule(request.params.id);
       if (!res) return reply.status(404).send({ error: "Not Found", message: "ModelModule not found" });
-      return redactSecrets(res as unknown as Record<string, unknown>);
+      const body = redactSecrets(res as unknown as Record<string, unknown>);
+      if (maybeSend304(request, reply, body)) return;
+      return body;
     }
   );
 
@@ -138,7 +153,11 @@ export async function moduleRoutes(app: FastifyInstance) {
   );
 
   // --- Instruction Modules ---
-  app.get("/api/modules/instruction", async () => listInstructionModules());
+  app.get("/api/modules/instruction", async (request, reply) => {
+    const body = await listInstructionModules(parseListQuery(request.query));
+    if (maybeSend304(request, reply, body)) return;
+    return body;
+  });
 
   app.get<{ Params: ModuleParams }>(
     "/api/modules/instruction/:id",
@@ -146,6 +165,7 @@ export async function moduleRoutes(app: FastifyInstance) {
     async (request, reply) => {
       const res = await getInstructionModule(request.params.id);
       if (!res) return reply.status(404).send({ error: "Not Found", message: "InstructionModule not found" });
+      if (maybeSend304(request, reply, res)) return;
       return res;
     }
   );
@@ -191,7 +211,11 @@ export async function moduleRoutes(app: FastifyInstance) {
   );
 
   // --- Toolkit Modules ---
-  app.get("/api/modules/toolkit", async () => listToolkitModules());
+  app.get("/api/modules/toolkit", async (request, reply) => {
+    const body = await listToolkitModules(parseListQuery(request.query));
+    if (maybeSend304(request, reply, body)) return;
+    return body;
+  });
 
   app.get<{ Params: ModuleParams }>(
     "/api/modules/toolkit/:id",
@@ -199,6 +223,7 @@ export async function moduleRoutes(app: FastifyInstance) {
     async (request, reply) => {
       const res = await getToolkitModule(request.params.id);
       if (!res) return reply.status(404).send({ error: "Not Found", message: "ToolkitModule not found" });
+      if (maybeSend304(request, reply, res)) return;
       return res;
     }
   );
@@ -244,7 +269,11 @@ export async function moduleRoutes(app: FastifyInstance) {
   );
 
   // --- Constraints Modules ---
-  app.get("/api/modules/constraints", async () => listConstraintsModules());
+  app.get("/api/modules/constraints", async (request, reply) => {
+    const body = await listConstraintsModules(parseListQuery(request.query));
+    if (maybeSend304(request, reply, body)) return;
+    return body;
+  });
 
   app.get<{ Params: ModuleParams }>(
     "/api/modules/constraints/:id",
@@ -252,6 +281,7 @@ export async function moduleRoutes(app: FastifyInstance) {
     async (request, reply) => {
       const res = await getConstraintsModule(request.params.id);
       if (!res) return reply.status(404).send({ error: "Not Found", message: "ConstraintsModule not found" });
+      if (maybeSend304(request, reply, res)) return;
       return res;
     }
   );
@@ -297,7 +327,11 @@ export async function moduleRoutes(app: FastifyInstance) {
   );
 
   // --- Capabilities Modules ---
-  app.get("/api/modules/capabilities", async () => listCapabilitiesModules());
+  app.get("/api/modules/capabilities", async (request, reply) => {
+    const body = await listCapabilitiesModules(parseListQuery(request.query));
+    if (maybeSend304(request, reply, body)) return;
+    return body;
+  });
 
   app.get<{ Params: ModuleParams }>(
     "/api/modules/capabilities/:id",
@@ -305,6 +339,7 @@ export async function moduleRoutes(app: FastifyInstance) {
     async (request, reply) => {
       const res = await getCapabilitiesModule(request.params.id);
       if (!res) return reply.status(404).send({ error: "Not Found", message: "CapabilitiesModule not found" });
+      if (maybeSend304(request, reply, res)) return;
       return res;
     }
   );

@@ -27,7 +27,7 @@ const ALLOWLIST = [
     reason: "SEC-1 one-time bootstrap admin key emission to stdout is intentionally raw",
   },
   {
-    file: "runtime/RuntimeExecutor.ts",
+    file: "runtime/runtime-executor.ts",
     marker: "Failed to record token usage:",
     reason: "logs only an error object; message text mentions token usage bookkeeping",
   },

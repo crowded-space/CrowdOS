@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 
 import { eq } from "drizzle-orm";
 
-import { closeDatabaseConnection, ensurePgVectorExtension, getDb } from "../Shared/config/database.js";
+import { closeDatabaseConnection, ensurePgVectorExtension, getDb } from "../shared/config/database.js";
 import { agents, channels, instructionModules, modelModules, messages } from "./schema.js";
 
 async function checkDatabaseRoundTrip(): Promise<void> {
@@ -65,7 +65,6 @@ async function checkDatabaseRoundTrip(): Promise<void> {
 
   await db.insert(channels).values({
     id: channelId,
-    workspaceId: "default",
     categoryId: null,
     name: `roundtrip-${channelId.slice(0, 8)}`,
     type: "standard",
@@ -77,7 +76,6 @@ async function checkDatabaseRoundTrip(): Promise<void> {
 
   await db.insert(messages).values({
     id: messageId,
-    workspaceId: "default",
     channelId,
     authorId: agentId,
     authorName: "Roundtrip Agent",

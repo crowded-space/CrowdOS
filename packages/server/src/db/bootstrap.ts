@@ -4,8 +4,8 @@ import { drizzle } from "drizzle-orm/postgres-js";
 import { migrate } from "drizzle-orm/postgres-js/migrator";
 import postgres from "postgres";
 
-import { closeDatabaseConnection, ensurePgVectorExtension, getSqlClient } from "../Shared/config/database.js";
-import { env } from "../Shared/config/env.js";
+import { closeDatabaseConnection, ensurePgVectorExtension, getSqlClient } from "../shared/config/database.js";
+import { env } from "../shared/config/env.js";
 import { seed } from "./seed.js";
 
 const migrationsFolder = fileURLToPath(new URL("./migrations", import.meta.url));
@@ -247,7 +247,7 @@ async function ensureSchema(): Promise<void> {
       avatar text,
       authority_level integer not null,
       l3_subtype l3_subtype,
-      model_module_id text not null references model_modules(id) on delete cascade,
+      model_module_id text references model_modules(id) on delete set null,
       instruction_module_id text not null references instruction_modules(id) on delete cascade,
       toolkit_module_id text references toolkit_modules(id) on delete set null,
       constraints_module_id text references constraints_modules(id) on delete set null,

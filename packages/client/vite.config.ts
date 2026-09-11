@@ -3,6 +3,15 @@ import react from '@vitejs/plugin-react-swc';
 import path from 'path';
 import {defineConfig} from 'vite';
 
+const isDesktopDev =
+  process.env.VITE_BACKEND_PORT === '12077' ||
+  process.env.BACKEND_PORT === '12077' ||
+  process.argv.includes('22077') ||
+  process.env.CROWDOS_DEV === '1';
+
+const backendPort = process.env.VITE_BACKEND_PORT || process.env.BACKEND_PORT || (isDesktopDev ? '12077' : '3001');
+const backendTarget = process.env.VITE_BACKEND_URL || `http://127.0.0.1:${backendPort}`;
+
 export default defineConfig(() => {
   return {
     plugins: [react(), tailwindcss()] as any,
@@ -31,11 +40,11 @@ export default defineConfig(() => {
       host: '0.0.0.0',
       proxy: {
         '/api': {
-          target: 'http://127.0.0.1:3001',
+          target: backendTarget,
           changeOrigin: true,
         },
         '/socket.io': {
-          target: 'http://127.0.0.1:3001',
+          target: backendTarget,
           ws: true,
           changeOrigin: true,
           configure: (proxy) => {

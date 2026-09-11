@@ -1,4 +1,4 @@
-import type { Message } from '../types/crowd-os';
+import type { Message } from '../types/crowdOs';
 
 export interface PageCursor {
   before: {

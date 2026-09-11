@@ -3,7 +3,7 @@ loadEnv();
 
 import { eq } from "drizzle-orm";
 
-import { closeDatabaseConnection, getDb } from "../Shared/config/database.js";
+import { closeDatabaseConnection, getDb } from "../shared/config/database.js";
 import {
   embeddingModelProfiles,
   generationModelProfiles,
@@ -11,8 +11,8 @@ import {
   modelModules,
   mcpServers,
 } from "./schema.js";
-import { encrypt, isEncrypted } from "../Shared/core/secretBox.js";
-import { redactLogPayload } from "../Shared/core/redact.js";
+import { encrypt, isEncrypted } from "../shared/core/secret-box.js";
+import { redactLogPayload } from "../shared/core/redact.js";
 
 interface ColumnStat {
   table: string;

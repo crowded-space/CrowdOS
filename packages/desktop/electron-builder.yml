@@ -1,0 +1,31 @@
+# electron-builder config — Windows-first (NSIS x64), unsigned OSS v1.
+# Signing TODO: add win.certificateFile/certificatePassword (or Azure Trusted
+# Signing) + remove signAndEditExecutable:false before any public release.
+appId: com.crowdos.app
+productName: CrowdOS
+directories:
+  output: release
+  buildResources: build
+files:
+  - from: dist
+    to: dist
+  - from: ../client/dist
+    to: client/dist
+  - from: ../server/dist
+    to: server/dist
+  - from: package.json
+    to: package.json
+win:
+  target:
+    - target: nsis
+      arch:
+        - x64
+  signAndEditExecutable: false
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: CrowdOS
+  artifactName: CrowdOS-Setup-${version}.${ext}
+publish: null

@@ -6,17 +6,15 @@ import {
   updateAgentSchema,
   listAgentsQuerySchema,
   agentParamsSchema,
-} from "../Agents/agentGate.js";
+} from "../agents/agent-gate.js";
 import type {
   ListAgentsQuery,
   AgentParams,
   CreateAgentBody,
   UpdateAgentBody,
-} from "../Agents/agentGate.js";
-import { globalBroker } from "../Shared/sockets/registerSocketServer.js";
+} from "../agents/agent-gate.js";
+import { globalBroker } from "../shared/sockets/register-socket-server.js";
 
-// Agents are a global catalog (roster membership lives in workspace_agents),
-// so catalog mutations intentionally fan out globally.
 function emitWorkspaceSync(): void {
   globalBroker?.emit("workspace:sync", {});
 }
@@ -36,7 +34,7 @@ export async function agentRoutes(app: FastifyInstance) {
         isTemplate: request.query.isTemplate,
         limit: request.query.limit,
         cursor: request.query.cursor ?? null,
-      }),
+      }, (request as any).db),
   );
 
   app.get<{ Params: AgentParams }>(
@@ -47,7 +45,7 @@ export async function agentRoutes(app: FastifyInstance) {
       },
     },
     async (request, reply) => {
-      const agent = await agentGate.getById(request.params.id);
+      const agent = await agentGate.getById(request.params.id, (request as any).db);
       if (!agent) {
         return reply.status(404).send({
           statusCode: 404,
@@ -69,7 +67,7 @@ export async function agentRoutes(app: FastifyInstance) {
     },
     async (request, reply) => {
       try {
-        const agent = await agentGate.create(request.body);
+        const agent = await agentGate.create({ ...request.body, modelModuleId: request.body.modelModuleId ?? null }, (request as any).db);
         emitWorkspaceSync();
         return reply.status(201).send(agent);
       } catch (error) {
@@ -92,8 +90,8 @@ export async function agentRoutes(app: FastifyInstance) {
     },
     async (request, reply) => {
       try {
-        const previous = await agentGate.getById(request.params.id);
-        const updated = await agentGate.update(request.params.id, request.body);
+        const previous = await agentGate.getById(request.params.id, (request as any).db);
+        const updated = await agentGate.update(request.params.id, request.body, (request as any).db);
         if (!updated) {
           return reply.status(404).send({
             statusCode: 404,
@@ -126,7 +124,7 @@ export async function agentRoutes(app: FastifyInstance) {
       },
     },
     async (request, reply) => {
-      const deleted = await agentGate.delete(request.params.id);
+      const deleted = await agentGate.delete(request.params.id, (request as any).db);
       if (!deleted) {
         return reply.status(404).send({
           statusCode: 404,

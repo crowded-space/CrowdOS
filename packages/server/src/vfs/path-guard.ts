@@ -2,8 +2,9 @@
 // Prevents path traversal attacks and normalizes workspace-relative paths.
 
 import { posix } from "node:path";
-import { realpathSync } from "node:fs";
+import { realpath } from "node:fs/promises";
 import { dirname as nativeDirname, resolve as nativeResolve } from "node:path";
+import { TtlCache } from "../shared/core/ttl-cache.js";
 
 /**
  * Normalize a workspace-relative path to POSIX format.
@@ -78,9 +79,9 @@ export function isInsideRoot(candidate: string, root: string): boolean {
  * Realpath-resolve a path that may not exist yet: realpath the deepest
  * existing ancestor, then rejoin the remaining segments lexically.
  */
-function resolveRealDeep(target: string): string {
+async function resolveRealDeep(target: string): Promise<string> {
   try {
-    return realpathSync(target);
+    return await realpath(target);
   } catch (err: any) {
     if (err && err.code !== "ENOENT" && err.code !== "ENOTDIR") throw err;
   }
@@ -91,7 +92,7 @@ function resolveRealDeep(target: string): string {
     if (parent === current) return toSlashed(nativeResolve(current, ...segments));
     segments.unshift(posix.basename(toSlashed(current)));
     try {
-      const base = realpathSync(parent);
+      const base = await realpath(parent);
       return toSlashed(nativeResolve(base, ...segments));
     } catch (err: any) {
       if (err && err.code !== "ENOENT" && err.code !== "ENOTDIR") throw err;
@@ -100,29 +101,61 @@ function resolveRealDeep(target: string): string {
   }
 }
 
+// ponytail: root realpath cached 60s — root symlink flips are rare, per-op realpath blocked the loop.
+const rootRealCache = new TtlCache<string>(60_000, 200);
+
+async function getRootReal(workspaceRoot: string): Promise<string> {
+  const cached = rootRealCache.get(workspaceRoot);
+  if (cached) return cached;
+  let rootReal = toSlashed(workspaceRoot).replace(/\/+$/, "");
+  try {
+    rootReal = toSlashed(await realpath(workspaceRoot)).replace(/\/+$/, "");
+  } catch {
+    /* fall back to lexical root */
+  }
+  rootRealCache.set(workspaceRoot, rootReal);
+  return rootReal;
+}
+
+/** Fast-path probe: no traversal markers means lexical join is safe; only symlinks remain. */
+function hasTraversalMarkers(p: string): boolean {
+  return p.includes("..") || p.includes("\0") || p.includes(":");
+}
+
 /**
  * Resolve a workspace-relative path to an absolute filesystem path.
  * Throws if the resolved path escapes the workspace root.
  * SEC-3 hardened: anchored prefix + symlink (realpath) escape rejection.
  */
-export function resolveWorkspacePath(workspaceRoot: string, relativePath: string): string {
+export async function resolveWorkspacePath(workspaceRoot: string, relativePath: string): Promise<string> {
   if (!isPathSafe(relativePath)) {
     throw new Error(`Unsafe path detected: ${relativePath}`);
   }
 
-  let rootReal = toSlashed(workspaceRoot).replace(/\/+$/, "");
-  try {
-    rootReal = toSlashed(realpathSync(workspaceRoot)).replace(/\/+$/, "");
-  } catch {
-    /* fall back to lexical root */
-  }
+  const rootReal = await getRootReal(workspaceRoot);
 
   const normalized = normalizePath(relativePath);
   const joined = normalized === "." ? rootReal : posix.join(rootReal, normalized);
 
+  // Fast-path: clean relative path + existing target → single realpath, skip ancestor walk.
+  if (!hasTraversalMarkers(relativePath)) {
+    try {
+      const fast = toSlashed(await realpath(joined)).replace(/\/+$/, "");
+      if (isInsideRoot(fast, rootReal)) return fast;
+      throw new Error(`Path traversal blocked: ${relativePath}`);
+    } catch (err: any) {
+      if (err && (err.code === "ENOENT" || err.code === "ENOTDIR" || /traversal blocked/.test(err?.message ?? ""))) {
+        if (/traversal blocked/.test(err?.message ?? "")) throw err;
+        // Non-existent → fall through to ancestor walk below.
+      } else if (err) {
+        throw err;
+      }
+    }
+  }
+
   let resolved: string;
   try {
-    resolved = resolveRealDeep(joined);
+    resolved = await resolveRealDeep(joined);
   } catch {
     resolved = joined;
   }

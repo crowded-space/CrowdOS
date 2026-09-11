@@ -1,1 +1,1 @@
-export * from "./vfsGate.js";
+export * from "./vfs-gate.js";

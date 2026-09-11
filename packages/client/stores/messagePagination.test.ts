@@ -6,7 +6,7 @@ import {
   capMessagesMirror,
   MESSAGE_MIRROR_CAP_PER_CHANNEL
 } from "./messagePagination";
-import type { Message } from "../types/crowd-os";
+import type { Message } from "../types/crowdOs";
 
 function makeMessage(channelId: string, n: number): Message {
   return {
@@ -87,3 +87,4 @@ describe("PERF-5 pagination helpers", () => {
     expect(capMessagesMirror(messages)).toBe(messages);
   });
 });
+

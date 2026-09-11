@@ -1,4 +1,4 @@
-import type { Tool, Role, ModelProfile, InstructionModule, ModelModule, ToolkitModule, Agent, Workspace, Message } from '../types/crowd-os';
+import type { Tool, Role, ModelProfile, InstructionModule, ModelModule, ToolkitModule, Agent, Workspace, Message } from '../types/crowdOs';
 
 // UX-8 decomposition: initial demo data extracted so the core store stays focused on state logic.
 // When DEMO_FALLBACK is off, the store will ignore this data on backend failure (honest mode).

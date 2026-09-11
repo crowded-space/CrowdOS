@@ -7,9 +7,9 @@ import fs from "node:fs/promises";
 import { join } from "node:path";
 import { eq, and } from "drizzle-orm";
 
-import { getDb } from "../Shared/config/database.js";
+import { getDb } from "../shared/config/database.js";
 import { workspaceNodes, workspaces } from "../db/schema.js";
-import { TtlCache } from "../Shared/core/ttlCache.js";
+import { TtlCache } from "../shared/core/ttl-cache.js";
 import { resolveWorkspacePath, normalizePath, extractName, guessMimeType } from "./path-guard.js";
 import type { VirtualFS, FileNode, FileStat } from "./vfs.interface.js";
 
@@ -105,7 +105,7 @@ export class LocalVFS implements VirtualFS {
     }
   }
 
-  private resolve(path: string): string {
+  private resolve(path: string): Promise<string> {
     return resolveWorkspacePath(this.workspaceRoot, path);
   }
 
@@ -119,7 +119,7 @@ export class LocalVFS implements VirtualFS {
   }
 
   async read(path: string): Promise<string> {
-    const absPath = this.resolve(path);
+    const absPath = await this.resolve(path);
     const stat = await fs.stat(absPath).catch(() => null);
     const MAX_READ_BYTES = 1_048_576; // 1MB cap — prevents OOM from large files into LLM context
     if (stat && stat.size > MAX_READ_BYTES) {
@@ -134,7 +134,7 @@ export class LocalVFS implements VirtualFS {
   }
 
   async readBinary(path: string): Promise<Buffer> {
-    const absPath = this.resolve(path);
+    const absPath = await this.resolve(path);
     const stat = await fs.stat(absPath).catch(() => null);
     const MAX_READ_BYTES = 1_048_576;
     if (stat && stat.size > MAX_READ_BYTES) {
@@ -149,7 +149,7 @@ export class LocalVFS implements VirtualFS {
   }
 
   async write(path: string, content: string): Promise<void> {
-    const absPath = this.resolve(path);
+    const absPath = await this.resolve(path);
     const normalized = normalizePath(path);
     const name = extractName(path);
     const checksum = this.computeChecksum(content);
@@ -160,36 +160,20 @@ export class LocalVFS implements VirtualFS {
     const parentDir = join(absPath, "..");
     await fs.mkdir(parentDir, { recursive: true });
 
-    // Write to disk
+    // Write to disk first; compensate (rm) if the DB upsert below fails
+    // so disk and DB never diverge (crash between separate select+insert
+    // used to leave one without the other).
     await fs.writeFile(absPath, content, "utf8");
-    this.invalidateListCache();
 
-    // Sync metadata to DB
+    // Sync metadata to DB atomically in 1 RTT via upsert on
+    // (workspace_id, path). The generated id distinguishes insert from
+    // update: on conflict the existing id survives, on insert ours does.
     const db = getDb();
-    const existing = await db.query.workspaceNodes.findFirst({
-      where: and(
-        eq(workspaceNodes.workspaceId, this.workspaceId),
-        eq(workspaceNodes.path, normalized),
-      ),
-    });
-
     const now = new Date();
-
-    if (existing) {
-      await db.update(workspaceNodes)
-        .set({
-          size,
-          checksum,
-          updatedBy: this.actorId,
-          updatedAt: now,
-          mimeType,
-        })
-        .where(eq(workspaceNodes.id, existing.id));
-
-      this.onEvent?.("file.updated", normalized, { checksum, size });
-    } else {
-      await db.insert(workspaceNodes).values({
-        id: randomUUID(),
+    const nodeId = randomUUID();
+    try {
+      const [row] = await db.insert(workspaceNodes).values({
+        id: nodeId,
         workspaceId: this.workspaceId,
         path: normalized,
         name,
@@ -202,51 +186,51 @@ export class LocalVFS implements VirtualFS {
         metadata: {},
         createdAt: now,
         updatedAt: now,
-      });
+      }).onConflictDoUpdate({
+        target: [workspaceNodes.workspaceId, workspaceNodes.path],
+        set: { size, checksum, mimeType, updatedBy: this.actorId, updatedAt: now },
+      }).returning({ id: workspaceNodes.id });
 
-      this.onEvent?.("file.created", normalized, { checksum, size });
+      this.invalidateListCache();
+      this.onEvent?.(row.id === nodeId ? "file.created" : "file.updated", normalized, { checksum, size });
+    } catch (err) {
+      await fs.rm(absPath, { force: true }).catch(() => {});
+      this.invalidateListCache();
+      throw err;
     }
   }
 
   async mkdir(path: string): Promise<void> {
-    const absPath = this.resolve(path);
+    const absPath = await this.resolve(path);
     const normalized = normalizePath(path);
     const name = extractName(path);
 
     await fs.mkdir(absPath, { recursive: true });
     this.invalidateListCache();
 
-    // Sync directory node to DB
+    // Sync directory node to DB atomically via insert-or-ignore on
+    // (workspace_id, path) — avoids select→insert race under concurrency.
     const db = getDb();
-    const existing = await db.query.workspaceNodes.findFirst({
-      where: and(
-        eq(workspaceNodes.workspaceId, this.workspaceId),
-        eq(workspaceNodes.path, normalized),
-      ),
-    });
-
-    if (!existing) {
-      const now = new Date();
-      await db.insert(workspaceNodes).values({
-        id: randomUUID(),
-        workspaceId: this.workspaceId,
-        path: normalized,
-        name,
-        type: "directory",
-        mimeType: null,
-        size: 0,
-        checksum: null,
-        createdBy: this.actorId,
-        updatedBy: this.actorId,
-        metadata: {},
-        createdAt: now,
-        updatedAt: now,
-      });
-    }
+    const now = new Date();
+    await db.insert(workspaceNodes).values({
+      id: randomUUID(),
+      workspaceId: this.workspaceId,
+      path: normalized,
+      name,
+      type: "directory",
+      mimeType: null,
+      size: 0,
+      checksum: null,
+      createdBy: this.actorId,
+      updatedBy: this.actorId,
+      metadata: {},
+      createdAt: now,
+      updatedAt: now,
+    }).onConflictDoNothing({ target: [workspaceNodes.workspaceId, workspaceNodes.path] });
   }
 
   async delete(path: string): Promise<void> {
-    const absPath = this.resolve(path);
+    const absPath = await this.resolve(path);
     const normalized = normalizePath(path);
 
     // Check if it's a directory or file
@@ -276,8 +260,8 @@ export class LocalVFS implements VirtualFS {
   }
 
   async rename(oldPath: string, newPath: string): Promise<void> {
-    const absOld = this.resolve(oldPath);
-    const absNew = this.resolve(newPath);
+    const absOld = await this.resolve(oldPath);
+    const absNew = await this.resolve(newPath);
     const normalizedOld = normalizePath(oldPath);
     const normalizedNew = normalizePath(newPath);
     const newName = extractName(newPath);
@@ -319,7 +303,7 @@ export class LocalVFS implements VirtualFS {
     const cached = listCache.get(cacheKey);
     if (cached) return cached;
 
-    const absPath = this.resolve(path);
+    const absPath = await this.resolve(path);
     const entries = await fs.readdir(absPath, { withFileTypes: true });
 
     // Bounded stat concurrency (32) — prevents EMFILE on large dirs (was unbounded Promise.all)
@@ -356,19 +340,21 @@ export class LocalVFS implements VirtualFS {
   }
 
   async stat(path: string): Promise<FileStat> {
-    const absPath = this.resolve(path);
-    const fsStat = await fs.stat(absPath);
     const normalized = normalizePath(path);
     const name = extractName(path);
+    const absPath = await this.resolve(path);
 
     // Try to get metadata from DB
     const db = getDb();
-    const node = await db.query.workspaceNodes.findFirst({
-      where: and(
-        eq(workspaceNodes.workspaceId, this.workspaceId),
-        eq(workspaceNodes.path, normalized),
-      ),
-    });
+    const [fsStat, node] = await Promise.all([
+      fs.stat(absPath),
+      db.query.workspaceNodes.findFirst({
+        where: and(
+          eq(workspaceNodes.workspaceId, this.workspaceId),
+          eq(workspaceNodes.path, normalized),
+        ),
+      }),
+    ]);
 
     return {
       name,
@@ -386,7 +372,7 @@ export class LocalVFS implements VirtualFS {
 
   async exists(path: string): Promise<boolean> {
     try {
-      const absPath = this.resolve(path);
+      const absPath = await this.resolve(path);
       await fs.access(absPath);
       return true;
     } catch {

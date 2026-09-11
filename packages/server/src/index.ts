@@ -2,23 +2,23 @@ import cors from "@fastify/cors";
 import Fastify from "fastify";
 import { randomUUID } from "crypto";
 
-import { env } from "./Shared/config/env.js";
-import { EventBroker } from "./EventBroker/eventBrokerGate.js";
-import { setupErrorHandler } from "./Shared/core/errors.js";
-import { validatorCompiler } from "./Shared/core/validation.js";
+import { env } from "./shared/config/env.js";
+import { EventBroker } from "./event-broker/event-broker-gate.js";
+import { setupErrorHandler } from "./shared/core/errors.js";
+import { validatorCompiler } from "./shared/core/validation.js";
 import { registerRoutes } from "./routes/index.js";
-import { registerRateLimit } from "./routes/rateLimit.js";
-import { registerSocketServer } from "./Shared/sockets/registerSocketServer.js";
-import { initRuntime } from "./runtime/runtimeGate.js";
-import { getDb, closeDatabaseConnection } from "./Shared/config/database.js";
+import { registerRateLimit } from "./routes/rate-limit.js";
+import { registerSocketServer } from "./shared/sockets/register-socket-server.js";
+import { initRuntime } from "./runtime/runtime-gate.js";
+import { getDb, closeDatabaseConnection } from "./shared/config/database.js";
 import { workspaces } from "./db/schema.js";
-import { LocalVFS } from "./vfs/vfsGate.js";
+import { LocalVFS } from "./vfs/vfs-gate.js";
 import * as path from "node:path";
-import { authGate } from "./Shared/auth/authGate.js";
-import { seedBootstrapAdminKey } from "./Shared/auth/apiKeyService.js";
-import { startSpawnRetentionSweeper } from "./Agents/agentGate.js";
-import { startBudgetReconciler } from "./Shared/core/tokenTracker.js";
-import { initConfig } from "./Shared/config/env.js";
+import { authGate } from "./shared/auth/auth-gate.js";
+import { seedBootstrapAdminKey } from "./shared/auth/api-key-service.js";
+import { startSpawnRetentionSweeper } from "./agents/agent-gate.js";
+import { startBudgetReconciler } from "./shared/core/token-tracker.js";
+import { initConfig } from "./shared/config/env.js";
 
 try {
   initConfig();
@@ -116,7 +116,7 @@ if (!isBullMqApi) {
   startSpawnRetentionSweeper();
   startBudgetReconciler();
   try {
-    const { runsGate } = await import("./Runs/runsGate.js");
+    const { runsGate } = await import("./runs/runs-gate.js");
     await (runsGate as unknown as { startRunOrphanSweeper: (b: unknown) => Promise<void> }).startRunOrphanSweeper(eventBroker);
   } catch {}
 } else {
@@ -127,7 +127,7 @@ if (!isBullMqApi) {
 // but local timer is still started here because approvals are synchronous pauses
 // not queued — cheap idempotent DB poll every 30s.
 try {
-  const { startApprovalSweeper } = await import("./Approvals/approvalSweeper.js");
+  const { startApprovalSweeper } = await import("./approvals/approval-sweeper.js");
   startApprovalSweeper(eventBroker);
 } catch {}
 const io = registerSocketServer(app.server, eventBroker);

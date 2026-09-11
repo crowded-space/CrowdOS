@@ -1,25 +1,70 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
-import { LocalVFS } from "../vfs/vfsGate.js";
+import { LocalVFS } from "../vfs/vfs-gate.js";
+import { getWorkspaceRecord } from "../workspace/workspace-gate.js";
 import * as path from "node:path";
 import process from "node:process";
 
-import { getDb } from "../Shared/config/database.js";
+import { getDb } from "../shared/config/database.js";
 import { workspaces } from "../db/schema.js";
 import { eq } from "drizzle-orm";
+import { TtlCache } from "../shared/core/ttl-cache.js";
 
-async function getDynamicVFS(workspaceId: string, actorId?: string): Promise<LocalVFS | null> {
-  const db = getDb();
-  const [ws] = await db.select().from(workspaces).where(eq(workspaces.id, workspaceId)).limit(1);
-  if (!ws) return null;
-  
-  // Derive actor from verified request identity, not hard-coded (P0-1)
-  const resolvedActor = actorId || ws.ownerId || process.env.SYSTEM_ACTOR_ID || "system";
-  return new LocalVFS({
-    workspaceId: ws.id,
-    workspaceRoot: ws.rootPath,
-    actorId: resolvedActor,
-  });
+// ponytail: workspace row cached 30s — every VFS op hit the workspaces table.
+const wsRowCache = new TtlCache<{ id: string; rootPath: string; ownerId: string | null }>(30_000, 200);
+
+async function getDynamicVFS(workspaceId: string, actorId?: string, requestDb?: any): Promise<LocalVFS | null> {
+  const cached = wsRowCache.get(workspaceId);
+  if (cached) {
+    const resolvedActor = actorId || cached.ownerId || process.env.SYSTEM_ACTOR_ID || "system";
+    return new LocalVFS({
+      workspaceId: cached.id,
+      workspaceRoot: cached.rootPath,
+      actorId: resolvedActor,
+    });
+  }
+
+  // 1. Check local registry first (Zero-DB boot compliant)
+  try {
+    const regRecord = await getWorkspaceRecord(workspaceId);
+    if (regRecord) {
+      wsRowCache.set(workspaceId, { id: regRecord.id, rootPath: regRecord.rootPath, ownerId: "system" });
+      const resolvedActor = actorId || process.env.SYSTEM_ACTOR_ID || "system";
+      return new LocalVFS({
+        workspaceId: regRecord.id,
+        workspaceRoot: regRecord.rootPath,
+        actorId: resolvedActor,
+      });
+    }
+  } catch {}
+
+  // 2. Check DB if available
+  try {
+    const db = requestDb || getDb();
+    const [ws] = await db.select().from(workspaces).where(eq(workspaces.id, workspaceId)).limit(1);
+    if (ws) {
+      wsRowCache.set(workspaceId, { id: ws.id, rootPath: ws.rootPath, ownerId: ws.ownerId ?? null });
+      const resolvedActor = actorId || ws.ownerId || process.env.SYSTEM_ACTOR_ID || "system";
+      return new LocalVFS({
+        workspaceId: ws.id,
+        workspaceRoot: ws.rootPath,
+        actorId: resolvedActor,
+      });
+    }
+  } catch {}
+
+  // 3. Fallback for default workspace
+  if (workspaceId === "default") {
+    const defaultRoot = path.join(process.cwd(), "sandbox", "default");
+    const resolvedActor = actorId || process.env.SYSTEM_ACTOR_ID || "system";
+    return new LocalVFS({
+      workspaceId: "default",
+      workspaceRoot: defaultRoot,
+      actorId: resolvedActor,
+    });
+  }
+
+  return null;
 }
 
 const pathQuerySchema = z.object({
@@ -42,7 +87,7 @@ export async function vfsRoutes(app: FastifyInstance) {
     { schema: { querystring: pathQuerySchema } },
     async (request, reply) => {
       const actorId = (request.headers["x-user-id"] as string) || (request.headers["x-actor-id"] as string);
-      const vfs = await getDynamicVFS(request.query.workspaceId, actorId);
+      const vfs = await getDynamicVFS(request.query.workspaceId, actorId, (request as any).db);
       if (!vfs) return reply.status(404).send({ error: "Not Found", message: "Workspace not found" });
 
       try {
@@ -67,7 +112,7 @@ export async function vfsRoutes(app: FastifyInstance) {
       }
       
       const actorId = (request.headers["x-user-id"] as string) || (request.headers["x-actor-id"] as string);
-      const vfs = await getDynamicVFS(request.query.workspaceId, actorId);
+      const vfs = await getDynamicVFS(request.query.workspaceId, actorId, (request as any).db);
       if (!vfs) return reply.status(404).send({ error: "Not Found", message: "Workspace not found" });
 
       try {
@@ -88,7 +133,7 @@ export async function vfsRoutes(app: FastifyInstance) {
     { schema: { body: writeBodySchema } },
     async (request, reply) => {
       const actorId = (request.headers["x-user-id"] as string) || (request.headers["x-actor-id"] as string);
-      const vfs = await getDynamicVFS(request.body.workspaceId, actorId);
+      const vfs = await getDynamicVFS(request.body.workspaceId, actorId, (request as any).db);
       if (!vfs) return reply.status(404).send({ error: "Not Found", message: "Workspace not found" });
 
       try {
@@ -110,7 +155,7 @@ export async function vfsRoutes(app: FastifyInstance) {
       }
 
       const actorId = (request.headers["x-user-id"] as string) || (request.headers["x-actor-id"] as string);
-      const vfs = await getDynamicVFS(request.query.workspaceId, actorId);
+      const vfs = await getDynamicVFS(request.query.workspaceId, actorId, (request as any).db);
       if (!vfs) return reply.status(404).send({ error: "Not Found", message: "Workspace not found" });
 
       try {

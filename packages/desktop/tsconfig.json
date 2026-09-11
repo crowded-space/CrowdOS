@@ -1,0 +1,17 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": ".",
+    "noEmit": true,
+    "types": ["node"]
+  },
+  "include": [
+    "desktopGate.ts",
+    "ipc-contracts.ts",
+    "security-policy.ts",
+    "paths.ts",
+    "main/**/*.ts",
+    "preload/**/*.ts",
+    "utility/**/*.ts"
+  ]
+}

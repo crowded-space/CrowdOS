@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { Guard } from "./Guard.js";
+import { Guard } from "./guard.js";
 
 describe("SEC-3 · Guard.validatePath (anchored prefix + realpath)", () => {
   let baseDir: string;
@@ -25,43 +25,43 @@ describe("SEC-3 · Guard.validatePath (anchored prefix + realpath)", () => {
     vi.unstubAllEnvs();
   });
 
-  it("allows an existing nested path inside the workspace and returns a resolved path", () => {
-    const result = Guard.validatePath("hello.txt", root);
+  it("allows an existing nested path inside the workspace and returns a resolved path", async () => {
+    const result = await Guard.validatePath("hello.txt", root);
     expect(fs.realpathSync(result).toLowerCase()).toBe(
       fs.realpathSync(path.join(root, "hello.txt")).toLowerCase()
     );
   });
 
-  it("allows a non-existent new file path inside the workspace (write flow)", () => {
-    const result = Guard.validatePath(path.join("src", "new", "file.ts"), root);
+  it("allows a non-existent new file path inside the workspace (write flow)", async () => {
+    const result = await Guard.validatePath(path.join("src", "new", "file.ts"), root);
     expect(result.toLowerCase().startsWith(root.toLowerCase() + path.sep)).toBe(true);
   });
 
-  it("blocks ../ traversal out of the workspace", () => {
-    expect(() => Guard.validatePath(path.join("..", "outside.txt"), root)).toThrow(/breaks out/);
-    expect(() => Guard.validatePath(path.join("sub", "..", "..", "..", "etc.txt"), root)).toThrow(
+  it("blocks ../ traversal out of the workspace", async () => {
+    await expect(Guard.validatePath(path.join("..", "outside.txt"), root)).rejects.toThrow(/breaks out/);
+    await expect(Guard.validatePath(path.join("sub", "..", "..", "..", "etc.txt"), root)).rejects.toThrow(
       /breaks out/
     );
   });
 
-  it("blocks sibling-directory prefix confusion (project-evil vs project)", () => {
-    expect(() => Guard.validatePath("../project-evil/secrets.txt", root)).toThrow(/breaks out/);
+  it("blocks sibling-directory prefix confusion (project-evil vs project)", async () => {
+    await expect(Guard.validatePath("../project-evil/secrets.txt", root)).rejects.toThrow(/breaks out/);
 
     const evilAbsolute = path.join(evilSibling, "secrets.txt");
-    expect(() => Guard.validatePath(evilAbsolute, root)).toThrow(/breaks out/);
+    await expect(Guard.validatePath(evilAbsolute, root)).rejects.toThrow(/breaks out/);
 
     const evilEnv = path.join(evilSibling, ".env");
-    expect(() => Guard.validatePath(evilEnv, root)).toThrow(/breaks out/);
+    await expect(Guard.validatePath(evilEnv, root)).rejects.toThrow(/breaks out/);
   });
 
-  it("is case-insensitive about the workspace root on Windows", () => {
+  it("is case-insensitive about the workspace root on Windows", async () => {
     if (process.platform !== "win32") return;
     const upperRoot = path.join(baseDir.toUpperCase(), "PROJECT");
-    const result = Guard.validatePath(path.join(upperRoot, "hello.txt"), root);
+    const result = await Guard.validatePath(path.join(upperRoot, "hello.txt"), root);
     expect(result).toBeTruthy();
   });
 
-  it("blocks symlink escape out of the workspace", () => {
+  it("blocks symlink escape out of the workspace", async () => {
     const outsideDir = fs.mkdtempSync(path.join(os.tmpdir(), "guard-outside-"));
     try {
       fs.writeFileSync(path.join(outsideDir, "secret.txt"), "top secret");
@@ -76,10 +76,10 @@ describe("SEC-3 · Guard.validatePath (anchored prefix + realpath)", () => {
         throw err;
       }
 
-      expect(() => Guard.validatePath(path.join("escape-link", "secret.txt"), root)).toThrow(
+      await expect(Guard.validatePath(path.join("escape-link", "secret.txt"), root)).rejects.toThrow(
         /breaks out/
       );
-      expect(() => Guard.validatePath(path.join("escape-link", "deeper", "new.txt"), root)).toThrow(
+      await expect(Guard.validatePath(path.join("escape-link", "deeper", "new.txt"), root)).rejects.toThrow(
         /breaks out/
       );
     } finally {
@@ -87,19 +87,19 @@ describe("SEC-3 · Guard.validatePath (anchored prefix + realpath)", () => {
     }
   });
 
-  it("still enforces the sensitive-file blacklist inside the workspace", () => {
+  it("still enforces the sensitive-file blacklist inside the workspace", async () => {
     fs.writeFileSync(path.join(root, ".env"), "TOKEN=1");
-    expect(() => Guard.validatePath(".env", root)).toThrow(/blacklist/);
+    await expect(Guard.validatePath(".env", root)).rejects.toThrow(/blacklist/);
   });
 
-  it("legacy validatePath keeps the old (vulnerable) prefix behavior behind LEGACY_GUARD", () => {
+  it("legacy validatePath keeps the old (vulnerable) prefix behavior behind LEGACY_GUARD", async () => {
     vi.stubEnv("LEGACY_GUARD", "true");
     try {
-      expect(() => Guard.validatePath(path.join(evilSibling, "secrets.txt"), root)).not.toThrow();
+      await expect(Guard.validatePath(path.join(evilSibling, "secrets.txt"), root)).resolves.toBeTruthy();
     } finally {
       vi.unstubAllEnvs();
     }
-    expect(() => Guard.validatePath(path.join(evilSibling, "secrets.txt"), root)).toThrow(
+    await expect(Guard.validatePath(path.join(evilSibling, "secrets.txt"), root)).rejects.toThrow(
       /breaks out/
     );
   });

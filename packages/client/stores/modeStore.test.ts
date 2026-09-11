@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { useCrowdOSStore } from "./crowd-os-store";
+import { useCrowdOSStore } from "./crowdOsStore";
 
 describe("CrowdOS Mode Selection, Pinning & Channel Reset Store Suite", () => {
   beforeEach(() => {

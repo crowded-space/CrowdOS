@@ -10,8 +10,8 @@ export {
   type CreateAgentProfileInput,
   type UpdateAgentProfileInput,
   type AgentRegistryFilters,
-} from "../Agents/agentGate.js";
-export { type ModelModule, type InstructionModule, type ToolkitModule, type ConstraintsModule, type CapabilitiesModule, type ProviderEngine, type ModuleType, type ModuleUnion } from "../Modules/moduleGate.js";
+} from "../agents/agent-gate.js";
+export { type ModelModule, type InstructionModule, type ToolkitModule, type ConstraintsModule, type CapabilitiesModule, type ProviderEngine, type ModuleType, type ModuleUnion } from "../modules/module-gate.js";
 export { type RuntimeOverride, type RuntimeState, type RuntimeOverrideType, type RuntimeStatus, type InstructionPatch, type PermissionPatch } from "./runtime.types.js";
 
 export interface StandardMessage {

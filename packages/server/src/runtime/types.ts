@@ -1,5 +1,5 @@
 import type { TokenUsage } from '../types/tool.types.js'
-import type { EventBroker } from '../EventBroker/eventBrokerGate.js'
+import type { EventBroker } from '../event-broker/event-broker-gate.js'
 
 export type { TokenUsage }
 

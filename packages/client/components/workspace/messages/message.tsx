@@ -1,17 +1,17 @@
 import React from 'react';
-import { Message, AgentLevel } from '@/types/crowd-os';
-import HumanMessage from './human-message';
-import AgentMessage from './agent-message';
-import SystemMessage from './system-message';
-import DelegationMessage from './delegation-message';
-import ToolExecutionMessage from './tool-execution-message';
+import { Message, AgentLevel } from '@/types/crowdOs';
+import HumanMessage from './HumanMessage';
+import AgentMessage from './AgentMessage';
+import SystemMessage from './SystemMessage';
+import DelegationMessage from './DelegationMessage';
+import ToolExecutionMessage from './ToolExecutionMessage';
 import { ShieldAlert, CheckCircle2, XCircle, Loader2 } from 'lucide-react';
 
 interface MessageRouterProps {
   message: Message;
   agentLevel?: AgentLevel;
   key?: string;
-  toolExecutions?: import('@/types/crowd-os').ToolExecution[];
+  toolExecutions?: import('@/types/crowdOs').ToolExecution[];
 }
 
 export function MessageRouter({ message, agentLevel = 3, toolExecutions }: MessageRouterProps) {

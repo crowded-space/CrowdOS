@@ -1,6 +1,6 @@
 ﻿import type { FastifyInstance } from "fastify";
 import { eq, and, asc } from "drizzle-orm";
-import { getDb } from "../Shared/config/database.js";
+import { getDb } from "../shared/config/database.js";
 import {
   agents,
   agentInstructionStacks,
@@ -9,12 +9,12 @@ import {
   toolkitModules,
   constraintsModules,
 } from "../db/schema.js";
-import { skillsGate } from "../Skills/skillsGate.js";
-import { toolsGate } from "../tools/toolsGate.js";
-import { contextPipeline, runtimeGate } from "../runtime/contextGate.js";
-import { globalBroker } from "../Shared/sockets/registerSocketServer.js";
-import { redactSecrets, redactApiKeyFields } from "../Shared/core/redact.js";
-import { authGate } from "../Shared/auth/authGate.js";
+import { skillsGate } from "../skills/skills-gate.js";
+import { toolsGate } from "../tools/tools-gate.js";
+import { contextPipeline, runtimeGate } from "../runtime/context-gate.js";
+import { globalBroker } from "../shared/sockets/register-socket-server.js";
+import { redactSecrets, redactApiKeyFields } from "../shared/core/redact.js";
+import { authGate } from "../shared/auth/auth-gate.js";
 
 export async function studioRoutes(app: FastifyInstance) {
   // SEC-1: every /api/studio/* route requires an admin API key (strict mode).
@@ -33,27 +33,33 @@ export async function studioRoutes(app: FastifyInstance) {
         return reply.status(404).send({ statusCode: 404, error: "Not Found", message: "Agent not found" });
       }
 
+      // Manifest slots are independent once the agent row is known, so fetch them in one batch.
+      const [rawModel, stackLinks, activeSkills, resolvedToolIds, constraintsModule, toolkitModule] = await Promise.all([
+        agent.modelModuleId
+          ? db.query.modelModules.findFirst({ where: eq(modelModules.id, agent.modelModuleId) })
+          : Promise.resolve(null),
+        db.query.agentInstructionStacks.findMany({
+          where: and(
+            eq(agentInstructionStacks.agentId, agent.id),
+            eq(agentInstructionStacks.isEnabled, true)
+          ),
+          orderBy: [asc(agentInstructionStacks.priorityOrder)],
+          with: { instructionModule: true },
+        }),
+        skillsGate.getAgentSkills(agent.id),
+        skillsGate.getResolvedToolsForAgent(agent.id),
+        agent.constraintsModuleId
+          ? db.query.constraintsModules.findFirst({ where: eq(constraintsModules.id, agent.constraintsModuleId) })
+          : Promise.resolve(null),
+        agent.toolkitModuleId
+          ? db.query.toolkitModules.findFirst({ where: eq(toolkitModules.id, agent.toolkitModuleId) })
+          : Promise.resolve(null),
+      ]);
+
       // 1. Model Slot — redact apiKey before returning (P0-2)
-      let modelModule: any = null;
-      if (agent.modelModuleId) {
-        const raw = await db.query.modelModules.findFirst({
-          where: eq(modelModules.id, agent.modelModuleId),
-        });
-        modelModule = raw ? redactApiKeyFields(raw as Record<string, unknown>) : null;
-      }
+      const modelModule = rawModel ? redactApiKeyFields(rawModel as Record<string, unknown>) : null;
 
       // 2. Instruction Stack
-      const stackLinks = await db.query.agentInstructionStacks.findMany({
-        where: and(
-          eq(agentInstructionStacks.agentId, agent.id),
-          eq(agentInstructionStacks.isEnabled, true)
-        ),
-        orderBy: [asc(agentInstructionStacks.priorityOrder)],
-        with: {
-          instructionModule: true,
-        },
-      });
-
       const instructionStack = stackLinks.map(l => ({
         id: l.id,
         moduleId: l.instructionModuleId,
@@ -61,28 +67,8 @@ export async function studioRoutes(app: FastifyInstance) {
         module: l.instructionModule,
       }));
 
-      // 3. Active Skills
-      const activeSkills = await skillsGate.getAgentSkills(agent.id);
-
-      // 4. Resolved Tools
-      const resolvedToolIds = await skillsGate.getResolvedToolsForAgent(agent.id);
+      // 3 + 4. Skills resolved above; tool lookup is a sync registry read (no extra trip).
       const tools = resolvedToolIds.map(tid => toolsGate.get(tid)).filter(Boolean);
-
-      // 5. Constraints
-      let constraintsModule = null;
-      if (agent.constraintsModuleId) {
-        constraintsModule = await db.query.constraintsModules.findFirst({
-          where: eq(constraintsModules.id, agent.constraintsModuleId),
-        });
-      }
-
-      // 6. Toolkit Module
-      let toolkitModule = null;
-      if (agent.toolkitModuleId) {
-        toolkitModule = await db.query.toolkitModules.findFirst({
-          where: eq(toolkitModules.id, agent.toolkitModuleId),
-        });
-      }
 
       return {
         identity: {
@@ -142,26 +128,31 @@ export async function studioRoutes(app: FastifyInstance) {
       // 2. Update Instruction Stack if provided
       if (instructionModuleIds && Array.isArray(instructionModuleIds)) {
         await db.delete(agentInstructionStacks).where(eq(agentInstructionStacks.agentId, agentId));
-        for (let i = 0; i < instructionModuleIds.length; i++) {
-          await db.insert(agentInstructionStacks).values({
-            id: `ais_${agentId}_${i + 1}_${Date.now().toString(36)}`,
-            agentId,
-            instructionModuleId: instructionModuleIds[i],
-            priorityOrder: (i + 1) * 10,
-            isEnabled: true,
-          });
+        if (instructionModuleIds.length > 0) {
+          const now = Date.now().toString(36);
+          await db.insert(agentInstructionStacks).values(
+            instructionModuleIds.map((mid, i) => ({
+              id: `ais_${agentId}_${i + 1}_${now}`,
+              agentId,
+              instructionModuleId: mid,
+              priorityOrder: (i + 1) * 10,
+              isEnabled: true,
+            })),
+          );
         }
       }
 
       // 3. Update Skills if provided
       if (skillIds && Array.isArray(skillIds)) {
         await db.delete(agentSkills).where(eq(agentSkills.agentId, agentId));
-        for (const skillId of skillIds) {
-          await db.insert(agentSkills).values({
-            agentId,
-            skillId,
-            isEnabled: true,
-          });
+        if (skillIds.length > 0) {
+          await db.insert(agentSkills).values(
+            skillIds.map((skillId) => ({
+              agentId,
+              skillId,
+              isEnabled: true,
+            })),
+          );
         }
       }
 
@@ -185,6 +176,7 @@ export async function studioRoutes(app: FastifyInstance) {
   }>(
     "/api/studio/inspect-prompt",
     {
+      bodyLimit: 16_384,
       config: { rateLimit: { max: 10, timeWindow: 60_000 } },
     },
     async (request, reply) => {
@@ -196,13 +188,22 @@ export async function studioRoutes(app: FastifyInstance) {
         return reply.status(404).send({ statusCode: 404, error: "Not Found", message: "Agent not found" });
       }
 
-      const compiled = await contextPipeline.assemble({
-        agent: agent as any,
-        channelId,
-        workspaceId: "default",
-        userInput,
-        runtimeType,
-      });
+      let compiled;
+      try {
+        compiled = await contextPipeline.assemble({
+          agent: agent as any,
+          channelId,
+          workspaceId: "default",
+          userInput,
+          runtimeType,
+          abortSignal: AbortSignal.timeout(15_000),
+        });
+      } catch (err: any) {
+        if (err?.name === "TimeoutError" || err?.name === "AbortError") {
+          return reply.status(503).send({ statusCode: 503, error: "Service Unavailable", message: "Prompt inspection timed out" });
+        }
+        throw err;
+      }
 
       const totalChars = (compiled.systemPrompt?.length || 0) + (compiled.userInput?.length || 0);
       const tokenEstimate = Math.ceil(totalChars / 4);

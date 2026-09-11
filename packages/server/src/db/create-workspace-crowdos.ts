@@ -1,6 +1,6 @@
-import { getDb, closeDatabaseConnection } from "../Shared/config/database.js";
+import { getDb, closeDatabaseConnection } from "../shared/config/database.js";
 import { workspaces } from "./schema.js";
-import { LocalVFS } from "../vfs/vfsGate.js";
+import { LocalVFS } from "../vfs/vfs-gate.js";
 import * as path from "node:path";
 import { eq } from "drizzle-orm";
 

@@ -9,7 +9,7 @@ import { fileURLToPath } from "node:url";
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SERVER_SRC = join(HERE, "..", "src");
 const CLIENT_PKG = join(HERE, "..", "..", "..", "packages", "client");
-const EVENT_TYPES_TS = join(SERVER_SRC, "EventBroker", "eventTypes.ts");
+const EVENT_TYPES_TS = join(SERVER_SRC, "event-broker", "event-types.ts");
 
 const WHITELIST_PHASE5 = new Set([
   "swarm:created",
@@ -35,6 +35,9 @@ const NON_BROKER_SOCKET_EVENTS = new Set([
   "close",
   "SIGTERM",
   "SIGINT",
+  "completed",
+  "failed",
+  "stalled",
   "channel:join",
   "workspace:join",
   "user:message",

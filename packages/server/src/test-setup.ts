@@ -29,8 +29,6 @@ const store = {
   channels: [] as Row[],
   workspaces: [] as Row[],
   agents: [] as Row[],
-  workspaceAgents: [] as Row[],
-  durableEvents: [] as Row[],
 };
 
 // DB-2: monotonic fake sequence source backing allocateSequence's
@@ -51,8 +49,6 @@ function rowsFor(table: unknown): Row[] | null {
     case "channels": return store.channels;
     case "workspaces": return store.workspaces;
     case "agents": return store.agents;
-    case "workspace_agents": return store.workspaceAgents;
-    case "durable_events": return store.durableEvents;
     default: return null;
   }
 }
@@ -139,14 +135,6 @@ function buildFakeDb() {
       findFirst: async () => (store.workspaces.length > 0 ? { ...store.workspaces[0] } : null),
       findMany: async () => store.workspaces.map((r) => ({ ...r })),
     },
-    workspaceAgents: {
-      findFirst: async () => (store.workspaceAgents.length > 0 ? { ...store.workspaceAgents[0] } : null),
-      findMany: async () => store.workspaceAgents.map((r) => ({ ...r })),
-    },
-    durableEvents: {
-      findFirst: async () => null,
-      findMany: async () => store.durableEvents.map((r) => ({ ...r })),
-    },
   };
 
   const query: Record<string, unknown> = new Proxy(knownQueryTables, {
@@ -180,7 +168,7 @@ function buildFakeDb() {
   return db;
 }
 
-vi.mock("./Shared/config/database.js", async (importOriginal) => {
+vi.mock("./shared/config/database.js", async (importOriginal) => {
   if (process.env.__SOCKET_FAKE_DB__ !== "1") {
     return await importOriginal<Record<string, unknown>>();
   }
@@ -192,6 +180,8 @@ vi.mock("./Shared/config/database.js", async (importOriginal) => {
   ensurePgVectorExtension: async () => {},
   closeDatabaseConnection: async () => {},
   withTransaction: async <T>(fn: (tx: unknown) => Promise<T>) => fn(buildFakeDb()),
+  runWithDb: <T>(db: unknown, fn: () => T): T => fn(),
+  dbScopeKey: () => "global",
   __socketTestDb: {
     store,
     reset() {
@@ -200,14 +190,12 @@ vi.mock("./Shared/config/database.js", async (importOriginal) => {
       store.channels.length = 0;
       store.workspaces.length = 0;
       store.agents.length = 0;
-      store.workspaceAgents.length = 0;
-      store.durableEvents.length = 0;
     },
   },
   };
 });
 
-vi.mock("./Channels/channelGate.js", async (importOriginal) => {
+vi.mock("./channels/channel-gate.js", async (importOriginal) => {
   if (process.env.__SOCKET_FAKE_DB__ !== "1") {
     return await importOriginal<Record<string, unknown>>();
   }

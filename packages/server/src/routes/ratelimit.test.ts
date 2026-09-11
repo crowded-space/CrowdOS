@@ -1,7 +1,7 @@
 import Fastify from "fastify";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { buildRateLimitOptions, isRateLimitEnabled, registerRateLimit } from "./rateLimit.js";
+import { buildRateLimitOptions, isRateLimitEnabled, registerRateLimit } from "./rate-limit.js";
 
 async function buildApp(opts: { max: number; timeWindowMs: number }) {
   const app = Fastify();

@@ -1,8 +1,8 @@
 import type { FastifyInstance } from "fastify";
 
-import { authGate } from "../Shared/auth/authGate.js";
-import { getMetricsSnapshot } from "../Shared/core/perfMetrics.js";
-import { observabilityGate } from "../Observability/observabilityGate.js";
+import { authGate } from "../shared/auth/auth-gate.js";
+import { getMetricsSnapshot } from "../shared/core/perf-metrics.js";
+import { observabilityGate } from "../observability/observability-gate.js";
 
 /**
  * OBS-1: GET /metrics — perfMetrics latency snapshot (p50/p95 per stage).

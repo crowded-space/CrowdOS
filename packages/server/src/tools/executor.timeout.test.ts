@@ -4,13 +4,13 @@ import path from "node:path";
 import fs from "node:fs";
 import type { ChildProcess } from "node:child_process";
 
-vi.mock("../Skills/skillsGate.js", () => ({
+vi.mock("../skills/skills-gate.js", () => ({
   skillsGate: {
     getResolvedToolsForAgent: async () => ["sec3_timeout_probe", "sec3_fast_probe"],
   },
 }));
 
-vi.mock("../Shared/config/database.js", () => ({
+vi.mock("../shared/config/database.js", () => ({
   getDb: () => ({
     query: {
       agents: {
@@ -24,12 +24,14 @@ vi.mock("../Shared/config/database.js", () => ({
       },
     },
   }),
+  runWithDb: <T>(db: unknown, fn: () => T): T => fn(),
+  dbScopeKey: () => "global",
 }));
 
-import { ToolExecutor } from "./ToolExecutor.js";
-import { toolRegistry } from "./toolRegistry.js";
-import { execHardened } from "./safety/hardenedExec.js";
-import type { ToolExecutionContext } from "./toolTypes.js";
+import { ToolExecutor } from "./tool-executor.js";
+import { toolRegistry } from "./tool-registry.js";
+import { execHardened } from "./safety/hardened-exec.js";
+import type { ToolExecutionContext } from "./tool-types.js";
 
 describe("SEC-3 · ToolExecutor timeout kills the process tree", () => {
   let cwd: string;

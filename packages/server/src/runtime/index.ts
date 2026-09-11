@@ -1,1 +1,1 @@
-export * from "./runtimeGate.js";
+export * from "./runtime-gate.js";

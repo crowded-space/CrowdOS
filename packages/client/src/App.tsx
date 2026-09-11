@@ -4,22 +4,24 @@
  */
 
 import { lazy, Suspense, useEffect, useState, useCallback } from 'react';
-import { useCrowdOSStore } from '@/stores/crowd-os-store';
+import { useCrowdOSStore } from '@/stores/crowdOsStore';
 import { useShallow } from 'zustand/react/shallow';
 import WorkspacePortal from '@/components/portal/WorkspacePortal';
-import WorkspaceSidebar from '@/components/workspace/workspace-sidebar';
-import MainChatArea from '@/components/workspace/main-chat-area';
-import RightSidebar from '@/components/workspace/right-sidebar';
-import BottomNav from '@/components/workspace/mobile/bottom-nav';
-import MobileDrawer from '@/components/workspace/mobile/mobile-drawer';
-import { ToastProvider } from '@/components/ui/toast-provider';
-import ErrorBoundary from '@/components/ui/error-boundary';
+import WorkspaceSidebar from '@/components/workspace/WorkspaceSidebar';
+import MainChatArea from '@/components/workspace/MainChatArea';
+import RightSidebar from '@/components/workspace/RightSidebar';
+import BottomNav from '@/components/workspace/mobile/BottomNav';
+import MobileDrawer from '@/components/workspace/mobile/MobileDrawer';
+import { ToastProvider } from '@/components/ui/ToastProvider';
+import ErrorBoundary from '@/components/ui/ErrorBoundary';
+import LockScreen from '@/components/lockscreen/LockScreen';
+import { useScreenLockStore, SCREENLOCK_IDLE_MS } from '@/stores/screenLockStore';
 
 // Overlay-only surfaces: kept out of the initial bundle so first paint
 // downloads only what the workspace shell actually needs.
-const AgentProfileModal = lazy(() => import('@/components/workspace/modals/agent-profile-modal'));
-const WorkspaceSettingsModal = lazy(() => import('@/components/workspace/modals/workspace-settings-modal'));
-const OmniSearchModal = lazy(() => import('@/components/workspace/modals/omni-search-modal'));
+const AgentProfileModal = lazy(() => import('@/components/workspace/modals/AgentProfileModal'));
+const WorkspaceSettingsModal = lazy(() => import('@/components/workspace/modals/WorkspaceSettingsModal'));
+const OmniSearchModal = lazy(() => import('@/components/workspace/modals/OmniSearchModal'));
 
 function SpinnerFallback() {
   return <div className="flex items-center justify-center p-6 text-zinc-500 text-xs font-mono animate-pulse">Loading…</div>;
@@ -43,11 +45,35 @@ export default function App() {
   })));
 
   const [searchOpen, setSearchOpen] = useState(false);
+  const locked = useScreenLockStore(s => s.locked);
 
   const stableFetchWorkspaces = useCallback(() => { void fetchWorkspaces(); }, [fetchWorkspaces]);
   useEffect(() => {
     stableFetchWorkspaces();
   }, [stableFetchWorkspaces]);
+
+  // ponytail: interval + focus/mouse/key wiring; per-workspace idle tracker.
+  useEffect(() => {
+    if (!activeWorkspaceId) return;
+    const touch = () => useScreenLockStore.getState().touchActivity();
+    const check = () => {
+      const { lastActivity } = useScreenLockStore.getState();
+      const ws = useCrowdOSStore.getState().workspaces.find(w => w.id === useCrowdOSStore.getState().activeWorkspaceId);
+      if (ws?.screenLockEnabled && Date.now() - lastActivity > SCREENLOCK_IDLE_MS) {
+        useScreenLockStore.getState().lock();
+      }
+    };
+    const t = setInterval(check, 10000);
+    window.addEventListener('mousemove', touch);
+    window.addEventListener('keydown', touch);
+    window.addEventListener('focus', check);
+    return () => {
+      clearInterval(t);
+      window.removeEventListener('mousemove', touch);
+      window.removeEventListener('keydown', touch);
+      window.removeEventListener('focus', check);
+    };
+  }, [activeWorkspaceId]);
 
   // Sync browser history (back/forward) with channel selection
   useEffect(() => {
@@ -166,6 +192,7 @@ export default function App() {
           <WorkspaceSettingsModal />
           <OmniSearchModal open={searchOpen} onClose={() => setSearchOpen(false)} />
         </Suspense>
+        {locked && <LockScreen />}
 
       </div>
     </ToastProvider>

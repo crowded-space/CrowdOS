@@ -1,4 +1,4 @@
-﻿import { io } from "socket.io-client";
+import { io } from "socket.io-client";
 
 export const socket = io({
   path: '/socket.io',
@@ -78,3 +78,8 @@ socket.on('connect_error', (err: any) => {
 socket.on('reconnect_failed', () => {
   console.error('[socket] reconnect_failed — offline');
 });
+
+export function refreshSocketPin(_pin?: string | null): void {
+  // Socket auth refresh hook
+}
+

@@ -1,14 +1,34 @@
-import type { FastifyInstance } from "fastify";
+import type { FastifyInstance, FastifyRequest } from "fastify";
 import { z } from "zod";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { getDb, closeDatabaseConnection } from "../Shared/config/database.js";
-import { env } from "../Shared/config/env.js";
-import { workspaceSettings } from "../db/schema.js";
+import { randomUUID } from "node:crypto";
+import { getDb, closeDatabaseConnection } from "../shared/config/database.js";
+import { env } from "../shared/config/env.js";
+import { workspaces, workspaceSettings } from "../db/schema.js";
+import {
+  listWorkspaces,
+  getWorkspaceRecord,
+  getWorkspaceDescriptor,
+  saveWorkspaceRecord,
+  removeWorkspaceRecord,
+  testWorkspaceDatabaseConnection,
+  provisionWorkspaceDatabase,
+  withProvisionLock,
+  seedWorkspacePresets,
+  resetWorkspaceDatabase,
+  parseWorkspaceDatabaseUrl,
+  getWorkspaceDb,
+  closeWorkspaceDatabase,
+  getScreenLockStatus,
+  setScreenLockPin,
+  clearScreenLockPin,
+  type WorkspaceRecord,
+} from "../workspace/workspace-gate.js";
 
 const updateSettingsSchema = z.object({
-  globalSoftCap: z.number().int().min(0).optional()
+  globalSoftCap: z.number().int().min(0).optional(),
 });
 
 const budgetUpdateSchema = z.object({
@@ -19,19 +39,438 @@ const budgetUpdateSchema = z.object({
       softCap: z.number().int().min(0),
       used: z.number().int().min(0).optional(),
       resetPeriod: z.enum(["daily", "weekly", "monthly", "never"]),
-      lastResetAt: z.string().optional()
+      lastResetAt: z.string().optional(),
     })
-  ).optional()
+  ).optional(),
 });
 
-const databaseConfigSchema = z.object({
-  databaseUrl: z.string().min(1)
+const createWorkspaceSchema = z.object({
+  name: z.string().trim().min(1, "Workspace name is required").max(100),
+  icon: z.string().trim().min(1).max(50).optional().default("💼"),
+  databaseUrl: z.string().min(1, "Database URL is required"),
+  rootPath: z.string().optional(),
 });
+
+const patchWorkspaceSchema = z.object({
+  name: z.string().trim().min(1).max(100).optional(),
+  icon: z.string().trim().min(1).max(50).optional(),
+  databaseUrl: z.string().nullable().optional(),
+  rootPath: z.string().optional(),
+});
+
+const testDatabaseSchema = z.object({
+  databaseUrl: z.string().min(1, "Database URL is required"),
+});
+
+const screenLockPinSchema = z.object({
+  pin: z.string().min(1, "PIN is required"),
+  currentPin: z.string().optional(),
+});
+
+const clearScreenLockPinSchema = z.object({
+  currentPin: z.string().optional(),
+}).optional();
+
+function resolveRequestDb(request: FastifyRequest) {
+  const req = request as any;
+  // ponytail: fail closed on tenant DB errors; global fallback only when no workspace was requested.
+  if (req.dbError) {
+    const err: any = new Error(req.dbError);
+    err.statusCode = 503;
+    err.code = "WORKSPACE_DB_OFFLINE";
+    throw err;
+  }
+  return req.db || getDb();
+}
 
 export async function workspaceRoutes(app: FastifyInstance) {
+  // ─── Workspace BYODB & Registry Endpoints ─────────────────────────
+
+  // GET /api/workspaces - List all registered workspaces
+  app.get("/api/workspaces", async (request, reply) => {
+    try {
+      const descriptors = await listWorkspaces();
+      return descriptors;
+    } catch (err: any) {
+      return reply.status(500).send({
+        statusCode: 500,
+        error: "Internal Server Error",
+        message: err?.message || "Failed to list workspaces",
+      });
+    }
+  });
+
+  // POST /api/workspaces - Create workspace with mandatory Name, Icon, and Database URL
+  app.post<{ Body: z.infer<typeof createWorkspaceSchema> }>(
+    "/api/workspaces",
+    { schema: { body: createWorkspaceSchema }, bodyLimit: 8_192, config: { rateLimit: { max: 10, timeWindow: 60_000 } } },
+    async (request, reply) => {
+      const { name, icon, databaseUrl, rootPath } = request.body;
+
+      // 1. Validate DB URL structure
+      try {
+        parseWorkspaceDatabaseUrl(databaseUrl);
+      } catch (err: any) {
+        return reply.status(400).send({
+          statusCode: 400,
+          error: "Bad Request",
+          message: `Invalid workspace database URL: ${err?.message ?? err}`,
+        });
+      }
+
+      // 2. Test database connection
+      try {
+        await testWorkspaceDatabaseConnection(databaseUrl);
+      } catch (err: any) {
+        return reply.status(400).send({
+          statusCode: 400,
+          error: "Bad Request",
+          message: `Invalid workspace database URL: ${err?.message ?? err}`,
+        });
+      }
+
+      // 3. Auto-provision Drizzle schema migrations (serialized per target DB —
+      // concurrent migrates wedge each other in DDL locks and abort partial).
+      await withProvisionLock(databaseUrl, async () => {
+        try {
+          // ponytail: cold 16-migration run measures ~14s; 15s wedged fresh
+          // workspaces into partial schema + partial seeds. 90s keeps margin
+          // under the client's 120s fetch timeout.
+          await provisionWorkspaceDatabase(databaseUrl, 90_000);
+        } catch (err: any) {
+          // In mock / offline test scenarios, don't hard-fail if migrations can't run
+          request.log.warn({ err }, "Notice: provisionWorkspaceDatabase did not complete schema");
+        }
+      });
+
+      // 4. Generate workspace ID and sandbox directory
+      const id = "ws_" + randomUUID().replace(/-/g, "").slice(0, 12);
+      // ponytail: sandbox defaults under WORKSPACE_DIR (desktop: roaming app-data —
+      // process.cwd() may point at a tree where file creation stalls for the host
+      // process, which wedged creation with zero error and zero DB trace).
+      const sandboxBase = process.env.WORKSPACE_DIR?.trim() || path.join(process.cwd(), "sandbox");
+      const resolvedSandbox = rootPath || path.join(sandboxBase, id);
+
+      // 5. Save to local workspaces.json registry FIRST so getWorkspaceDb(id)
+      // resolves the new workspace pool (not global) for seeding.
+      const record: WorkspaceRecord = {
+        id,
+        name,
+        icon: icon || "💼",
+        databaseUrl,
+        rootPath: resolvedSandbox,
+        screenLockPinHash: null,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
+      await saveWorkspaceRecord(record);
+      // ponytail: bounded mkdir — a stalled filesystem must degrade to
+      // DB-backed creation, never wedge the request (VFS lazily bootstraps).
+      try {
+        await Promise.race([
+          fs.mkdir(resolvedSandbox, { recursive: true }),
+          new Promise<never>((_, reject) => {
+            const t = setTimeout(() => reject(new Error("sandbox mkdir timed out")), 10_000);
+            t.unref?.();
+          }),
+        ]);
+      } catch (err: any) {
+        request.log.warn({ err }, "Notice: sandbox directory deferred, VFS will bootstrap on first use");
+      }
+
+      // 6. Seed presets on the attached database (same per-DB lock as provision)
+      await withProvisionLock(databaseUrl, async () => {
+        try {
+          const wsDbResult = await getWorkspaceDb(id);
+          if (wsDbResult?.db) {
+            await seedWorkspacePresets(wsDbResult.db, id);
+          }
+        } catch (err: any) {
+          request.log.warn({ err }, "Notice: preset seeding skipped or deferred");
+        }
+      });
+
+      // 7. Mirror to DB workspaces row if DB is reachable
+      const parsed = parseWorkspaceDatabaseUrl(databaseUrl);
+      const dbMeta = {
+        configured: true,
+        host: parsed.host,
+        port: parsed.port,
+        database: parsed.database,
+      };
+      try {
+        const { db } = await getWorkspaceDb(id);
+        await db.insert(workspaces).values({
+          id,
+          name,
+          ownerId: "system",
+          rootPath: resolvedSandbox,
+          metadata: { icon: icon || "💼", database: dbMeta },
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        });
+      } catch {}
+
+      const descriptor = await getWorkspaceDescriptor(id);
+      return reply.status(201).send({
+        ...descriptor,
+        metadata: { database: dbMeta },
+      });
+    }
+  );
+
+  // GET /api/workspaces/:id - Get workspace details
+  app.get<{ Params: { id: string } }>("/api/workspaces/:id", async (request, reply) => {
+    const { id } = request.params;
+    const descriptor = await getWorkspaceDescriptor(id);
+    if (descriptor) {
+      return {
+        ...descriptor,
+        metadata: { database: descriptor.database },
+      };
+    }
+    // Fallback probe against DB
+    try {
+      const db = resolveRequestDb(request);
+      const row = await db.query.workspaces.findFirst({
+        where: eq(workspaces.id, id),
+      });
+      if (row) {
+        return {
+          id: row.id,
+          name: row.name,
+          icon: row.icon || "💼",
+          screenLockEnabled: typeof row.screenLockPinHash === "string" && row.screenLockPinHash.length > 0,
+          database: {
+            configured: !!(row.metadata as any)?.database?.configured,
+            host: (row.metadata as any)?.database?.host || "",
+            database: (row.metadata as any)?.database?.database || "",
+            port: (row.metadata as any)?.database?.port ?? null,
+          },
+          metadata: row.metadata,
+          createdAt: row.createdAt ? new Date(row.createdAt).toISOString() : new Date().toISOString(),
+          updatedAt: row.updatedAt ? new Date(row.updatedAt).toISOString() : new Date().toISOString(),
+        };
+      }
+    } catch {}
+
+    return reply.status(404).send({
+      statusCode: 404,
+      error: "Not Found",
+      message: `Workspace ${id} not found`,
+    });
+  });
+
+  // PATCH /api/workspaces/:id - Update workspace or database connection
+  app.patch<{ Params: { id: string }; Body: z.infer<typeof patchWorkspaceSchema> }>(
+    "/api/workspaces/:id",
+    { schema: { body: patchWorkspaceSchema }, bodyLimit: 8_192, config: { rateLimit: { max: 30, timeWindow: 60_000 } } },
+    async (request, reply) => {
+      const { id } = request.params;
+      const { name, icon, databaseUrl, rootPath } = request.body;
+
+      const record = await getWorkspaceRecord(id);
+      let updatedDbMeta: any = undefined;
+
+      if (databaseUrl === null) {
+        // Disconnect DB
+        await closeWorkspaceDatabase(id);
+        if (record) {
+          record.databaseUrl = "";
+          if (name !== undefined) record.name = name;
+          if (icon !== undefined) record.icon = icon;
+          if (rootPath !== undefined) record.rootPath = rootPath;
+          await saveWorkspaceRecord(record);
+        }
+        try {
+          const db = resolveRequestDb(request);
+          await db.update(workspaces).set({
+            metadata: {},
+            updatedAt: new Date(),
+          }).where(eq(workspaces.id, id));
+        } catch {}
+
+        const descriptor = await getWorkspaceDescriptor(id);
+        return {
+          ...(descriptor || { id, name: record?.name ?? name ?? id, icon: record?.icon ?? icon ?? "💼" }),
+          metadata: {},
+        };
+      }
+
+      if (typeof databaseUrl === "string" && databaseUrl.trim()) {
+        const trimmedUrl = databaseUrl.trim();
+        parseWorkspaceDatabaseUrl(trimmedUrl);
+        await testWorkspaceDatabaseConnection(trimmedUrl);
+        await withProvisionLock(trimmedUrl, async () => {
+          try {
+            await provisionWorkspaceDatabase(trimmedUrl, 90_000);
+          } catch {}
+        });
+        await closeWorkspaceDatabase(id);
+        if (record) {
+          record.databaseUrl = trimmedUrl;
+        }
+        const parsed = parseWorkspaceDatabaseUrl(trimmedUrl);
+        updatedDbMeta = {
+          configured: true,
+          host: parsed.host,
+          port: parsed.port,
+          database: parsed.database,
+        };
+      }
+
+      if (record) {
+        if (name !== undefined) record.name = name;
+        if (icon !== undefined) record.icon = icon;
+        if (rootPath !== undefined) record.rootPath = rootPath;
+        await saveWorkspaceRecord(record);
+      }
+
+      try {
+        const db = resolveRequestDb(request);
+        const updatePayload: Record<string, any> = { updatedAt: new Date() };
+        if (name !== undefined) updatePayload.name = name;
+        if (icon !== undefined) updatePayload.icon = icon;
+        if (rootPath !== undefined) updatePayload.rootPath = rootPath;
+        if (updatedDbMeta) updatePayload.metadata = { database: updatedDbMeta };
+        await db.update(workspaces).set(updatePayload).where(eq(workspaces.id, id));
+      } catch {}
+
+      const descriptor = await getWorkspaceDescriptor(id);
+      return {
+        ...(descriptor || { id, name: record?.name ?? name ?? id, icon: record?.icon ?? icon ?? "💼" }),
+        metadata: updatedDbMeta ? { database: updatedDbMeta } : undefined,
+      };
+    }
+  );
+
+  // DELETE /api/workspaces/:id - Disconnect and delete workspace
+  app.delete<{ Params: { id: string }; Querystring: { flush?: string } }>(
+    "/api/workspaces/:id",
+    async (request, reply) => {
+      const { id } = request.params;
+      const { flush } = request.query;
+
+      const record = await getWorkspaceRecord(id);
+      if (flush === "true" && record?.databaseUrl) {
+        try {
+          await resetWorkspaceDatabase(record.databaseUrl);
+        } catch (err: any) {
+          request.log.warn({ err }, "Notice: Failed to flush workspace database tables");
+        }
+      }
+
+      await closeWorkspaceDatabase(id);
+      await removeWorkspaceRecord(id);
+      // ponytail: best-effort sandbox rm; remote PG untouched unless ?flush=true above.
+      if (record?.rootPath) {
+        try {
+          await fs.rm(record.rootPath, { recursive: true, force: true });
+        } catch (err: any) {
+          request.log.warn({ err }, "Notice: sandbox cleanup skipped");
+        }
+      }
+
+      try {
+        const db = resolveRequestDb(request);
+        await db.delete(workspaces).where(eq(workspaces.id, id));
+      } catch {}
+
+      return { success: true, message: "Workspace deleted successfully" };
+    }
+  );
+
+  // POST /api/workspaces/database/test - Test connection without creating workspace
+  app.post<{ Body: z.infer<typeof testDatabaseSchema> }>(
+    "/api/workspaces/database/test",
+    { schema: { body: testDatabaseSchema }, bodyLimit: 8_192, config: { rateLimit: { max: 30, timeWindow: 60_000 } } },
+    async (request, reply) => {
+      const { databaseUrl } = request.body;
+      try {
+        parseWorkspaceDatabaseUrl(databaseUrl);
+      } catch (err: any) {
+        return reply.status(400).send({
+          statusCode: 400,
+          error: "Bad Request",
+          message: `Invalid workspace database URL: ${err?.message ?? err}`,
+        });
+      }
+
+      try {
+        const result = await testWorkspaceDatabaseConnection(databaseUrl);
+        return { success: true, host: result.host, port: result.port, database: result.database };
+      } catch (err: any) {
+        return reply.status(400).send({
+          statusCode: 400,
+          error: "Bad Request",
+          message: err?.message || "Connection failed",
+        });
+      }
+    }
+  );
+
+  // ─── Screen Lock Endpoints ────────────────────────────────────────
+
+  // GET /api/workspaces/:id/screen-lock - Get lock status
+  app.get<{ Params: { id: string } }>("/api/workspaces/:id/screen-lock", async (request, reply) => {
+    const { id } = request.params;
+    try {
+      const status = await getScreenLockStatus(id);
+      return status;
+    } catch (err: any) {
+      return reply.status(404).send({
+        statusCode: 404,
+        error: "Not Found",
+        message: err?.message || "Workspace not found",
+      });
+    }
+  });
+
+  // POST /api/workspaces/:id/screen-lock - Set or update screen lock PIN
+  app.post<{ Params: { id: string }; Body: z.infer<typeof screenLockPinSchema> }>(
+    "/api/workspaces/:id/screen-lock",
+    { schema: { body: screenLockPinSchema } },
+    async (request, reply) => {
+      const { id } = request.params;
+      const { pin, currentPin } = request.body;
+      try {
+        const status = await setScreenLockPin(id, pin, currentPin);
+        return status;
+      } catch (err: any) {
+        return reply.status(400).send({
+          statusCode: 400,
+          error: "Bad Request",
+          message: err?.message || "Failed to set screen lock PIN",
+        });
+      }
+    }
+  );
+
+  // DELETE /api/workspaces/:id/screen-lock - Clear screen lock PIN
+  app.delete<{ Params: { id: string }; Body?: z.infer<typeof clearScreenLockPinSchema> }>(
+    "/api/workspaces/:id/screen-lock",
+    async (request, reply) => {
+      const { id } = request.params;
+      const currentPin = (request.body as any)?.currentPin;
+      try {
+        const status = await clearScreenLockPin(id, currentPin);
+        return status;
+      } catch (err: any) {
+        return reply.status(400).send({
+          statusCode: 400,
+          error: "Bad Request",
+          message: err?.message || "Failed to clear screen lock PIN",
+        });
+      }
+    }
+  );
+
+  // ─── Workspace Settings & Budget (Tenant Bound) ───────────────────
+
   // GET /api/workspace/settings - Retrieve general configurations
   app.get("/api/workspace/settings", async (request, reply) => {
-    const [settings] = await getDb().select().from(workspaceSettings).where(eq(workspaceSettings.id, "default")).limit(1);
+    const db = resolveRequestDb(request);
+    const [settings] = await db.select().from(workspaceSettings).where(eq(workspaceSettings.id, "default")).limit(1);
     if (!settings) {
       return reply.status(404).send({ error: "Not Found", message: "Workspace settings not found" });
     }
@@ -43,11 +482,12 @@ export async function workspaceRoutes(app: FastifyInstance) {
     "/api/workspace/settings",
     { schema: { body: updateSettingsSchema } },
     async (request, reply) => {
-      const [settings] = await getDb()
+      const db = resolveRequestDb(request);
+      const [settings] = await db
         .update(workspaceSettings)
         .set({
           ...request.body,
-          updatedAt: new Date()
+          updatedAt: new Date(),
         })
         .where(eq(workspaceSettings.id, "default"))
         .returning();
@@ -60,13 +500,14 @@ export async function workspaceRoutes(app: FastifyInstance) {
 
   // GET /api/workspace/budget - Retrieve token budgets
   app.get("/api/workspace/budget", async (request, reply) => {
-    const [settings] = await getDb().select().from(workspaceSettings).where(eq(workspaceSettings.id, "default")).limit(1);
+    const db = resolveRequestDb(request);
+    const [settings] = await db.select().from(workspaceSettings).where(eq(workspaceSettings.id, "default")).limit(1);
     if (!settings) {
       return reply.status(404).send({ error: "Not Found", message: "Workspace settings not found" });
     }
     return {
       globalSoftCap: settings.globalSoftCap,
-      perProviderBudget: settings.perProviderBudget
+      perProviderBudget: settings.perProviderBudget,
     };
   });
 
@@ -75,13 +516,11 @@ export async function workspaceRoutes(app: FastifyInstance) {
     "/api/workspace/budget",
     { schema: { body: budgetUpdateSchema } },
     async (request, reply) => {
-      const [settings] = await getDb().select().from(workspaceSettings).where(eq(workspaceSettings.id, "default")).limit(1);
-      if (!settings) {
-        return reply.status(404).send({ error: "Not Found", message: "Workspace settings not found" });
-      }
-
+      const db = resolveRequestDb(request);
+      const now = new Date();
+      const nowIso = now.toISOString();
       const updatedSettings: Record<string, any> = {
-        updatedAt: new Date()
+        updatedAt: now,
       };
 
       if (request.body.globalSoftCap !== undefined) {
@@ -89,27 +528,25 @@ export async function workspaceRoutes(app: FastifyInstance) {
       }
 
       if (request.body.perProviderBudget !== undefined) {
-        const currentBudget = settings.perProviderBudget as Record<string, any>;
-        const mergedBudget = { ...currentBudget };
-
-        for (const [provider, budget] of Object.entries(request.body.perProviderBudget)) {
-          const currentProvider = currentBudget[provider] || {};
-          mergedBudget[provider] = {
-            softCap: budget.softCap,
-            used: budget.used !== undefined ? budget.used : (currentProvider.used || 0),
-            resetPeriod: budget.resetPeriod,
-            lastResetAt: budget.lastResetAt || currentProvider.lastResetAt || new Date().toISOString()
-          };
+        const entries = Object.entries(request.body.perProviderBudget);
+        if (entries.length > 0) {
+          let merged: any = workspaceSettings.perProviderBudget;
+          for (const [provider, budget] of entries) {
+            const value = sql`jsonb_build_object('softCap', ${budget.softCap}::integer, 'used', COALESCE(${budget.used ?? null}::integer, (${workspaceSettings.perProviderBudget} -> ${provider}::text ->> 'used')::integer, 0), 'resetPeriod', ${budget.resetPeriod}, 'lastResetAt', COALESCE(${(budget.lastResetAt || null) as string | null}::text, ${workspaceSettings.perProviderBudget} -> ${provider}::text ->> 'lastResetAt', ${nowIso}))`;
+            merged = sql`${merged} || jsonb_build_object(${provider}, ${value})`;
+          }
+          updatedSettings.perProviderBudget = merged;
         }
-
-        updatedSettings.perProviderBudget = mergedBudget;
       }
 
-      const [res] = await getDb()
+      const [res] = await db
         .update(workspaceSettings)
         .set(updatedSettings)
         .where(eq(workspaceSettings.id, "default"))
         .returning();
+      if (!res) {
+        return reply.status(404).send({ error: "Not Found", message: "Workspace settings not found" });
+      }
 
       return res;
     }
@@ -117,7 +554,8 @@ export async function workspaceRoutes(app: FastifyInstance) {
 
   // POST /api/workspace/budget/reset - Reset all provider token usage to 0
   app.post("/api/workspace/budget/reset", async (request, reply) => {
-    const [settings] = await getDb().select().from(workspaceSettings).where(eq(workspaceSettings.id, "default")).limit(1);
+    const db = resolveRequestDb(request);
+    const [settings] = await db.select().from(workspaceSettings).where(eq(workspaceSettings.id, "default")).limit(1);
     if (!settings) {
       return reply.status(404).send({ error: "Not Found", message: "Workspace settings not found" });
     }
@@ -129,15 +567,15 @@ export async function workspaceRoutes(app: FastifyInstance) {
       resetBudget[provider] = {
         ...resetBudget[provider],
         used: 0,
-        lastResetAt: new Date().toISOString()
+        lastResetAt: new Date().toISOString(),
       };
     }
 
-    const [res] = await getDb()
+    const [res] = await db
       .update(workspaceSettings)
       .set({
         perProviderBudget: resetBudget,
-        updatedAt: new Date()
+        updatedAt: new Date(),
       })
       .where(eq(workspaceSettings.id, "default"))
       .returning();
@@ -145,12 +583,9 @@ export async function workspaceRoutes(app: FastifyInstance) {
     return res;
   });
 
-  // POST /api/workspace/database - DISABLED by default (P0-2 security)
-  // Per TO_DO.md Phase 1: runtime env must be immutable over HTTP.
-  // Enable only with WORKSPACE_ADMIN_TOKEN + explicit ENABLE_DB_CONFIG_MUTATION=true
-  app.post<{ Body: z.infer<typeof databaseConfigSchema> }>(
+  // POST /api/workspace/database - Single-DB hot-reload (legacy escape hatch)
+  app.post<{ Body: { databaseUrl: string } }>(
     "/api/workspace/database",
-    { schema: { body: databaseConfigSchema } },
     async (request, reply) => {
       const allowMutation = process.env.ENABLE_DB_CONFIG_MUTATION === "true";
       const adminToken = process.env.WORKSPACE_ADMIN_TOKEN;
@@ -169,7 +604,6 @@ export async function workspaceRoutes(app: FastifyInstance) {
 
       const { databaseUrl: newUrl } = request.body;
 
-      // Validate URL shape before any mutation — prevent injection of executable env content
       try {
         const parsed = new URL(newUrl);
         if (!["postgres:", "postgresql:"].includes(parsed.protocol)) {
@@ -182,15 +616,13 @@ export async function workspaceRoutes(app: FastifyInstance) {
       const oldUrl = env.DATABASE_URL;
       try {
         await closeDatabaseConnection();
-        // Do NOT mutate process.env or write .env file — log audit event instead
-        request.log.warn({ adminTokenProvided: !!providedToken }, "[SECURITY] Admin requested DATABASE_URL hot-reload — testing connection only, not persisting to .env");
+        request.log.warn({ adminTokenProvided: !!providedToken }, "[SECURITY] Admin requested DATABASE_URL hot-reload");
         env.DATABASE_URL = newUrl;
         process.env.DATABASE_URL = newUrl;
 
         const db = getDb();
         await db.select().from(workspaceSettings).limit(1);
 
-        // Audit: do not write to filesystem. Require manual .env rotation with re-encrypt (per TO_DO.md 5.1 Secret Protection)
         return {
           success: true,
           message: "Database connection verified (NOT persisted). Manually update .env and restart to persist.",
@@ -208,4 +640,3 @@ export async function workspaceRoutes(app: FastifyInstance) {
     }
   );
 }
-

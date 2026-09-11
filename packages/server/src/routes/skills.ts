@@ -1,4 +1,5 @@
-import type { FastifyInstance } from "fastify";
+﻿import type { FastifyInstance } from "fastify";
+import { z } from "zod";
 import {
   skillsGate,
   createSkillSchema,
@@ -7,20 +8,32 @@ import {
   type CreateSkillBody,
   type UpdateSkillBody,
   type SkillParams,
-} from "../Skills/skillsGate.js";
-import { globalBroker } from "../Shared/sockets/registerSocketServer.js";
+} from "../skills/skills-gate.js";
+import { globalBroker } from "../shared/sockets/register-socket-server.js";
 
-// Skills are global (see agents.ts): catalog mutations fan out globally.
 function emitWorkspaceSync(): void {
   globalBroker?.emit("workspace:sync", {});
 }
 
+const agentSkillParamsSchema = z.object({
+  id: z.string().min(1),
+  skillId: z.string().min(1),
+});
+
 export async function skillRoutes(app: FastifyInstance) {
   // GET /api/skills
-  app.get<{ Querystring: { category?: string } }>(
+  app.get<{ Querystring: { category?: string; limit?: number } }>(
     "/api/skills",
+    {
+      schema: {
+        querystring: z.object({
+          category: z.string().optional(),
+          limit: z.coerce.number().int().min(1).max(200).default(100),
+        }),
+      },
+    },
     async (request) => {
-      return skillsGate.list({ category: request.query.category });
+      return skillsGate.list({ category: request.query.category, limit: request.query.limit });
     }
   );
 
@@ -85,16 +98,18 @@ export async function skillRoutes(app: FastifyInstance) {
   );
 
   // GET /api/agents/:id/skills
-  app.get<{ Params: { id: string } }>(
+  app.get<{ Params: SkillParams }>(
     "/api/agents/:id/skills",
+    { schema: { params: skillParamsSchema } },
     async (request) => {
       return skillsGate.getAgentSkills(request.params.id);
     }
   );
 
   // POST /api/agents/:id/skills/:skillId
-  app.post<{ Params: { id: string; skillId: string } }>(
+  app.post<{ Params: z.infer<typeof agentSkillParamsSchema> }>(
     "/api/agents/:id/skills/:skillId",
+    { schema: { params: agentSkillParamsSchema } },
     async (request, reply) => {
       await skillsGate.assignSkill(request.params.id, request.params.skillId);
       emitWorkspaceSync();
@@ -103,8 +118,9 @@ export async function skillRoutes(app: FastifyInstance) {
   );
 
   // DELETE /api/agents/:id/skills/:skillId
-  app.delete<{ Params: { id: string; skillId: string } }>(
+  app.delete<{ Params: z.infer<typeof agentSkillParamsSchema> }>(
     "/api/agents/:id/skills/:skillId",
+    { schema: { params: agentSkillParamsSchema } },
     async (request, reply) => {
       await skillsGate.removeSkill(request.params.id, request.params.skillId);
       emitWorkspaceSync();

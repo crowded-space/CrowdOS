@@ -1,23 +1,20 @@
-import React, { useState } from 'react';
-import { useCrowdOSStore } from '@/stores/crowd-os-store';
+import React, { useState, useEffect } from 'react';
+import { apiClient } from '@/src/api/client';
+import { useCrowdOSStore } from '@/stores/crowdOsStore';
 import { Terminal, Play, ChevronRight, CheckCircle2, XCircle, Loader2, Database, Plug } from 'lucide-react';
-import CrowIcon from '@/components/ui/crow-icon';
+import CrowIcon from '@/components/ui/CrowIcon';
 
 type TestStatus = 'idle' | 'testing' | 'success' | 'failed';
 
 const BACKEND_URL = '';
 
-async function testDbConnection(dbUrl: string): Promise<{ success: boolean; message: string }> {
-  const res = await fetch(`${BACKEND_URL}/api/workspace/database`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ databaseUrl: dbUrl }),
-  });
-  const data = await res.json();
-  if (!res.ok) {
-    return { success: false, message: data.message || 'Connection failed.' };
+async function testDbConnection(dbUrl: string): Promise<{ success: boolean; message: string; host?: string; database?: string }> {
+  try {
+    const res = await apiClient.testWorkspaceDatabase(dbUrl);
+    return { success: true, message: `Connected to ${res.host} (${res.database})`, host: res.host, database: res.database };
+  } catch (err: any) {
+    return { success: false, message: err.message || 'Connection failed.' };
   }
-  return { success: true, message: data.message || 'Connection verified.' };
 }
 
 const ICONS = [
@@ -32,7 +29,12 @@ const ICONS = [
 ];
 
 export default function WorkspacePortal() {
-  const { createWorkspace, workspaces, enterWorkspace } = useCrowdOSStore();
+  const { createWorkspace, workspaces, enterWorkspace, fetchWorkspaces, isCreatingWorkspace } = useCrowdOSStore();
+  const [isLaunching, setIsLaunching] = useState(false);
+
+  useEffect(() => {
+    fetchWorkspaces();
+  }, [fetchWorkspaces]);
 
   // Form state
   const [workspaceName, setWorkspaceName] = useState('');
@@ -66,7 +68,7 @@ export default function WorkspacePortal() {
 
       if (result.success) {
         pushLog('Schema integrity check passed.', 'ok');
-        pushLog('Connection verified — URL saved to .env', 'ok');
+        pushLog('Connection verified — URL kept in workspace registry', 'ok');
         setTestStatus('success');
       } else {
         pushLog(`Error: ${result.message}`, 'err');
@@ -79,8 +81,16 @@ export default function WorkspacePortal() {
   };
 
   const handleCreate = async () => {
-    if (!workspaceName.trim() || testStatus !== 'success') return;
-    await createWorkspace(workspaceName, dbUrl, selectedIcon);
+    if (!workspaceName.trim() || testStatus !== 'success' || isLaunching || isCreatingWorkspace) return;
+    setIsLaunching(true);
+    pushLog('Applying schema migrations & presets...');
+    try {
+      await createWorkspace(workspaceName, dbUrl, selectedIcon);
+      pushLog('Workspace launched successfully.', 'ok');
+    } catch (err: any) {
+      pushLog(`Error: ${err.message || String(err)}`, 'err');
+      setIsLaunching(false);
+    }
   };
 
   const canTest = dbUrl.trim().length > 0 && testStatus !== 'testing';
@@ -251,15 +261,24 @@ export default function WorkspacePortal() {
             <button
               type="button"
               onClick={handleCreate}
-              disabled={!canCreate}
+              disabled={!canCreate || isLaunching || isCreatingWorkspace}
               className={`w-full py-2.5 min-h-[44px] rounded-lg text-sm font-semibold flex items-center justify-center gap-1.5 transition select-none tracking-tight leading-none active:scale-[0.99] ${
-                canCreate
+                canCreate && !isLaunching && !isCreatingWorkspace
                   ? 'bg-indigo-500 text-white hover:bg-indigo-600 shadow-[0_4px_12px_rgba(99,102,241,0.3)]'
                   : 'bg-brand-sidebar text-zinc-600 border border-brand-border-muted/45 cursor-not-allowed'
               }`}
             >
-              <Play size={13} />
-              <span>Launch Workspace</span>
+              {isLaunching || isCreatingWorkspace ? (
+                <>
+                  <Loader2 size={13} className="animate-spin" />
+                  <span>Provisioning & Launching...</span>
+                </>
+              ) : (
+                <>
+                  <Play size={13} />
+                  <span>Launch Workspace</span>
+                </>
+              )}
             </button>
           </div>
         )}

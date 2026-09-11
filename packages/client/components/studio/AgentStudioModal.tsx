@@ -5,8 +5,8 @@ import {
   Sparkles, RefreshCw, CheckCircle2, AlertCircle, Plus, 
   Trash2, Eye, Play, Sliders, FileCode, Check
 } from 'lucide-react';
-import { useCrowdOSStore } from '@/stores/crowd-os-store';
-import { useToast } from '@/components/ui/toast-provider';
+import { useCrowdOSStore } from '@/stores/crowdOsStore';
+import { useToast } from '@/components/ui/ToastProvider';
 
 interface AgentStudioModalProps {
   agentId: string | null;

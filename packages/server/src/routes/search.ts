@@ -1,9 +1,8 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
-import { and, ilike, or, desc, eq, sql } from "drizzle-orm";
-import { getDb } from "../Shared/config/database.js";
+import { ilike, or, desc, sql } from "drizzle-orm";
+import { getDb } from "../shared/config/database.js";
 import { channels, messages } from "../db/schema.js";
-import { workspaceGate } from "../Workspace/workspaceGate.js";
 
 const searchQuerySchema = z.object({
   q: z.string().min(1),
@@ -19,12 +18,12 @@ export async function searchRoutes(app: FastifyInstance) {
       schema: {
         querystring: searchQuerySchema,
       },
+      config: { rateLimit: { max: 30, timeWindow: 60_000 } },
     },
     async (request) => {
       const { q, limit } = request.query;
       const trimmed = q.trim();
       const searchPattern = `%${trimmed}%`;
-      const workspaceId = workspaceGate.resolveHttpWorkspaceId(request as any);
       const db = getDb();
 
       // pg_trgm similarity ranking: when extension is available, order by similarity descending
@@ -33,8 +32,8 @@ export async function searchRoutes(app: FastifyInstance) {
       const trySimilarity = async () => {
         try {
           const [matchedChannels, matchedMessages] = await Promise.all([
-            db.execute(sql`SELECT id, name, category_id AS "categoryId", type, position, created_at AS "createdAt", archived_at AS "archivedAt", similarity(name, ${trimmed}) AS sim FROM channels WHERE workspace_id = ${workspaceId} AND name ILIKE ${searchPattern} ORDER BY sim DESC, position ASC LIMIT ${limit}`),
-            db.execute(sql`SELECT id, channel_id AS "channelId", author_id AS "authorId", author_name AS "authorName", author_level AS "authorLevel", author_type AS "authorType", content, is_internal_monologue AS "isInternalMonologue", sequence_number AS "sequenceNumber", timestamp, similarity(content, ${trimmed}) AS sim FROM messages WHERE workspace_id = ${workspaceId} AND (content ILIKE ${searchPattern} OR author_name ILIKE ${searchPattern}) ORDER BY sim DESC, timestamp DESC LIMIT ${limit}`),
+            db.execute(sql`SELECT id, name, category_id AS "categoryId", type, position, created_at AS "createdAt", archived_at AS "archivedAt", similarity(name, ${trimmed}) AS sim FROM channels WHERE name ILIKE ${searchPattern} ORDER BY sim DESC, position ASC LIMIT ${limit}`),
+            db.execute(sql`SELECT id, channel_id AS "channelId", author_id AS "authorId", author_name AS "authorName", author_level AS "authorLevel", author_type AS "authorType", LEFT(content, 280) AS content, is_internal_monologue AS "isInternalMonologue", sequence_number AS "sequenceNumber", timestamp, similarity(content, ${trimmed}) AS sim FROM messages WHERE content ILIKE ${searchPattern} OR author_name ILIKE ${searchPattern} ORDER BY sim DESC, timestamp DESC LIMIT ${limit}`),
           ]);
           // drizzle execute returns { rows } on postgres-js
           const chanRows = (matchedChannels as unknown as { rows?: unknown[] }).rows ?? (matchedChannels as unknown as unknown[]);
@@ -67,7 +66,7 @@ export async function searchRoutes(app: FastifyInstance) {
             archivedAt: channels.archivedAt,
           })
           .from(channels)
-          .where(and(eq(channels.workspaceId, workspaceId), ilike(channels.name, searchPattern)))
+          .where(ilike(channels.name, searchPattern))
           .limit(limit),
         db
           .select({
@@ -77,19 +76,16 @@ export async function searchRoutes(app: FastifyInstance) {
             authorName: messages.authorName,
             authorLevel: messages.authorLevel,
             authorType: messages.authorType,
-            content: messages.content,
+            content: sql<string>`LEFT(${messages.content}, 280)`,
             isInternalMonologue: messages.isInternalMonologue,
             sequenceNumber: messages.sequenceNumber,
             timestamp: messages.timestamp,
           })
           .from(messages)
           .where(
-            and(
-              eq(messages.workspaceId, workspaceId),
-              or(
-                ilike(messages.content, searchPattern),
-                ilike(messages.authorName, searchPattern)
-              )
+            or(
+              ilike(messages.content, searchPattern),
+              ilike(messages.authorName, searchPattern)
             )
           )
           .orderBy(desc(messages.timestamp))

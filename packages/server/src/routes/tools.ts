@@ -1,17 +1,19 @@
 ﻿import type { FastifyInstance } from "fastify";
-import { toolsGate } from "../tools/toolsGate.js";
-import { authGate } from "../Shared/auth/authGate.js";
+import { toolsGate } from "../tools/tools-gate.js";
+import { authGate } from "../shared/auth/auth-gate.js";
+import { maybeSend304 } from "../shared/core/http-cache.js";
 
 export async function toolRoutes(app: FastifyInstance) {
-  // GET /api/tools
-  app.get<{ Querystring: { category?: string; authLevel?: number } }>(
+  // GET /api/tools — list omits parameters blobs (use GET /:name for full schema)
+  app.get<{ Querystring: { category?: string; authLevel?: number; limit?: number } }>(
     "/api/tools",
-    async (request) => {
+    async (request, reply) => {
+      const limit = Math.min(Math.max(Number(request.query.limit ?? 100), 1), 200);
       const tools = toolsGate.list({
         category: request.query.category,
         authLevel: request.query.authLevel ? Number(request.query.authLevel) : undefined,
-      });
-      return tools.map(t => ({
+      }).slice(0, limit);
+      const body = tools.map(({ parameters: _omitted, ...t }) => ({
         id: t.id,
         name: t.name,
         displayName: t.displayName,
@@ -20,8 +22,9 @@ export async function toolRoutes(app: FastifyInstance) {
         sourceType: t.sourceType,
         dangerLevel: t.dangerLevel,
         authLevelRequired: t.authLevelRequired ?? 3,
-        parameters: t.parameters,
       }));
+      if (maybeSend304(request, reply, body)) return;
+      return body;
     }
   );
 
@@ -33,7 +36,7 @@ export async function toolRoutes(app: FastifyInstance) {
       if (!tool) {
         return reply.status(404).send({ statusCode: 404, error: "Not Found", message: `Tool '${request.params.name}' not found` });
       }
-      return {
+      const body = {
         id: tool.id,
         name: tool.name,
         displayName: tool.displayName,
@@ -44,6 +47,8 @@ export async function toolRoutes(app: FastifyInstance) {
         authLevelRequired: tool.authLevelRequired ?? 3,
         parameters: tool.parameters,
       };
+      if (maybeSend304(request, reply, body)) return;
+      return body;
     }
   );
 

@@ -1,8 +1,8 @@
-import { queueGate } from "./Queue/queueGate.js";
-import { runtimeGate } from "./runtime/runtimeGate.js";
-import { agentGate } from "./Agents/agentGate.js";
-import { memoriesGate } from "./Memories/memoriesGate.js";
-import { getDb, closeDatabaseConnection } from "./Shared/config/database.js";
+import { queueGate } from "./queue/queue-gate.js";
+import { runtimeGate } from "./runtime/runtime-gate.js";
+import { agentGate } from "./agents/agent-gate.js";
+import { memoriesGate } from "./memories/memories-gate.js";
+import { getDb, closeDatabaseConnection } from "./shared/config/database.js";
 
 async function main() {
   console.log("[worker] booting — QUEUE_MODE=", process.env.QUEUE_MODE ?? "inline");
@@ -29,8 +29,8 @@ async function main() {
 
   // APR-1: approval sweeper also runs in worker for bullmq deployments (idempotent)
   try {
-    const { startApprovalSweeper } = await import("./Approvals/approvalSweeper.js");
-    const { EventBroker } = await import("./EventBroker/eventBrokerGate.js");
+    const { startApprovalSweeper } = await import("./approvals/approval-sweeper.js");
+    const { EventBroker } = await import("./event-broker/event-broker-gate.js");
     startApprovalSweeper(new EventBroker());
   } catch {}
 
@@ -50,19 +50,36 @@ async function main() {
   }
 
   let isDraining = false;
+  const DRAIN_TIMEOUT_MS = 30000;
   async function drainAndExit(signal: string) {
-    if (isDraining) return;
-    isDraining = true;
-    console.log(`[worker] ${signal} received — draining queues…`);
-    try {
-      await queueGate.drain();
-      await closeDatabaseConnection();
-      console.log("[worker] drain complete, exiting");
-      process.exit(0);
-    } catch (err) {
-      console.error("[worker] drain error", err);
+    if (isDraining) {
+      console.error(`[worker] ${signal} received during drain — force exiting`);
       process.exit(1);
     }
+    isDraining = true;
+    console.log(`[worker] ${signal} received — draining queues…`);
+    let drainFailed = false;
+    try {
+      // Bound the graceful close so a stuck job can't hold shutdown forever; DB still closes below.
+      await Promise.race([
+        queueGate.drain(),
+        new Promise<never>((_, reject) => {
+          const t = setTimeout(() => reject(new Error(`drain timed out after ${DRAIN_TIMEOUT_MS}ms`)), DRAIN_TIMEOUT_MS);
+          t.unref?.();
+        }),
+      ]);
+    } catch (err) {
+      drainFailed = true;
+      console.error("[worker] drain error", err);
+    }
+    try {
+      await closeDatabaseConnection();
+    } catch (err) {
+      console.error("[worker] db close error", err);
+      process.exit(1);
+    }
+    console.log("[worker] drain complete, exiting");
+    process.exit(drainFailed ? 1 : 0);
   }
 
   process.on("SIGTERM", () => void drainAndExit("SIGTERM"));

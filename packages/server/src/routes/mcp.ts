@@ -1,7 +1,7 @@
 ﻿import type { FastifyInstance } from "fastify";
-import { toolsGate } from "../tools/toolsGate.js";
-import { globalBroker } from "../Shared/sockets/registerSocketServer.js";
-import { encryptRecordValues } from "../Shared/core/secretBox.js";
+import { toolsGate } from "../tools/tools-gate.js";
+import { globalBroker } from "../shared/sockets/register-socket-server.js";
+import { encryptRecordValues } from "../shared/core/secret-box.js";
 
 export async function mcpRoutes(app: FastifyInstance) {
   // GET /api/mcp/servers
@@ -26,6 +26,7 @@ export async function mcpRoutes(app: FastifyInstance) {
   // POST /api/mcp/servers/:id/connect
   app.post<{ Params: { id: string } }>(
     "/api/mcp/servers/:id/connect",
+    { config: { rateLimit: { max: 30, timeWindow: 60_000 } } },
     async (request, reply) => {
       try {
         const status = await toolsGate.connectMcp(request.params.id);
