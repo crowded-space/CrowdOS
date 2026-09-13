@@ -1,8 +1,16 @@
-# electron-builder config — Windows-first (NSIS x64), unsigned OSS v1.
-# Signing TODO: add win.certificateFile/certificatePassword (or Azure Trusted
-# Signing) + remove signAndEditExecutable:false before any public release.
-appId: com.crowdos.app
-productName: CrowdOS
+# electron-builder config — Windows-first (NSIS x64), CrowdSpace Nightly 0.1.1.
+# Version comes from packages/desktop/package.json (0.1.1); the Nightly channel
+# is expressed via productName + artifactName (version itself stays semver).
+#
+# Signing (Windows): electron-builder signs automatically when the build env
+# provides CSC_LINK + CSC_KEY_PASSWORD (pfx path + password), so no hardcoded
+# certificate path lives in this file. For Azure Trusted Signing, set
+# AZURE_TENANT_ID / AZURE_CLIENT_ID / AZURE_CLIENT_SECRET (+ endpoint below)
+# and uncomment win.azureSignOptions. Unsigned local builds still work — the
+# old `signAndEditExecutable: false` (which forcibly disabled signing) is
+# intentionally gone; do NOT re-add it.
+appId: com.crowded-space.crowdspace
+productName: CrowdSpace Nightly
 directories:
   output: release
   buildResources: build
@@ -20,12 +28,17 @@ win:
     - target: nsis
       arch:
         - x64
-  signAndEditExecutable: false
+  # azureSignOptions:
+  #   endpoint: ${env.AZURE_TRUSTED_SIGNING_ENDPOINT}
+  #   tenantId: ${env.AZURE_TENANT_ID}
+  #   clientId: ${env.AZURE_CLIENT_ID}
+  #   clientSecret: ${env.AZURE_CLIENT_SECRET}
+  #   certificateProfileName: ${env.AZURE_CERT_PROFILE_NAME}
 nsis:
   oneClick: false
   allowToChangeInstallationDirectory: true
   createDesktopShortcut: true
   createStartMenuShortcut: true
-  shortcutName: CrowdOS
-  artifactName: CrowdOS-Setup-${version}.${ext}
+  shortcutName: CrowdSpace Nightly
+  artifactName: CrowdSpace-Nightly-Setup-${version}.${ext}
 publish: null

@@ -2,7 +2,7 @@ import type { ContextPacket, RuntimeResult, IRuntime, LLMResponse, RuntimeType }
 import type { EventBroker } from '../../event-broker/event-broker-gate.js'
 import { RuntimeKernel } from '../kernel/runtime-kernel.js'
 import { ProviderAbortError, ProviderTimeoutError, isProviderError } from '../providers/provider-errors.js'
-import type { AgentAbortError } from '@crowdos/pi-core'
+import type { AgentAbortError } from '@crowdspace/pi-core'
 
 export abstract class BaseRuntime implements IRuntime {
   abstract readonly type: RuntimeType

@@ -1,4 +1,4 @@
-import type { AgentEvent, EventStream } from '@crowdos/pi-core';
+import type { AgentEvent, EventStream } from '@crowdspace/pi-core';
 import type { EventBroker } from '../../event-broker/event-broker-gate.js';
 import { createChunkCoalescer, type ChunkCoalescer } from '../../shared/core/stream-coalescer.js';
 import type { ToolCallRecord, RuntimeEvent } from '../types.js';

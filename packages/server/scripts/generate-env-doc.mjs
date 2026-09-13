@@ -197,7 +197,7 @@ import { env } from './Shared/config/env.js';
 ## Generation
 
 \`\`\`sh
-npm run gen:env-doc --workspace @community-agent/server
+npm run gen:env-doc --workspace @crowdspace/server
 # or from repo root:
 npm run gen:env-doc  # if wired there
 \`\`\`

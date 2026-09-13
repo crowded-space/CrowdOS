@@ -1,6 +1,6 @@
 // Debug launcher for the CrowdOS desktop shell (Windows-first).
 //
-// `npm run dev --workspace @community-agent/desktop` (or `npm run dev:electron`
+// `npm run dev --workspace @crowdspace/desktop` (or `npm run dev:electron`
 // from the repo root):
 //   1. compiles main/preload (tsc emit + esbuild bundle -> dist/),
 //   2. starts the vite renderer (:22077) unless it is already up,
@@ -129,8 +129,8 @@ async function pickInspectPort() {
 async function main() {
   // 1. Compile pi-core + server + main/preload so all dists exist
   // (pi-core first: server dist imports it at runtime under plain Node).
-  await runOnce(NPM, ["run", "build", "--workspace", "@crowdos/pi-core"], ROOT);
-  await runOnce(NPM, ["run", "build", "--workspace", "@community-agent/server"], ROOT);
+  await runOnce(NPM, ["run", "build", "--workspace", "@crowdspace/pi-core"], ROOT);
+  await runOnce(NPM, ["run", "build", "--workspace", "@crowdspace/server"], ROOT);
   await runOnce(NPM, ["run", "build"], DESKTOP);
 
   // 2. Server API: embedded in Electron by default on :12077.
@@ -167,7 +167,7 @@ async function main() {
   } else {
     console.log("[dev-electron] starting vite renderer (:22077)…");
     viteChild = track(
-      spawn(NPM, ["run", "dev", "--workspace", "@community-agent/client", "--", "--port", "22077"], {
+      spawn(NPM, ["run", "dev", "--workspace", "@crowdspace/client", "--", "--port", "22077"], {
         cwd: ROOT,
         stdio: "inherit",
         shell: USE_SHELL,

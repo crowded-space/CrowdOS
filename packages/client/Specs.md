@@ -537,7 +537,7 @@ Consecutive messages from the same author inside the active channel are grouped 
 ## 9. Message System
 
 ### Message Router
-**File**: `messages/message.tsx`
+**File**: `messages/MessageRouter.tsx`
 
 Routes incoming types dynamically. Features specific governance panels:
 

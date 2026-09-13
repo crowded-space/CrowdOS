@@ -48,16 +48,16 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run typecheck
-      - run: npm run lint:gates --workspace @community-agent/server
+      - run: npm run lint:gates --workspace @crowdspace/server
       - name: Migrate
         working-directory: packages/server
         run: npx drizzle-kit migrate
       - name: Seed
-        run: npm run db:seed --workspace @community-agent/server
+        run: npm run db:seed --workspace @crowdspace/server
       - name: Unit + failure-mode suite (TST-5)
-        run: npm test --workspace @community-agent/server -- src/Shared/core/failureModes.test.ts src/Observability/tracing.test.ts src/Memories/embeddings.test.ts
+        run: npm test --workspace @crowdspace/server -- src/Shared/core/failureModes.test.ts src/Observability/tracing.test.ts src/Memories/embeddings.test.ts
       - name: Full suite
-        run: npm test --workspace @community-agent/server
+        run: npm test --workspace @crowdspace/server
       - name: Load smoke (SCL-1 — 100 sends / 10 swarms)
         run: node load/harness.mjs --vus 20 --duration 10
         env:

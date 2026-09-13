@@ -10,4 +10,4 @@ RUN npm ci
 
 EXPOSE 3001
 
-CMD ["npm", "run", "dev", "--workspace", "@community-agent/server"]
+CMD ["npm", "run", "dev", "--workspace", "@crowdspace/server"]

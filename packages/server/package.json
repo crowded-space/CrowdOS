@@ -1,6 +1,7 @@
 {
-  "name": "@community-agent/server",
+  "name": "@crowdspace/server",
   "private": true,
+  "version": "0.1.1",
   "type": "module",
   "scripts": {
     "dev": "tsx watch src/index.ts",
@@ -20,8 +21,8 @@
     "gen:env-doc": "tsx scripts/generate-env-doc.mjs"
   },
   "dependencies": {
-    "@community-agent/shared": "*",
-    "@crowdos/pi-core": "*",
+    "@crowdspace/shared": "*",
+    "@crowdspace/pi-core": "*",
     "@fastify/cors": "^11.2.0",
     "@fastify/rate-limit": "^11.2.0",
     "bullmq": "^6.2.2",

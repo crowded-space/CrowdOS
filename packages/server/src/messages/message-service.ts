@@ -1,7 +1,7 @@
 import { eq, and, sql } from "drizzle-orm";
 import { getDb } from "../shared/config/database.js";
 import { messages } from "../db/schema.js";
-import { stripToolCalls, parseToolCalls } from "@community-agent/shared";
+import { stripToolCalls, parseToolCalls } from "@crowdspace/shared";
 import type { StructuredToolCall, MessagePageCursor, ChannelMessagesPage } from "./message-types.js";
 
 interface ToolExecutionCard {

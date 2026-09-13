@@ -4,7 +4,7 @@
  * Idempotent: only touches rows with embedding set and embedding_vec NULL,
  * so re-running reports embedded:0. Dimension mismatches and unparsable rows
  * are logged and skipped, never written.
- * Usage: npm run db:backfill-embeddings --workspace @community-agent/server
+ * Usage: npm run db:backfill-embeddings --workspace @crowdspace/server
  */
 import { closeDatabaseConnection, getSqlClient } from "../src/Shared/config/database.ts";
 

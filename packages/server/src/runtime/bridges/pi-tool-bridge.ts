@@ -1,4 +1,4 @@
-﻿import type { AgentTool } from '@crowdos/pi-core';
+﻿import type { AgentTool } from '@crowdspace/pi-core';
 import { toolsGate } from '../../tools/tools-gate.js';
 import type { EventBroker } from '../../event-broker/event-broker-gate.js';
 

@@ -8,7 +8,7 @@ import {
   Clock, Terminal, FileCode2, BellOff, ArrowDown, Sparkles, Square
 } from 'lucide-react';
 import { useCrowdOSStore } from '@/stores/crowdOsStore';
-import MessageRouter from './messages/Message';
+import MessageRouter from './messages/MessageRouter';
 import MentionParser from './messages/MentionParser';
 import PresenceIndicator from './ui/PresenceIndicator';
 import { Attachment, Agent, Message, ToolExecution } from '@/types/crowdOs';

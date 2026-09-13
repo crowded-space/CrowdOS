@@ -1,4 +1,4 @@
-import { AgentStatus as SharedAgentStatus } from '@community-agent/shared';
+import { AgentStatus as SharedAgentStatus } from '@crowdspace/shared';
 
 export type AgentStatus = SharedAgentStatus;
 export type AgentLevel = 0 | 1 | 2 | 3; // L0 (Omniscient), L1 (Admin), L2 (Coordinator), L3 (Worker)

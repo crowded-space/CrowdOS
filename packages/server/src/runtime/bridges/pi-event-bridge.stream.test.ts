@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { EventStream } from "@crowdos/pi-core";
+import { EventStream } from "@crowdspace/pi-core";
 import type { EventBroker } from "../../event-broker/event-broker-gate.js";
 import { PiEventBridge } from "./pi-event-bridge.js";
 

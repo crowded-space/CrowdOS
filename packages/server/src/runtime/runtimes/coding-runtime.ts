@@ -5,7 +5,7 @@ import type { ContextPacket, RuntimeResult, LLMRequest, ModelModuleConfig } from
 import type { EventBroker } from '../../event-broker/event-broker-gate.js';
 import { BaseRuntime } from './base-runtime.js';
 import { ProviderRegistry } from '../providers/provider-registry.js';
-import { AgentSession, type PiModelAdapter, type PiMessage, type PiToolSchema } from '@crowdos/pi-core';
+import { AgentSession, type PiModelAdapter, type PiMessage, type PiToolSchema } from '@crowdspace/pi-core';
 import { PiToolBridge } from '../bridges/pi-tool-bridge.js';
 import { PiEventBridge } from '../bridges/pi-event-bridge.js';
 
@@ -40,7 +40,7 @@ async function buildPatch(filePath: string, before: string, after: string): Prom
     if (diffMod?.createTwoFilesPatch) {
       return diffMod.createTwoFilesPatch(filePath, filePath, before, after, 'original', 'modified');
     }
-    const piDiff: any = await import('@crowdos/pi-core').catch(() => null);
+    const piDiff: any = await import('@crowdspace/pi-core').catch(() => null);
     if (piDiff?.createTwoFilesPatch) {
       return piDiff.createTwoFilesPatch(filePath, filePath, before, after, 'original', 'modified');
     }

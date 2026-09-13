@@ -1,7 +1,7 @@
 import React, { useState, useMemo } from 'react';
 import { Copy, Check, ChevronDown, ChevronUp, Code2 } from 'lucide-react';
 import { useCrowdOSStore } from '@/stores/crowdOsStore';
-import { stripToolCalls } from '@community-agent/shared';
+import { stripToolCalls } from '@crowdspace/shared';
 
 interface MentionParserProps {
   text: string;

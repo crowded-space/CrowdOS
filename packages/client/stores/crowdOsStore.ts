@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { socket, emitChannelJoin } from '../src/config/socket';
-import { stripToolCalls } from '@community-agent/shared';
+import { stripToolCalls } from '@crowdspace/shared';
 import {
   encodeBeforeParam,
   parseMessagesEnvelope,

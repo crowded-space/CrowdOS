@@ -5,7 +5,7 @@
 // `packages/server/src/create-app.ts`, then `start()` listens on
 // 127.0.0.1 and `stop()` owns graceful shutdown.
 //
-// Why NOT a static `import ... from "@community-agent/server/..."` here:
+// Why NOT a static `import ... from "@crowdspace/server/..."` here:
 // cross-workspace TS imports are awkward and a packaged Electron build may
 // not ship the server source at all. We therefore resolve the factory with
 // a path-agnostic dynamic import and fall back to a no-op handle so the
@@ -59,7 +59,7 @@ export async function startEmbeddedBackend(
     }
   }
   candidates.push(
-    "@community-agent/server/dist/create-app.js",
+    "@crowdspace/server/dist/create-app.js",
     "../../../server/dist/create-app.js",
     "../../server/dist/create-app.js",
   );

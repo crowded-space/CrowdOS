@@ -18,5 +18,5 @@
 2. **WIRE:** Connect existing backend routes or socket emissions directly to the Zustand state store and active React modules.
 3. **ADD_FE:** Build settings forms, sidebar rosters, and modal overlays to reveal backend capabilities to the human operator.
 4. **ADD_BE:** Provide backend tables, controllers, and socket hooks for features previously simulated locally.
-5. **CANONICALIZE:** Migrate distinct types/schemas on client and server to shared definitions under `@community-agent/shared`.
+5. **CANONICALIZE:** Migrate distinct types/schemas on client and server to shared definitions under `@crowdspace/shared`.
 6. **REFACTOR:** Standardize real-time synchronization loops using snapshots and targeted patches rather than wholesale list re-fetching.

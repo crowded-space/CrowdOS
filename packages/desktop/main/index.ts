@@ -399,7 +399,7 @@ async function boot(): Promise<void> {
     if (!target) {
       dialog.showErrorBox(
         "CrowdOS renderer missing",
-        "client/dist/index.html was not found. Run: npm run build --workspace @community-agent/client",
+        "client/dist/index.html was not found. Run: npm run build --workspace @crowdspace/client",
       );
       (app as unknown as { quit: () => void }).quit();
       return;

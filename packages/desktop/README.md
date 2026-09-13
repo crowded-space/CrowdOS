@@ -1,4 +1,4 @@
-# @community-agent/desktop
+# @crowdspace/desktop
 
 Electron desktop shell for CrowdOS (Windows-first, zero-auth, loopback-only).
 
@@ -34,7 +34,7 @@ per docker-compose, or set `DATABASE_URL`), `npm install` (pulls the Electron
 binary + electron-builder), client+server built (`npm run build`).
 
 - Dev/debug shell (one command): `npm run dev:electron` from the repo root
-  (or `npm run dev --workspace @community-agent/desktop`). It compiles
+  (or `npm run dev --workspace @crowdspace/desktop`). It compiles
    main/preload, reuses (or starts) the vite renderer on :22077, then launches
   Electron with `CROWDOS_DEV=1` (loads vite, backend still embedded on
   127.0.0.1) plus `--inspect=9229` for the main process.
@@ -44,19 +44,20 @@ binary + electron-builder), client+server built (`npm run build`).
   - Backend: Fastify/socket logs stream in the launch console; file log at
     `<userData>/logs/desktop.log` via `crowdos:log:write`.
   - Legacy split (build + run by hand): `npm run build:tsc --workspace
-    @community-agent/desktop`, start vite (`npm run dev`), then in PowerShell
+    @crowdspace/desktop`, start vite (`npm run dev`), then in PowerShell
     `$env:CROWDOS_DEV=1; npx --prefix packages/desktop electron .`
-- Packaged: `npm run build --workspace @community-agent/client`,
-  `npm run build --workspace @community-agent/server`,
-  `npm run dist:desktop` → `packages/desktop/release/CrowdOS-Setup-*.exe`.
+- Packaged: `npm run build --workspace @crowdspace/client`,
+  `npm run build --workspace @crowdspace/server`,
+  `npm run dist:desktop` → `packages/desktop/release/CrowdSpace-Nightly-Setup-*.exe`.
 - First run: main forks server `db/bootstrap.js` (drizzle migrations + seed,
   120 s timeout). No Postgres, no problem: boot logs a warning and continues
   offline (DB-backed routes degrade until Postgres is up) — start Postgres
   and relaunch, or `npm run db:push`. Rollback: keep the previous installer
   + `pg_dump` before upgrading; restore = reinstall + `psql < backup.sql`.
-- Signing: v1 ships **unsigned** (`signAndEditExecutable: false`, SmartScreen
-  will warn). Before public release add `win.certificateFile` (+ Azure Trusted
-  Signing) and re-verify the four prototype drills below.
+- Signing: unsigned local builds warn on SmartScreen. Signed Nightly builds
+  come from CI with `CSC_LINK` + `CSC_KEY_PASSWORD` set (or Azure Trusted
+  Signing via `win.azureSignOptions` in `electron-builder.yml`); verify the
+  four prototype drills below against a signed installer before public release.
 - Kill-mid-run drill: start a run, SIGKILL the app mid-tool, relaunch →
   orphan sweeper flips `RUNNING` → `ORPHANED` → `RESUMABLE` (60 s heartbeat),
   resume via `POST /api/runs/:id/resume`, gap-fill via

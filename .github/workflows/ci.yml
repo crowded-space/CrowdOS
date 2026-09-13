@@ -59,14 +59,14 @@ jobs:
         run: npm run lint
 
       - name: Check domain gates
-        run: npm run lint:gates --workspace @community-agent/server
+        run: npm run lint:gates --workspace @crowdspace/server
 
       - name: Migrate database
         working-directory: packages/server
         run: npx drizzle-kit migrate
 
       - name: Seed database
-        run: npm run db:seed --workspace @community-agent/server
+        run: npm run db:seed --workspace @crowdspace/server
 
       - name: Unit tests
         run: npm test
