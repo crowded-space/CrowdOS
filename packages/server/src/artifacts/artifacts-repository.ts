@@ -27,16 +27,21 @@ export async function createArtifact(input: CreateArtifactInput): Promise<Artifa
   // SCL-3/ART-1: emit artifact events for observability & client sync (CTX-1 phantom handler fix)
   // Explicit literal emits so check-events regex can detect them.
   try {
-    const { EventBroker } = await import("../event-broker/event-broker-gate.js");
-    const broker = new EventBroker();
-    const payload = { runId: input.runId ?? null, artifactId: id, artifactType: input.type, workspaceId: input.workspaceId } as never;
-    const opts = { channelId: (input.metadata as Record<string, unknown> | undefined)?.channelId as string | undefined } as never;
-    if (input.type === "diff") {
-      broker.emit("diff.created", payload, opts);
+    // Shared instance: a fresh EventBroker would reach no subscriber.
+    const { getSharedBroker } = await import("../event-broker/event-broker-gate.js");
+    const broker = getSharedBroker();
+    if (!broker) {
+      console.warn("[artifacts] dropped artifact.created/updated: no shared broker registered");
     } else {
-      broker.emit("artifact.created", payload, opts);
+      const payload = { runId: input.runId ?? null, artifactId: id, artifactType: input.type, workspaceId: input.workspaceId } as never;
+      const opts = { channelId: (input.metadata as Record<string, unknown> | undefined)?.channelId as string | undefined } as never;
+      if (input.type === "diff") {
+        broker.emit("diff.created", payload, opts);
+      } else {
+        broker.emit("artifact.created", payload, opts);
+      }
+      broker.emit("artifact.updated", payload, opts);
     }
-    broker.emit("artifact.updated", payload, opts);
   } catch {}
   return created;
 }

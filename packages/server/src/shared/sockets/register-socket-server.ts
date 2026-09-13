@@ -5,6 +5,7 @@ import os from "node:os";
 import { env } from "../config/env.js";
 
 import { EventBroker } from "../../event-broker/event-broker-gate.js";
+import { setSharedBroker } from "../../event-broker/event-broker-gate.js";
 import { MentionParser } from "../core/mention-parser.js";
 import { AgentRegistry } from "../../agents/agent-gate.js";
 import { channelGate } from "../../channels/channel-gate.js";
@@ -272,6 +273,7 @@ export interface SocketServerDeps {
 
 export function registerSocketServer(httpServer: HttpServer, broker: EventBroker, deps: SocketServerDeps = {}) {
   globalBroker = broker;
+  setSharedBroker(broker);
 
   const executeRun: RunExecutor = deps.executeRun ?? ((req) => runtimeGate.execute(req));
 
@@ -903,8 +905,9 @@ export function registerSocketServer(httpServer: HttpServer, broker: EventBroker
         } else {
           const { runtimeGate } = await import("../../runtime/runtime-gate.js");
           const { agentGate } = await import("../../agents/agent-gate.js");
+          // Shared instance: runtime emits fan out + persist via the bridge above.
           const { EventBroker } = await import("../../event-broker/event-broker-gate.js");
-          const broker = new EventBroker();
+          const broker = globalBroker ?? new EventBroker();
           let agent: unknown = null;
           try {
             if (typeof (agentGate as unknown as Record<string, unknown>).getById === "function") {
@@ -951,9 +954,12 @@ export function registerSocketServer(httpServer: HttpServer, broker: EventBroker
       try {
         const { runsGate } = await import("../../runs/runs-gate.js");
         const entries = await runsGate.listCompensations(runId);
-        const { EventBroker } = await import("../../event-broker/event-broker-gate.js");
-        const broker = new EventBroker();
-        broker.emit("run.compensations" as never, { runId, entries: entries.map(e => ({ id: e.id, seq: e.seq, toolName: e.toolName, targetPath: e.targetPath, inverseOp: e.inverseOp as unknown as { op: string; path: string }, createdAt: e.createdAt.toISOString() })) } as never, { channelId: (await runsGate.getById(runId))?.channelId } as never);
+        // Shared instance (in scope): a fresh broker would reach no subscriber.
+        if (globalBroker) {
+          globalBroker.emit("run.compensations" as never, { runId, entries: entries.map(e => ({ id: e.id, seq: e.seq, toolName: e.toolName, targetPath: e.targetPath, inverseOp: e.inverseOp as unknown as { op: string; path: string }, createdAt: e.createdAt.toISOString() })) } as never, { channelId: (await runsGate.getById(runId))?.channelId } as never);
+        } else {
+          console.warn("[Socket] dropped run.compensations: no shared broker registered");
+        }
         socket.emit("run:compensations" as any, { runId, entries });
       } catch (err) {
         console.error("[Socket] run:compensations:list failed:", err);
@@ -982,10 +988,13 @@ export function registerSocketServer(httpServer: HttpServer, broker: EventBroker
         }
         const entries = await runsGate.listCompensations(runId);
         socket.emit("run:compensations" as any, { runId, entries });
-        const { EventBroker } = await import("../../event-broker/event-broker-gate.js");
-        const broker = new EventBroker();
-        const run = await runsGate.getById(runId);
-        broker.emit("run.compensations" as never, { runId, entries: entries.map(e => ({ id: e.id, seq: e.seq, toolName: e.toolName, targetPath: e.targetPath, inverseOp: e.inverseOp as unknown as { op: string; path: string }, createdAt: e.createdAt.toISOString() })) } as never, { channelId: run?.channelId } as never);
+        // Shared instance (in scope): a fresh broker would reach no subscriber.
+        if (globalBroker) {
+          const run = await runsGate.getById(runId);
+          globalBroker.emit("run.compensations" as never, { runId, entries: entries.map(e => ({ id: e.id, seq: e.seq, toolName: e.toolName, targetPath: e.targetPath, inverseOp: e.inverseOp as unknown as { op: string; path: string }, createdAt: e.createdAt.toISOString() })) } as never, { channelId: run?.channelId } as never);
+        } else {
+          console.warn("[Socket] dropped run.compensations: no shared broker registered");
+        }
       } catch (err) {
         console.error("[Socket] run:compensation:undo failed:", err);
         socket.emit("error" as any, { code: "undo_failed", message: err instanceof Error ? err.message : String(err) });

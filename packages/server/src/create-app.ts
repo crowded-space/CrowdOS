@@ -5,6 +5,7 @@ import * as path from "node:path";
 
 import { env } from "./shared/config/env.js";
 import { EventBroker } from "./event-broker/event-broker-gate.js";
+import { setSharedBroker } from "./event-broker/event-broker-gate.js";
 import { setupErrorHandler } from "./shared/core/errors.js";
 import { validatorCompiler } from "./shared/core/validation.js";
 import { registerRoutes } from "./routes/index.js";
@@ -285,6 +286,7 @@ export async function buildServer(opts?: BuildServerOptions): Promise<BuiltServe
   await app.register(registerRoutes);
 
   const eventBroker = new EventBroker();
+  setSharedBroker(eventBroker);
   initRuntime();
   // QUE-2: when QUEUE_MODE=bullmq, local maintenance timers are replaced by
   // BullMQ repeatable jobs (runs/maintenance). API skips timers and never

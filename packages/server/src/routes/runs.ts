@@ -35,8 +35,11 @@ export async function runsRoutes(app: FastifyInstance) {
       try {
         const { runtimeGate } = await import("../runtime/runtime-gate.js");
         const { agentGate } = await import("../agents/agent-gate.js");
+        // Shared instance so resume execution emits fan out + persist;
+        // fresh fallback only when unregistered (local-only, documented).
+        const { getSharedBroker } = await import("../event-broker/event-broker-gate.js");
         const { EventBroker } = await import("../event-broker/event-broker-gate.js");
-        const broker = new EventBroker();
+        const broker = getSharedBroker() ?? new EventBroker();
         let agent: unknown = null;
         try {
           if (typeof (agentGate as unknown as Record<string, unknown>).getById === "function") {
@@ -82,9 +85,13 @@ export async function runsRoutes(app: FastifyInstance) {
     if (!result.ok) return reply.status(400).send({ error: result.error });
     const entries = await runsGate.listCompensations(id);
     try {
-      const { EventBroker } = await import("../event-broker/event-broker-gate.js");
-      const broker = new EventBroker();
-      broker.emit("run.compensations" as never, { runId: id, entries } as never, { channelId: run.channelId } as never);
+      const { getSharedBroker } = await import("../event-broker/event-broker-gate.js");
+      const broker = getSharedBroker();
+      if (broker) {
+        broker.emit("run.compensations" as never, { runId: id, entries } as never, { channelId: run.channelId } as never);
+      } else {
+        console.warn("[runs] dropped run.compensations: no shared broker registered");
+      }
     } catch {}
     return reply.send({ runId: id, entries });
   });

@@ -1,0 +1,3 @@
+# SPEC 02 local-first data dir. Machine-local files (config.json, budget.json,
+# secrets.json, config.meta.json, *.bak) are gitignored — this placeholder
+# keeps the directory in version control. Boot/seed create real files (0600).

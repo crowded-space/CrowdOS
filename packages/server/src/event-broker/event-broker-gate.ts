@@ -2,6 +2,7 @@ import { EventBroker } from "./event-broker.js";
 import { isValidMode } from "./event-types.js";
 
 export { EventBroker, isValidMode };
+export { getSharedBroker, setSharedBroker, resetSharedBrokerForTests } from "./shared-broker.js";
 export type { Mode } from "./event-types.js";
 
 export type {

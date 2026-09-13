@@ -1,0 +1,16 @@
+{
+  "id": "default",
+  "name": "Default Workspace",
+  "createdAt": "2026-09-05T08:45:32.078Z",
+  "permissions": {
+    "network": false,
+    "shell": false,
+    "maxAgents": 8
+  },
+  "constraints": {
+    "networkAccess": false,
+    "shellExecution": true,
+    "memoryLimitMb": 512,
+    "cpuLimit": 1
+  }
+}

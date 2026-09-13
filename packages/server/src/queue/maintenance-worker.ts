@@ -8,8 +8,9 @@ let maintenanceConn: InstanceType<typeof IORedis> | null = null;
 
 async function handleLibrarianDelta(): Promise<void> {
   try {
-    const [{ EventBroker }] = await Promise.all([import("../event-broker/event-broker-gate.js")]);
-    const broker = new EventBroker();
+    const [{ EventBroker, getSharedBroker }] = await Promise.all([import("../event-broker/event-broker-gate.js")]);
+    // Worker-local by design (no socket server in this process); shared when set at boot.
+    const broker = (getSharedBroker as () => InstanceType<typeof EventBroker> | null)?.() ?? new EventBroker();
     const mod = await import("../shared/core/index-builder.js");
     const builder = (mod as unknown as { IndexBuilder: { reindexStaleChannels: (b: unknown) => Promise<void> } }).IndexBuilder;
     await builder.reindexStaleChannels(broker);
@@ -38,8 +39,9 @@ async function handleHeartbeatTouch(): Promise<void> {
 
 async function handleOrphanSweep(): Promise<void> {
   try {
-    const [{ EventBroker }] = await Promise.all([import("../event-broker/event-broker-gate.js")]);
-    const broker = new EventBroker();
+    const [{ EventBroker, getSharedBroker }] = await Promise.all([import("../event-broker/event-broker-gate.js")]);
+    // Worker-local by design (no socket server in this process); shared when set at boot.
+    const broker = (getSharedBroker as () => InstanceType<typeof EventBroker> | null)?.() ?? new EventBroker();
     const mod = await import("../shared/core/agent-heartbeat.js");
     const fn = (mod as Record<string, unknown>).sweepOrphans as
       | ((b: unknown) => Promise<void>)
@@ -53,8 +55,9 @@ async function handleOrphanSweep(): Promise<void> {
 
 async function handleOrphanResume(): Promise<void> {
   try {
-    const [{ EventBroker }] = await Promise.all([import("../event-broker/event-broker-gate.js")]);
-    const broker = new EventBroker();
+    const [{ EventBroker, getSharedBroker }] = await Promise.all([import("../event-broker/event-broker-gate.js")]);
+    // Worker-local by design (no socket server in this process); shared when set at boot.
+    const broker = (getSharedBroker as () => InstanceType<typeof EventBroker> | null)?.() ?? new EventBroker();
     const { runsGate } = await import("../runs/runs-gate.js");
     const fn = (runsGate as unknown as { sweepOrphanedRuns: (b: unknown) => Promise<number> }).sweepOrphanedRuns;
     if (typeof fn === "function") await fn(broker);
@@ -112,8 +115,9 @@ async function handleRetention(): Promise<void> {
 async function handleApprovalExpire(): Promise<void> {
   try {
     const { sweepApprovalsOnce } = await import("../approvals/approval-sweeper.js");
-    const { EventBroker } = await import("../event-broker/event-broker-gate.js");
-    const broker = new EventBroker();
+    const { EventBroker, getSharedBroker } = await import("../event-broker/event-broker-gate.js");
+    // Worker-local by design (no socket server in this process); shared when set at boot.
+    const broker = (getSharedBroker as () => InstanceType<typeof EventBroker> | null)?.() ?? new EventBroker();
     await sweepApprovalsOnce(broker);
   } catch (err) {
     console.error("[maintenance:approval-expire] failed", (err as Error)?.message || err);
@@ -123,8 +127,10 @@ async function handleApprovalExpire(): Promise<void> {
 
 async function handleSnapshotFull(): Promise<void> {
   try {
-    const [{ EventBroker }] = await Promise.all([import("../event-broker/event-broker-gate.js")]);
-    const broker = new EventBroker();
+    const [{ EventBroker, getSharedBroker }] = await Promise.all([import("../event-broker/event-broker-gate.js")]);
+    // Worker-local by design: runtime:snapshot here reaches no socket;
+    // shared when set at boot (same-process API), fresh otherwise.
+    const broker = (getSharedBroker as () => InstanceType<typeof EventBroker> | null)?.() ?? new EventBroker();
     const dbMod = await import("../shared/config/database.js");
     const getDb = (dbMod as Record<string, unknown>).getDb as () => unknown;
     let db: unknown = null;

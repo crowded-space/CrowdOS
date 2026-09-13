@@ -56,4 +56,7 @@ _archive/
 # Tests: generated artifacts only
 e2e-screenshots/
 
+# Documentation workspace (not codebase, never commit)
+re-docs/
+
 

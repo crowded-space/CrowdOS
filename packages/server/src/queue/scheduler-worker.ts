@@ -30,11 +30,12 @@ async function handleScheduledTrigger(job: Job<ScheduledJobData>): Promise<void>
   // We reuse the same transactional sequence pattern as the socket layer (DB-2)
   // but fall back to an ephemeral emit when DB is unavailable (test fakes,
   // offline dev). Either path emits via EventBroker so sockets/replays see it.
-  // Prefer the live socket broker if available (dynamic import avoids static cycle with registerSocketServer)
+  // Prefer the live socket broker if available (shared holder; no static cycle
+  // with registerSocketServer). Fresh fallback is local-only (documented).
   let broker: InstanceType<typeof EventBroker>;
   try {
-    const socketMod = (await import("../shared/sockets/register-socket-server.js")) as unknown as { globalBroker?: InstanceType<typeof EventBroker> | null };
-    broker = (socketMod.globalBroker as InstanceType<typeof EventBroker>) ?? new EventBroker();
+    const { getSharedBroker } = (await import("../event-broker/event-broker-gate.js")) as unknown as { getSharedBroker?: () => InstanceType<typeof EventBroker> | null };
+    broker = getSharedBroker?.() ?? new EventBroker();
   } catch {
     broker = new EventBroker();
   }

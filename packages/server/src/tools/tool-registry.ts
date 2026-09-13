@@ -85,9 +85,10 @@ async function honestSchedulerEmit(
   const content = message || `⏰ Scheduled task: ${task}`;
   let brokerInst: InstanceType<typeof import("../event-broker/event-broker-gate.js").EventBroker> | null = null;
   try {
-    const { EventBroker } = await import("../event-broker/event-broker-gate.js");
-    // Prefer the live socket broker so room fan-out works; fall back to isolated
-    brokerInst = (globalBroker as unknown as InstanceType<typeof EventBroker>) ?? new EventBroker();
+    const { EventBroker, getSharedBroker } = await import("../event-broker/event-broker-gate.js");
+    // Prefer the live socket broker so room fan-out works; shared holder first,
+    // then the legacy global, then an isolated local instance (documented).
+    brokerInst = (getSharedBroker() as unknown as typeof brokerInst) ?? (globalBroker as unknown as typeof brokerInst) ?? new EventBroker();
   } catch {
     const { EventBroker } = await import("../event-broker/event-broker-gate.js");
     brokerInst = new EventBroker() as unknown as InstanceType<typeof EventBroker>;

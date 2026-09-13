@@ -49,15 +49,18 @@ export async function approvalsRoutes(app: FastifyInstance) {
     // Emit approval.decided for observers + transition run if waiting
     let channelIdForRun: string | undefined;
     try {
-      const { EventBroker } = await import("../event-broker/event-broker-gate.js");
-      const broker = new EventBroker();
-      // Try globalBroker for room fan-out, fallback to fresh broker
+      // Shared instance for room fan-out + durability; warn-and-skip when
+      // unregistered instead of emitting on a fresh broker that reaches nobody.
+      const { getSharedBroker } = await import("../event-broker/event-broker-gate.js");
       let emitBroker: { emit: (t: string, p: unknown, o?: unknown) => void } | null = null;
       try {
         const { globalBroker } = await import("../shared/sockets/register-socket-server.js");
         emitBroker = (globalBroker as unknown as { emit: (t: string, p: unknown, o?: unknown) => void }) ?? null;
       } catch {}
-      const targetBroker = emitBroker ?? broker;
+      const targetBroker = emitBroker ?? (getSharedBroker() as unknown as { emit: (t: string, p: unknown, o?: unknown) => void } | null);
+      if (!targetBroker) {
+        console.warn("[approvals] dropped approval.decided: no shared broker registered");
+      } else {
       const payload = {
         runId: updated.runId,
         approvalId: updated.id,
@@ -70,6 +73,7 @@ export async function approvalsRoutes(app: FastifyInstance) {
       const run = await runsGate.getById(updated.runId);
       channelIdForRun = run?.channelId;
       (targetBroker as unknown as { emit: (t: string, p: unknown, o?: unknown) => void }).emit("approval.decided" as never, payload as never, channelIdForRun ? { channelId: channelIdForRun } as never : undefined as never);
+      }
     } catch {}
 
     // APR-1 policy: run continues after decision (does not cancel). If the run

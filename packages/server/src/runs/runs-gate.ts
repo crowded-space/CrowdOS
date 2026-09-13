@@ -30,19 +30,23 @@ async function resumeRun(runId: string): Promise<{ run: RunRow; checkpoint: RunC
   const result = await applyTransition(runId, "queued", { reason: "resume_requested" });
   if (!result || !result.changed) return null;
   try {
-    const { EventBroker } = await import("../event-broker/event-broker-gate.js");
-    const broker = new EventBroker();
-    broker.emit("run.status_changed", {
-      runId: result.row.id,
-      agentId: result.row.agentId,
-      channelId: result.row.channelId,
-      workspaceId: result.row.workspaceId,
-      runtimeType: result.row.runtimeType,
-      status: result.to,
-      from: result.from,
-      reason: result.reason,
-      errorCode: result.row.errorCode,
-    } as never, { channelId: result.row.channelId } as never);
+    const { getSharedBroker } = await import("../event-broker/event-broker-gate.js");
+    const broker = getSharedBroker();
+    if (broker) {
+      broker.emit("run.status_changed", {
+        runId: result.row.id,
+        agentId: result.row.agentId,
+        channelId: result.row.channelId,
+        workspaceId: result.row.workspaceId,
+        runtimeType: result.row.runtimeType,
+        status: result.to,
+        from: result.from,
+        reason: result.reason,
+        errorCode: result.row.errorCode,
+      } as never, { channelId: result.row.channelId } as never);
+    } else {
+      console.warn("[Runs] dropped run.status_changed: no shared broker registered");
+    }
   } catch {}
   const checkpoint = (result.row.checkpoint as RunCheckpoint | null) ?? (current.checkpoint as RunCheckpoint | null) ?? null;
   return { run: result.row, checkpoint };
@@ -80,10 +84,14 @@ async function undoCompensation(runId: string, compId: string): Promise<{ ok: bo
     }
     await deleteCompensation(compId);
     try {
-      const { EventBroker } = await import("../event-broker/event-broker-gate.js");
-      const broker = new EventBroker();
-      const entries = await listCompensations(runId);
-      broker.emit("run.compensations" as never, { runId, entries } as never, { channelId: (await getRunById(runId))?.channelId } as never);
+      const { getSharedBroker } = await import("../event-broker/event-broker-gate.js");
+      const broker = getSharedBroker();
+      if (broker) {
+        const entries = await listCompensations(runId);
+        broker.emit("run.compensations" as never, { runId, entries } as never, { channelId: (await getRunById(runId))?.channelId } as never);
+      } else {
+        console.warn("[Runs] dropped run.compensations: no shared broker registered");
+      }
     } catch {}
     return { ok: true };
   } catch (err) {

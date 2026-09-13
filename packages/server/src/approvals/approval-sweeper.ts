@@ -1,6 +1,7 @@
 import { approvalGate } from "./approval-gate.js";
 import { runsGate } from "../runs/runs-gate.js";
 import { EventBroker } from "../event-broker/event-broker-gate.js";
+import { getSharedBroker } from "../event-broker/event-broker-gate.js";
 import { runWithDb } from "../shared/config/database.js";
 import { forEachWorkspaceDb } from "../workspace/workspace-gate.js";
 
@@ -20,7 +21,10 @@ async function sweepOneDb(broker?: unknown, workspaceId?: string | null): Promis
   const expiredRows = await approvalGate.expirePendingApprovals();
   if (expiredRows.length === 0) return 0;
   // For each expired, resume its run as denied (default-deny policy, run continues)
-  const eb = (broker as EventBroker | undefined) ?? new EventBroker();
+  // Prefer the explicit broker, then the shared instance. A fresh EventBroker
+  // would reach no subscriber (durability + fan-out live on the shared one);
+  // with neither registered the emits below warn-and-skip per row.
+  const eb = (broker as EventBroker | undefined) ?? getSharedBroker() ?? null;
   // Try globalBroker for room fan-out if available
   let emitBroker: EventBroker | null = null;
   try {
@@ -28,6 +32,9 @@ async function sweepOneDb(broker?: unknown, workspaceId?: string | null): Promis
     emitBroker = (globalBroker as unknown as EventBroker) ?? null;
   } catch {}
   const target = emitBroker ?? eb;
+  if (!target) {
+    console.warn("[ApprovalSweeper] dropped approval.decided emits: no shared broker registered");
+  }
   for (const row of expiredRows) {
     try {
       const run = await runsGate.getById(row.runId);

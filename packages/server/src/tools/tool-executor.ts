@@ -240,10 +240,16 @@ export class ToolExecutor {
                   (emitVia as { emit: (t: string, p: unknown, o?: unknown) => void }).emit("approval.requested" as never, payloadRequested as never, { channelId: channelIdForEvent } as never);
                   (emitVia as { emit: (t: string, p: unknown, o?: unknown) => void }).emit("approval.decided" as never, payloadDecided as never, { channelId: channelIdForEvent } as never);
                 } else {
-                  const { EventBroker } = await import("../event-broker/event-broker-gate.js");
-                  const eb = new EventBroker();
-                  eb.emit("approval.requested" as never, payloadRequested as never, { channelId: channelIdForEvent } as never);
-                  eb.emit("approval.decided" as never, payloadDecided as never, { channelId: channelIdForEvent } as never);
+                  // Shared instance: a fresh EventBroker would reach no subscriber
+                  // (durability + fan-out attach only to the socket server's one).
+                  const { getSharedBroker } = await import("../event-broker/event-broker-gate.js");
+                  const shared = getSharedBroker() as unknown as { emit: (t: string, p: unknown, o?: unknown) => void } | null;
+                  if (shared && typeof shared.emit === "function") {
+                    shared.emit("approval.requested" as never, payloadRequested as never, { channelId: channelIdForEvent } as never);
+                    shared.emit("approval.decided" as never, payloadDecided as never, { channelId: channelIdForEvent } as never);
+                  } else {
+                    console.warn("[ToolExecutor] dropped approval.requested/decided: no shared broker registered");
+                  }
                 }
               } catch {}
               // Fall through to handler execution — approval granted via reusable grant
@@ -289,9 +295,14 @@ export class ToolExecutor {
                 if (emitVia && typeof emitVia.emit === "function") {
                   emitVia.emit("approval.requested" as never, payload as never, { channelId: channelIdForEvent } as never);
                 } else {
-                  const { EventBroker } = await import("../event-broker/event-broker-gate.js");
-                  const eb = new EventBroker();
-                  eb.emit("approval.requested" as never, payload as never, { channelId: channelIdForEvent } as never);
+                  // Shared instance: a fresh EventBroker would reach no subscriber.
+                  const { getSharedBroker } = await import("../event-broker/event-broker-gate.js");
+                  const shared = getSharedBroker() as unknown as { emit: (t: string, p: unknown, o?: unknown) => void } | null;
+                  if (shared && typeof shared.emit === "function") {
+                    shared.emit("approval.requested" as never, payload as never, { channelId: channelIdForEvent } as never);
+                  } else {
+                    console.warn("[ToolExecutor] dropped approval.requested: no shared broker registered");
+                  }
                 }
               }
             } catch (e) {
@@ -343,9 +354,11 @@ export class ToolExecutor {
                     const brokerEvt = (partialCtx as unknown as { broker?: { on?: (t: string, cb: (p: any) => void) => string | void; off?: (t: string, id: string | (() => void)) => void } })?.broker as any;
                     const globalMod = brokerEvt?.on ? null : await import("../shared/sockets/register-socket-server.js").then(m => (m as unknown as { globalBroker?: any }).globalBroker).catch(() => null);
                     const evtBroker = brokerEvt?.on ? brokerEvt : (globalMod as any);
-                    // Try EventBroker instance fallback if no global
-                    const ebFallback = !evtBroker?.on ? (await import("../event-broker/event-broker-gate.js").then(m => (m as any).EventBroker ? new (m as any).EventBroker() : null).catch(() => null)) : null;
-                    const targetBroker = evtBroker?.on ? evtBroker : ebFallback;
+                    // Shared instance for the fast-path subscription: subscribing
+                    // on a fresh EventBroker would never see the decision event.
+                    // No shared broker → poll-only (no orphan subscription).
+                    const sharedMod = !evtBroker?.on ? await import("../event-broker/event-broker-gate.js").then(m => (m as any).getSharedBroker?.() ?? null).catch(() => null) : null;
+                    const targetBroker = evtBroker?.on ? evtBroker : (sharedMod as any)?.on ? sharedMod : null;
                     if (targetBroker && typeof targetBroker.on === 'function') {
                       const handler = (payload: any) => {
                         const pid = payload?.approvalId || payload?.id;
@@ -459,9 +472,14 @@ export class ToolExecutor {
                 if (emitVia && typeof emitVia.emit === "function") {
                   emitVia.emit("approval.decided" as never, decidedPayload as never, { channelId: channelIdForEvent } as never);
                 } else {
-                  const { EventBroker } = await import("../event-broker/event-broker-gate.js");
-                  const eb = new EventBroker();
-                  eb.emit("approval.decided" as never, decidedPayload as never, { channelId: channelIdForEvent } as never);
+                  // Shared instance: a fresh EventBroker would reach no subscriber.
+                  const { getSharedBroker } = await import("../event-broker/event-broker-gate.js");
+                  const shared = getSharedBroker() as unknown as { emit: (t: string, p: unknown, o?: unknown) => void } | null;
+                  if (shared && typeof shared.emit === "function") {
+                    shared.emit("approval.decided" as never, decidedPayload as never, { channelId: channelIdForEvent } as never);
+                  } else {
+                    console.warn("[ToolExecutor] dropped approval.decided: no shared broker registered");
+                  }
                 }
               }
             } catch {}

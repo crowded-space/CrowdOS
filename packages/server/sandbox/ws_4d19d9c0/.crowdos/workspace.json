@@ -1,0 +1,16 @@
+{
+  "id": "ws_4d19d9c0",
+  "name": "ws_4d19d9c0",
+  "createdAt": "2026-09-11T08:22:44.451Z",
+  "permissions": {
+    "network": false,
+    "shell": false,
+    "maxAgents": 8
+  },
+  "constraints": {
+    "networkAccess": false,
+    "shellExecution": true,
+    "memoryLimitMb": 512,
+    "cpuLimit": 1
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "id": "ws_513de913",
+  "name": "ws_513de913",
+  "createdAt": "2026-09-11T08:22:44.381Z",
+  "permissions": {
+    "network": false,
+    "shell": false,
+    "maxAgents": 8
+  },
+  "constraints": {
+    "networkAccess": false,
+    "shellExecution": true,
+    "memoryLimitMb": 512,
+    "cpuLimit": 1
+  }
+}

@@ -27,11 +27,14 @@ async function main() {
     process.exit(0);
   }
 
-  // APR-1: approval sweeper also runs in worker for bullmq deployments (idempotent)
+  // APR-1: approval sweeper also runs in worker for bullmq deployments (idempotent).
+  // Worker-local shared instance: no socket server in this process (documented).
   try {
     const { startApprovalSweeper } = await import("./approvals/approval-sweeper.js");
-    const { EventBroker } = await import("./event-broker/event-broker-gate.js");
-    startApprovalSweeper(new EventBroker());
+    const { EventBroker, setSharedBroker } = await import("./event-broker/event-broker-gate.js");
+    const workerBroker = new EventBroker();
+    setSharedBroker(workerBroker);
+    startApprovalSweeper(workerBroker);
   } catch {}
 
   console.log("[worker] scheduling maintenance repeatables and starting workers…");

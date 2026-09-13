@@ -1,0 +1,9 @@
+// Legacy output retired — use SwarmGate (SWARM_V1) for real execution
+// Original subtask: Alpha
+// Priority: high
+// Timestamp: 2026-09-09T19:04:53.535Z
+
+export function executeLegacyTask() {
+  console.log("Legacy subtask stub.");
+  return { success: true, payload: "${subtask.title} legacy" };
+}

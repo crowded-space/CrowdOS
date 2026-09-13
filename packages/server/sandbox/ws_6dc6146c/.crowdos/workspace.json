@@ -1,0 +1,16 @@
+{
+  "id": "ws_6dc6146c",
+  "name": "ws_6dc6146c",
+  "createdAt": "2026-09-11T08:22:44.342Z",
+  "permissions": {
+    "network": false,
+    "shell": false,
+    "maxAgents": 8
+  },
+  "constraints": {
+    "networkAccess": false,
+    "shellExecution": true,
+    "memoryLimitMb": 512,
+    "cpuLimit": 1
+  }
+}
