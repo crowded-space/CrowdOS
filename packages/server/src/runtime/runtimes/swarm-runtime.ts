@@ -163,7 +163,9 @@ export class SwarmRuntime extends BaseRuntime {
           packet.authorityLevel,
           finalResponse,
           false,
-          packet.runId ? { runId: packet.runId } : undefined
+          packet.runId ? { runId: packet.runId } : undefined,
+          undefined,
+          packet.workspaceId
         )
       } catch (err) {
         console.warn('[SwarmRuntime] persistMessage failed (hermetic mode preserves result):', (err as Error)?.message || err)

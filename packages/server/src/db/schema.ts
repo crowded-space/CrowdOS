@@ -277,6 +277,7 @@ export const channels = pgTable("channels", {
 export const messages = pgTable("messages", {
   id: text("id").primaryKey(),
   channelId: text("channel_id").notNull().references(() => channels.id, { onDelete: "cascade" }),
+  workspaceId: text("workspace_id").references(() => workspaces.id, { onDelete: "cascade" }),
     threadId: text("thread_id"),
   authorId: text("author_id").notNull(),
   authorName: text("author_name").notNull(),

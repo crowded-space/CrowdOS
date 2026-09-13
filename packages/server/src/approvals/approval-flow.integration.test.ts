@@ -55,11 +55,21 @@ async function createRunningRun(): Promise<string> {
 
 async function getAgentForTool(): Promise<{ id: string; name: string }> {
   const { getDb } = await import("../shared/config/database.js");
+  const { agents } = await import("../db/schema.js");
+  const { eq, or, lte } = await import("drizzle-orm");
   const db = getDb();
-  const ag = await db.query.agents.findFirst();
-  if (!ag) throw new Error("no agent seeded");
-  // Ensure skills gate allows execute_bash for this agent (bypass if not)
-  return { id: ag.id, name: ag.name };
+  const qualified = (ag: { authorityLevel: number; isOmniscient: boolean | null } | undefined | null) =>
+    !!ag && (ag.authorityLevel <= 1 || ag.isOmniscient === true);
+  // Deterministic: execute_bash needs Level 1 authority, but a blind
+  // findFirst() can land on db:check leftover roundtrip agents (Level 2,
+  // non-omniscient) and fail before any approval logic runs.
+  const named = await db.query.agents.findFirst({ where: eq(agents.name, "default-assistant") });
+  if (qualified(named)) return { id: named!.id, name: named!.name };
+  const anyQualified = await db.query.agents.findFirst({
+    where: or(lte(agents.authorityLevel, 1), eq(agents.isOmniscient, true)),
+  });
+  if (qualified(anyQualified)) return { id: anyQualified!.id, name: anyQualified!.name };
+  throw new Error("no qualified agent seeded (need authorityLevel <= 1 or isOmniscient)");
 }
 
 describe.skipIf(!probe.ok)("Approvals APR-1 ToolExecutor pause flow (e2e with real DB)", () => {

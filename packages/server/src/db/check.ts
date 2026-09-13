@@ -5,7 +5,7 @@ import { eq } from "drizzle-orm";
 import { closeDatabaseConnection, ensurePgVectorExtension, getDb } from "../shared/config/database.js";
 import { agents, channels, instructionModules, modelModules, messages } from "./schema.js";
 
-async function checkDatabaseRoundTrip(): Promise<void> {
+async function checkDatabaseRoundTrip(): Promise<{ messageId: string; channelId: string; agentId: string; modelModuleId: string; instructionModuleId: string }> {
   await ensurePgVectorExtension();
 
   const db = getDb();
@@ -66,6 +66,7 @@ async function checkDatabaseRoundTrip(): Promise<void> {
   await db.insert(channels).values({
     id: channelId,
     categoryId: null,
+    workspaceId: "default",
     name: `roundtrip-${channelId.slice(0, 8)}`,
     type: "standard",
     createdBy: "user",
@@ -77,6 +78,7 @@ async function checkDatabaseRoundTrip(): Promise<void> {
   await db.insert(messages).values({
     id: messageId,
     channelId,
+    workspaceId: "default",
     authorId: agentId,
     authorName: "Roundtrip Agent",
     authorLevel: "2",
@@ -100,13 +102,29 @@ async function checkDatabaseRoundTrip(): Promise<void> {
   }
 
   console.log("Database roundtrip succeeded.");
+  return { messageId, channelId, agentId, modelModuleId, instructionModuleId };
 }
 
+let roundtripIds: { messageId: string; channelId: string; agentId: string; modelModuleId: string; instructionModuleId: string } | null = null;
+
 checkDatabaseRoundTrip()
+  .then((ids) => { roundtripIds = ids; })
   .catch((error) => {
     console.error(error);
     process.exitCode = 1;
   })
   .finally(async () => {
+    // Clean up roundtrip rows: leftover Level-2 non-omniscient agents break
+    // seed-dependent tests (e.g. approval-flow's agent lookup).
+    if (roundtripIds) {
+      try {
+        const db = getDb();
+        await db.delete(messages).where(eq(messages.id, roundtripIds.messageId)).catch(() => {});
+        await db.delete(channels).where(eq(channels.id, roundtripIds.channelId)).catch(() => {});
+        await db.delete(agents).where(eq(agents.id, roundtripIds.agentId)).catch(() => {});
+        await db.delete(modelModules).where(eq(modelModules.id, roundtripIds.modelModuleId)).catch(() => {});
+        await db.delete(instructionModules).where(eq(instructionModules.id, roundtripIds.instructionModuleId)).catch(() => {});
+      } catch {}
+    }
     await closeDatabaseConnection();
   });

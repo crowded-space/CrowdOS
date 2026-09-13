@@ -404,7 +404,9 @@ export class CodingRuntime extends BaseRuntime {
           packet.authorityLevel,
           finalThoughts,
           true,
-          packet.runId ? { runId: packet.runId } : undefined
+          packet.runId ? { runId: packet.runId } : undefined,
+          undefined,
+          packet.workspaceId
         );
 
         // Auto-write monologue reflection memory note — off the hot path (HQ3)

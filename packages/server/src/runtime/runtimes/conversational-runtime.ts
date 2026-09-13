@@ -39,7 +39,9 @@ export class ConversationalRuntime extends BaseRuntime {
           packet.authorityLevel,
           llmResponse.thoughts,
           true,
-          packet.runId ? { runId: packet.runId } : undefined
+          packet.runId ? { runId: packet.runId } : undefined,
+          undefined,
+          packet.workspaceId
         )
 
         // Auto-write monologue reflection note — off the hot path (HQ3)
@@ -64,7 +66,9 @@ export class ConversationalRuntime extends BaseRuntime {
         packet.authorityLevel,
         llmResponse.content,
         false,
-        packet.runId ? { runId: packet.runId } : undefined
+        packet.runId ? { runId: packet.runId } : undefined,
+        undefined,
+        packet.workspaceId
       )
 
       runtimeEvents.push(this.kernel.buildEvent('message:new', { channelId: packet.channelId }))

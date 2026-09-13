@@ -96,7 +96,9 @@ export abstract class BaseRuntime implements IRuntime {
           broker, packet.channelId, packet.agentId,
           packet.agentName, packet.authorityLevel,
           failureMsg, false,
-          packet.runId ? { runId: packet.runId } : undefined
+          packet.runId ? { runId: packet.runId } : undefined,
+          undefined,
+          packet.workspaceId
         )
       } catch (persistErr) {
         console.error('[BaseRuntime] Failed to persist runtime error message:', persistErr)

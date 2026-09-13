@@ -83,7 +83,9 @@ export class AgenticRuntime extends BaseRuntime {
             broker, packet.channelId, packet.agentId,
             packet.agentName, packet.authorityLevel,
             llmResponse.thoughts, true,
-            packet.runId ? { runId: packet.runId } : undefined
+            packet.runId ? { runId: packet.runId } : undefined,
+            undefined,
+            packet.workspaceId
           )
 
           // Auto-write monologue reflection note — off the hot path (HQ3)
@@ -242,7 +244,8 @@ export class AgenticRuntime extends BaseRuntime {
               truncated,
               durationMs: result.durationMs ?? null,
               callId: tc.id ?? null,
-            }]
+            }],
+            packet.workspaceId
           )
 
           if (packet.runId && tc.id) {
@@ -279,7 +282,9 @@ export class AgenticRuntime extends BaseRuntime {
         broker, packet.channelId, packet.agentId,
         packet.agentName, packet.authorityLevel,
         responseToPersist, false,
-        packet.runId ? { runId: packet.runId } : undefined
+        packet.runId ? { runId: packet.runId } : undefined,
+        undefined,
+        packet.workspaceId
       )
 
       await this.kernel.setAgentStatus(broker, packet.agentId, 'idle')

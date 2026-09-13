@@ -389,7 +389,7 @@ export class ResearchRuntime extends BaseRuntime {
       const query = packet.userInput?.trim() || ""
       if (!query) {
         const emptyReport = "No research query provided — unable to produce a cited report."
-        await this.kernel.persistMessage(broker, packet.channelId, packet.agentId, packet.agentName, packet.authorityLevel, emptyReport, false, packet.runId ? { runId: packet.runId } : undefined)
+        await this.kernel.persistMessage(broker, packet.channelId, packet.agentId, packet.agentName, packet.authorityLevel, emptyReport, false, packet.runId ? { runId: packet.runId } : undefined, undefined, packet.workspaceId)
         await this.kernel.setAgentStatus(broker, packet.agentId, "idle")
         return {
           requestId: packet.requestId,
@@ -687,7 +687,9 @@ export class ResearchRuntime extends BaseRuntime {
         packet.authorityLevel,
         report,
         false,
-        packet.runId ? { runId: packet.runId } : undefined
+        packet.runId ? { runId: packet.runId } : undefined,
+        undefined,
+        packet.workspaceId
       )
 
       await this.kernel.setAgentStatus(broker, packet.agentId, "idle")

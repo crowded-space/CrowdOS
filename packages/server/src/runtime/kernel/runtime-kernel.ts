@@ -160,7 +160,8 @@ export class RuntimeKernel {
     content: string,
     isInternalMonologue: boolean,
     metadata?: Record<string, unknown> | undefined,
-    toolCalls?: StructuredToolCall[] | undefined
+    toolCalls?: StructuredToolCall[] | undefined,
+    workspaceId?: string | null | undefined
   ): Promise<number> {
     const start = performance.now()
     const runId = (metadata as Record<string, unknown> | undefined)?.runId as string | undefined ?? null
@@ -181,6 +182,7 @@ export class RuntimeKernel {
         await tx.insert(messages).values({
           id: msgId,
           channelId,
+          workspaceId: workspaceId ?? null,
           authorId: agentId,
           authorName: agentName,
           authorLevel: String(authorityLevel),
