@@ -127,7 +127,9 @@ async function pickInspectPort() {
 }
 
 async function main() {
-  // 1. Compile server + main/preload so server dist and desktop dist exist.
+  // 1. Compile pi-core + server + main/preload so all dists exist
+  // (pi-core first: server dist imports it at runtime under plain Node).
+  await runOnce(NPM, ["run", "build", "--workspace", "@crowdos/pi-core"], ROOT);
   await runOnce(NPM, ["run", "build", "--workspace", "@community-agent/server"], ROOT);
   await runOnce(NPM, ["run", "build"], DESKTOP);
 

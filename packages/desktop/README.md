@@ -50,10 +50,10 @@ binary + electron-builder), client+server built (`npm run build`).
   `npm run build --workspace @community-agent/server`,
   `npm run dist:desktop` → `packages/desktop/release/CrowdOS-Setup-*.exe`.
 - First run: main forks server `db/bootstrap.js` (drizzle migrations + seed,
-  120 s timeout). Failure shows an error box and continues (backend routes
-  500 until Postgres is up) — start Postgres and relaunch, or
-  `npm run db:push`. Rollback: keep the previous installer + `pg_dump` before
-  upgrading; restore = reinstall + `psql < backup.sql`.
+  120 s timeout). No Postgres, no problem: boot logs a warning and continues
+  offline (DB-backed routes degrade until Postgres is up) — start Postgres
+  and relaunch, or `npm run db:push`. Rollback: keep the previous installer
+  + `pg_dump` before upgrading; restore = reinstall + `psql < backup.sql`.
 - Signing: v1 ships **unsigned** (`signAndEditExecutable: false`, SmartScreen
   will warn). Before public release add `win.certificateFile` (+ Azure Trusted
   Signing) and re-verify the four prototype drills below.

@@ -14,11 +14,11 @@ describe("TOOL-1 · system_scheduler — bullmq path (mocked queue)", () => {
   });
 
   afterAll(() => {
-    try { vi.doUnmock("../Skills/skillsGate.js"); } catch {}
-    try { vi.doUnmock("../Shared/config/database.js"); } catch {}
-    try { vi.doUnmock("../Shared/core/sequenceNumber.js"); } catch {}
-    try { vi.doUnmock("../Shared/core/ulid.js"); } catch {}
-    try { vi.doUnmock("../Queue/queueGate.js"); } catch {}
+    try { vi.doUnmock("../skills/skills-gate.js"); } catch {}
+    try { vi.doUnmock("../shared/config/database.js"); } catch {}
+    try { vi.doUnmock("../shared/core/sequence-number.js"); } catch {}
+    try { vi.doUnmock("../shared/core/ulid.js"); } catch {}
+    try { vi.doUnmock("../queue/queue-gate.js"); } catch {}
     vi.resetModules();
   });
 

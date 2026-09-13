@@ -60,7 +60,7 @@ async function probeDevDb(): Promise<DbProbe> {
 
 // The global test-setup replaces the database layer with an in-memory fake;
 // this suite exercises the REAL repository against local dev Postgres.
-vi.doUnmock("../Shared/config/database.js");
+vi.doUnmock("../shared/config/database.js");
 
 const probe = await probeDevDb();
 const createdRunIds: string[] = [];

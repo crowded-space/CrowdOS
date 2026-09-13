@@ -43,7 +43,7 @@ async function probeDb() {
   return { ok: true, sql };
 }
 
-vi.doUnmock("../Shared/config/database.js");
+vi.doUnmock("../shared/config/database.js");
 
 const probe = await probeDb();
 let repo: RunsRepo | null = null;

@@ -181,15 +181,11 @@ async function boot(): Promise<void> {
 
   const migrated = await ensureDatabase({ databaseUrl, bootstrapCandidates: bootstrapCandidates() });
   if (migrated.status === "failed") {
-    console.error(`[desktop] database migration failed: ${migrated.reason}`);
-    try {
-      dialog.showErrorBox(
-        "CrowdOS database unavailable",
-        `${migrated.reason}\n\nStart Postgres 16 on 127.0.0.1:5432 and relaunch, or run: npm run db:push`,
-      );
-    } catch {
-      // headless — continue so the failure is visible in backend logs too
-    }
+    // Offline-first: Postgres is optional. Log and continue without a
+    // blocking dialog — persistence-backed routes degrade until the DB is up.
+    console.warn(`[desktop] database unavailable, continuing offline: ${migrated.reason}`);
+  } else if (migrated.status === "skipped") {
+    console.warn(`[desktop] database setup skipped (${migrated.reason}), continuing offline`);
   }
 
   // Desktop backend defaults to 12077 (in dev, always 12077; never use web dev port 3001)
@@ -203,7 +199,7 @@ async function boot(): Promise<void> {
     try {
       dialog.showErrorBox(
         "CrowdOS backend failed to start",
-        `${(err as Error)?.message ?? err}\n\nCheck that Postgres is running and DATABASE_URL is correct, then relaunch.`,
+        `${(err as Error)?.message ?? err}\n\nSee ${join(paths.logsDir, "desktop.log")} for details. If persistence is needed, start Postgres 16 on 127.0.0.1:5432 and relaunch (or run: npm run db:push).`,
       );
     } catch {
       // headless — error already logged above

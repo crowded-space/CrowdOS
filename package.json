@@ -7,10 +7,12 @@
     "packages/server",
     "packages/client",
     "packages/shared",
-    "packages/pi-core"
+    "packages/pi-core",
+    "packages/desktop"
   ],
   "scripts": {
     "dev": "run-p dev:api dev:worker dev:client",
+    "dev:electron": "npm run dev --workspace @community-agent/desktop",
     "dev:api": "npm run dev --workspace @community-agent/server",
     "dev:worker": "npm run worker --workspace @community-agent/server",
     "dev:server": "npm run dev --workspace @community-agent/server",

@@ -22,7 +22,7 @@ async function probeDevDb(): Promise<{ ok: boolean; sql: postgres.Sql | null }> 
   return { ok: true, sql };
 }
 
-vi.doUnmock("../Shared/config/database.js");
+vi.doUnmock("../shared/config/database.js");
 
 const probe = await probeDevDb();
 const createdRunIds: string[] = [];

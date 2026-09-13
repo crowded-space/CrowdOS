@@ -8,7 +8,7 @@ import { createHash, randomUUID } from "node:crypto";
 
 config();
 
-vi.doUnmock("../Shared/config/database.js");
+vi.doUnmock("../shared/config/database.js");
 
 async function probeDb(): Promise<{ ok: boolean; sql: postgres.Sql | null }> {
   if (!process.env.DATABASE_URL) {

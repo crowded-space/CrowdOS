@@ -41,8 +41,8 @@ describe.skipIf(!DATABASE_URL)("PERF-5 · keyset pagination page walk (real dev 
 
     await client`delete from "channels" where "id" = ${CHANNEL_ID}`;
     await client`
-      insert into "channels" ("id", "name", "type", "created_by", "position")
-      values (${CHANNEL_ID}, ${CHANNEL_ID}, 'standard', 'perf5-test', 0)
+      insert into "channels" ("id", "workspace_id", "name", "type", "created_by", "position")
+      values (${CHANNEL_ID}, 'default', ${CHANNEL_ID}, 'standard', 'perf5-test', 0)
     `;
     const rows = Array.from({ length: TOTAL }, (_, i) => ({
       id: `perf5-${String(i + 1).padStart(4, "0")}-${randomUUID().slice(0, 8)}`,

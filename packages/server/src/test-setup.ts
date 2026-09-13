@@ -118,7 +118,18 @@ function buildFakeDb() {
     messages: {
       findFirst: async () =>
         store.messages.length > 0 ? { ...store.messages[store.messages.length - 1] } : null,
-      findMany: async () => store.messages.map((r) => ({ ...r })),
+      // Fidelity: the real query orders newest-first (timestamp desc,
+      // sequenceNumber desc) and the merge pairs chronologically after
+      // reversing — insertion order here would invert the pairing.
+      findMany: async () =>
+        store.messages
+          .map((r) => ({ ...r }))
+          .sort((a, b) => {
+            const tb = new Date(b.timestamp as string | Date).getTime();
+            const ta = new Date(a.timestamp as string | Date).getTime();
+            if (tb !== ta) return tb - ta;
+            return Number(b.sequenceNumber ?? 0) - Number(a.sequenceNumber ?? 0);
+          }),
     },
     channels: {
       findFirst: async () => (store.channels.length > 0 ? { ...store.channels[0] } : null),

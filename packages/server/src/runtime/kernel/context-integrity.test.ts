@@ -116,7 +116,7 @@ describe("CTX-2 · reflection provenance stripping", () => {
       expect(row!.brief).toContain("[provenance: self_reflection]");
     }
     delete process.env.MEM_REFLECT_THROTTLE;
-    vi.doUnmock("../../Shared/config/database.js");
+    vi.doUnmock("../../shared/config/database.js");
     vi.resetModules();
   });
 });
@@ -283,7 +283,7 @@ describe("CTX-2 · InstructionStack determinism & scoped replace & expiry sweep"
     expect(block.content).not.toContain("A1");
     expect(block.content).not.toContain("A2");
     // Ensure whole-stack wipe does not occur: legacy replace without target should be no-op
-    vi.doUnmock("../../Shared/config/database.js");
+    vi.doUnmock("../../shared/config/database.js");
     vi.resetModules();
   });
 
@@ -335,7 +335,7 @@ describe("CTX-2 · InstructionStack determinism & scoped replace & expiry sweep"
     expect(block.content).not.toContain("old");
     expect(block.content).toContain("keep");
     expect(block.content).toContain("BASE");
-    vi.doUnmock("../../Shared/config/database.js");
+    vi.doUnmock("../../shared/config/database.js");
     vi.resetModules();
   });
 
@@ -372,7 +372,7 @@ describe("CTX-2 · InstructionStack determinism & scoped replace & expiry sweep"
     // Should still contain original A1, not wiped
     expect(block.content).toContain("A1");
     expect(block.content).not.toContain("SHOULD NOT WIPE");
-    vi.doUnmock("../../Shared/config/database.js");
+    vi.doUnmock("../../shared/config/database.js");
     vi.resetModules();
   });
 });
@@ -488,7 +488,7 @@ describe("CTX-2 · canonical SOURCE-INTEGRITY block singularity", () => {
     // Total SOURCE INTEGRITY occurrences = canonical + pointers
     const totalCount = (combined.match(/\[SOURCE INTEGRITY/g) || []).length;
     expect(totalCount).toBe(3); // 1 canonical + 2 pointer lines
-    vi.doUnmock("../../Shared/config/database.js");
+    vi.doUnmock("../../shared/config/database.js");
     vi.resetModules();
   });
 });
