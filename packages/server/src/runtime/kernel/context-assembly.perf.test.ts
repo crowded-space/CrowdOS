@@ -24,7 +24,7 @@ vi.mock("../../tools/safety/hardened-exec.js", () => ({
 }));
 
 vi.mock("../../agents/agent-gate.js", () => ({
-  AgentSpawnManager: class {},
+  agentGate: { list: async () => [] },
 }));
 
 import { Column, Param, SQL, StringChunk } from "drizzle-orm";

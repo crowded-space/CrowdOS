@@ -83,19 +83,6 @@ export async function listArtifactsByWorkspace(workspaceId: string, opts?: { lim
   return rows as unknown as ArtifactRow[];
 }
 
-export async function listArtifactsByRunAndType(runId: string, type: string): Promise<ArtifactRow[]> {
-  const db = getDb();
-  const rows = await db.select({
-    id: artifacts.id, workspaceId: artifacts.workspaceId, producerAgent: artifacts.producerAgent,
-    artifactType: artifacts.artifactType, path: artifacts.path, semanticTags: artifacts.semanticTags,
-    metadata: artifacts.metadata, createdAt: artifacts.createdAt, runId: artifacts.runId,
-    beforeHash: artifacts.beforeHash, afterHash: artifacts.afterHash,
-    patch: sql<string | null>`substring(${artifacts.patch} from 1 for 500)`,
-    contentRef: sql<string | null>`substring(${artifacts.contentRef} from 1 for 500)`,
-  }).from(artifacts).where(and(eq(artifacts.runId, runId), eq(artifacts.artifactType, type as any))).orderBy(desc(artifacts.createdAt)).limit(200);
-  return rows as unknown as ArtifactRow[];
-}
-
 export async function purgeExpiredArtifacts(before: Date): Promise<number> {
   const db = getDb();
   const purged = await db.delete(artifacts).where(lt(artifacts.createdAt, before)).returning({ id: artifacts.id });

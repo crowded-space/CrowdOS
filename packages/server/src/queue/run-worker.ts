@@ -12,14 +12,14 @@ async function processRunJob(job: Job<RunJobData>): Promise<unknown> {
   const { channelId, agentId, messageId, userInput, workspaceId, runId } = job.data;
   const resumeContext = (job.data as unknown as { resumeContext?: unknown; resumeFrom?: unknown }).resumeContext ?? (job.data as unknown as { resumeContext?: unknown; resumeFrom?: unknown }).resumeFrom ?? null;
 
-  const [{ runtimeGate }, { agentGate }, { EventBroker, getSharedBroker }] = await Promise.all([
+  const [{ runtimeGate }, { agentGate }, { getSharedBroker }] = await Promise.all([
     import("../runtime/runtime-gate.js"),
     import("../agents/agent-gate.js"),
     import("../event-broker/event-broker-gate.js"),
   ]);
-  // Shared instance when co-located with the socket server; worker processes
-  // have none, so the fresh instance is worker-local by design (documented).
-  const broker = (getSharedBroker as () => InstanceType<typeof EventBroker> | null)?.() ?? new EventBroker();
+  // ponytail: single shared instance (worker boot sets worker-local); no orphan fallback.
+  const broker = (getSharedBroker as () => { onAny: (cb: (event: any) => void) => string; off: (id: string) => void } | null)?.();
+  if (!broker) throw new Error("EventBroker not initialized (no shared broker registered).");
 
   // M5: processRunJob awaits the full multi-iteration runtime inline with no
   // useWorkerThreads — CPU-hot stretches starve BullMQ lock renewal for all 4

@@ -35,11 +35,9 @@ describe('CFG-1 · Config consolidation', () => {
     expect(config.CLIENT_ORIGIN).toBe('http://localhost:5173');
     expect(config.NODE_ENV).toBe('development');
     expect(config.CONFIG_STRICT).toBe(true);
-    expect(config.AUTH_STRICT).toBe(true);
     expect(config.RATE_LIMIT_ENABLED).toBe(true);
     expect(config.RATE_LIMIT_MAX).toBe(300);
     expect(config.RATE_LIMIT_WINDOW_MS).toBe(60_000);
-    expect(config.SOCKET_OPEN).toBe(false);
     expect(config.SOCKET_MSG_RATE_CAPACITY).toBe(15);
     expect(config.SOCKET_MSG_RATE_REFILL).toBe(5);
     expect(config.MAX_PARALLEL_AGENTS).toBe(4);
@@ -66,7 +64,6 @@ describe('CFG-1 · Config consolidation', () => {
     const { config } = loadEffectiveConfig({});
     expect(config.APPROVALS_ENABLED).toBe(false);
     expect(config.SWARM_V1).toBe(false);
-    expect(config.SWARM_LEGACY).toBe(false);
     expect(config.DEMO_FALLBACK).toBe(false);
     expect(config.LEGACY_GUARD).toBe(false);
     expect(config.LEGACY_BOOTSTRAP).toBe(false);
@@ -88,11 +85,11 @@ describe('CFG-1 · Config consolidation', () => {
     }
 
     // bool malformed
-    expect(() => loadEffectiveConfig({ AUTH_STRICT: 'maybe' })).toThrow(ConfigError);
+    expect(() => loadEffectiveConfig({ RATE_LIMIT_ENABLED: 'maybe' })).toThrow(ConfigError);
     try {
-      loadEffectiveConfig({ AUTH_STRICT: 'maybe' });
+      loadEffectiveConfig({ RATE_LIMIT_ENABLED: 'maybe' });
     } catch (e) {
-      expect((e as Error).message).toMatch(/AUTH_STRICT/);
+      expect((e as Error).message).toMatch(/RATE_LIMIT_ENABLED/);
       expect((e as Error).message).toMatch(/maybe/);
     }
 
@@ -183,14 +180,12 @@ describe('CFG-1 · Config consolidation', () => {
   it('secrets are masked in redacted report and URLs are origin-only', () => {
     const { config } = loadEffectiveConfig({
       CREDENTIALS_ENCRYPTION_KEY: 'a'.repeat(64),
-      AUTH_TOKEN: 'secret-token',
       WORKSPACE_ADMIN_TOKEN: 'admin-secret',
       DATABASE_URL: 'postgresql://postgres:s3cr3t@db.example.com:5432/mydb?sslmode=require',
       REDIS_URL: 'redis://:pass@redis.example.com:6379/0',
     });
     const report = redactedConfigReport(config);
     expect(report.CREDENTIALS_ENCRYPTION_KEY).toBe('[redacted]');
-    expect(report.AUTH_TOKEN).toBe('[redacted]');
     expect(report.WORKSPACE_ADMIN_TOKEN).toBe('[redacted]');
     // url redaction: origin only, no path/query/credentials
     expect(report.DATABASE_URL).toBe('postgresql://db.example.com:5432');
@@ -201,7 +196,7 @@ describe('CFG-1 · Config consolidation', () => {
   });
 
   it('formatConfigReport produces aligned key = value lines and secrets already masked', () => {
-    const { config } = loadEffectiveConfig({ PORT: '4000', AUTH_TOKEN: 'secret' });
+    const { config } = loadEffectiveConfig({ PORT: '4000', WORKSPACE_ADMIN_TOKEN: 'secret' });
     const report = redactedConfigReport(config);
     const formatted = formatConfigReport(report);
     expect(formatted).toContain('PORT');
@@ -285,9 +280,8 @@ describe('CFG-1 · Config consolidation', () => {
 
   it('coerced vars are reported in issues.coerced when normalized !== raw', () => {
     // whitespace trimming and case normalization
-    const { issues } = loadEffectiveConfig({ PORT: ' 3001 ', AUTH_STRICT: ' True ' });
+    const { issues } = loadEffectiveConfig({ PORT: ' 3001 ', RATE_LIMIT_ENABLED: ' True ' });
     // PORT normalized from ' 3001 ' to '3001' => coerced
-    // AUTH_STRICT normalized from ' True ' to 'true' but then to boolean true => normalized 'true' !== ' True '
     expect(issues.coerced.some(c => c.var === 'PORT')).toBe(true);
   });
 

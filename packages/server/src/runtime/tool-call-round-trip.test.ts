@@ -79,7 +79,8 @@ describe('DB-5 structured tool-call records round-trip', () => {
     expect(messageNewPayloads[0].toolCalls).toBeUndefined();
     expect(messageNewPayloads[1].toolCalls).toBeUndefined();
 
-    const merged = await messageGate.getChannelMessages(CHANNEL_ID, true);
+    const page = await messageGate.getChannelMessagesPage(CHANNEL_ID, {});
+    const merged = page.messages;
     const cards = merged.filter((m: any) => m.type === 'tool_execution');
     expect(cards).toHaveLength(3);
 

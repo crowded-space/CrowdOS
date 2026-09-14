@@ -45,6 +45,14 @@ export interface CostDashboard {
   generatedAt: Date;
 }
 
+// ponytail: one limit — single default + clamp for ledger/dashboard/verify/routes.
+export const OBS_LIMIT_DEFAULT = 100;
+export const OBS_LIMIT_MAX = 1000;
+
+export function clampObsLimit(raw?: number): number {
+  return Math.min(Math.max(raw ?? OBS_LIMIT_DEFAULT, 1), OBS_LIMIT_MAX);
+}
+
 /**
  * Compute cost for one log row given its model's cost_per_1k.
  * Mirrors TokenTracker.computeCostUsd but as a pure function for ledger use.
@@ -66,7 +74,7 @@ export async function getPerRunCostLedger(opts: {
   limit?: number;
 } = {}): Promise<CostLedgerEntry[]> {
   const db = getDb();
-  const limit = Math.min(Math.max(opts.limit ?? 100, 1), 1000);
+  const limit = clampObsLimit(opts.limit);
 
   // Join token_usage_log with model_modules to compute cost; filter by runId if column exists
   // Fallback: if run_id column missing (pre-migration), return unkeyed entries with cost.
@@ -246,7 +254,7 @@ export async function getPerRunRollup(opts: {
 }
 
 export async function getCostDashboard(opts: { limit?: number } = {}): Promise<CostDashboard> {
-  const limit = opts.limit ?? 500;
+  const limit = clampObsLimit(opts.limit);
   const db = getDb();
   // One ledger fetch batched with the model-meta lookup; rollups derive pure from the same rows.
   const [entries, modelRows] = await Promise.all([
@@ -297,7 +305,7 @@ let verifyCache: { at: number; value: { match: boolean; ledgerTotal: number; rec
 
 export async function verifyLedgerAccuracy(): Promise<{ match: boolean; ledgerTotal: number; recomputedTotal: number; deltaPct: number }> {
   if (verifyCache && Date.now() - verifyCache.at < 60_000) return verifyCache.value;
-  const dashboard = await getCostDashboard({ limit: 1000 });
+  const dashboard = await getCostDashboard({ limit: OBS_LIMIT_MAX });
   // Recompute via SQL SUM aggregate as ground truth — single row, no full-table fetch.
   const db = getDb();
   let rawTotal = dashboard.totalCostUsd;

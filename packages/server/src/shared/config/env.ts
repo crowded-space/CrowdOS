@@ -69,7 +69,7 @@ function numSchema(min: number, defaultValue: number, description: string) {
 
 export const envSchema = z.object({
   NODE_ENV: enumSchema(["development", "production", "test"] as const, "development",
-    "Runtime mode. 'production' disables dev-only escapes (e.g. SOCKET_OPEN)."),
+    "Runtime mode."),
   CONFIG_STRICT: boolSchema(true)
     .describe("Rollback switch for CFG-1 fail-fast boot: false downgrades unknown project-prefixed env vars from boot-blocking errors to warnings."),
   PORT: intSchema(1, 65535, 3001, "HTTP listen port for the Fastify server."),
@@ -89,10 +89,6 @@ export const envSchema = z.object({
     .describe("Actor id attributed to system-generated messages and fallback ownership."),
   WORKSPACE_DIR: optionalTextSchema("Overrides the sandbox workspace root directory for spawned agent workspaces."),
 
-  AUTH_STRICT: boolSchema(true)
-    .describe("SEC-1: true = default-deny API-key auth on all non-exempt routes; false = legacy shared-token mode (AUTH_TOKEN/API_KEY match, open in dev when unset)."),
-  AUTH_TOKEN: optionalTextSchema("Legacy shared auth token (AUTH_STRICT=false mode only)."),
-  API_KEY: optionalTextSchema("Fallback alias for AUTH_TOKEN in legacy auth mode."),
   WORKSPACE_ADMIN_TOKEN: optionalTextSchema("Admin bearer token gating privileged admin routes (/metrics hardening, DB config mutations)."),
 
   CREDENTIALS_ENCRYPTION_KEY: optionalTextSchema("SEC-4 encrypt-at-rest key for provider credentials. Accepts 32-byte hex, 32-byte base64, or any passphrase (scrypt-derived). Unset = encryption disabled."),
@@ -102,8 +98,6 @@ export const envSchema = z.object({
   RATE_LIMIT_MAX: intSchema(1, null, 300, "Max requests per time window in the global per-key/per-IP HTTP bucket."),
   RATE_LIMIT_WINDOW_MS: intSchema(1, null, 60_000, "Global HTTP rate-limit window size in milliseconds."),
 
-  SOCKET_OPEN: boolSchema(false)
-    .describe("Dev-only escape hatch: true (and NODE_ENV != production) restores pre-SEC-2 open socket mode with client-declared identities."),
   SOCKET_MSG_RATE_CAPACITY: numSchema(0.000001, 15, "Per-socket token-bucket capacity for throttled user-content socket events (float allowed)."),
   SOCKET_MSG_RATE_REFILL: numSchema(0.000001, 5, "Token-bucket refill rate in tokens per second for socket event throttling."),
   MAX_PARALLEL_AGENTS: intSchema(1, null, 4, "PERF-1: bounded worker-pool width for concurrent mention dispatch per user:message; 1 reproduces legacy serial dispatch."),
@@ -167,8 +161,6 @@ export const envSchema = z.object({
   APPROVAL_REUSABLE_TTL_MS: numSchema(1000, 3600000, "APR-1: TTL in ms for reusable-grant cache (tool+scope-hash) before re-asking. Minimum 1000ms, default 3600000 (1 hour)."),
   SWARM_V1: boolSchema(false)
     .describe("SW-1 Swarm v1: false (default) routes L2→agentic rollback; true enables supervisor LLM → swarm_tasks DAG → leaf workers (BullMQ/leases via heartbeats) → aggregator → verifier gates COMPLETED."),
-  SWARM_LEGACY: boolSchema(false)
-    .describe("SWARM_LEGACY: true re-enables retired AgentSpawnManager mocks (setTimeout 800, template code, keyword verdicts) for one release escape hatch; false (default) retires it (use SwarmGate)."),
   SWARM_MAX_DEPTH: intSchema(0, 99, 2, "SW-2 delegation depth guard: max delegation depth before rejection; 99 disables depth guard (rollback, dev). Default 2."),
   DEMO_FALLBACK: boolSchema(false)
     .describe("Demo-mode degraded-provider fallback responses (Phase-5 reserved, not yet consumed)."),
@@ -192,9 +184,7 @@ export const envSchema = z.object({
 
   // SCL-3: OTel + cost ledger
   OTEL_ENABLED: boolSchema(false)
-    .describe("SCL-3: true enables OTel SDK initialization (requires OTEL_EXPORTER_OTLP_ENDPOINT for export)."),
-  OTEL_EXPORTER_OTLP_ENDPOINT: optionalTextSchema("OTLP endpoint URL for OTel trace export (e.g. http://localhost:4318)."),
-  OTEL_SERVICE_NAME: optionalTextSchema("Override for OTel service.name resource attribute (default: crowdos)."),
+    .describe("SCL-3: true enables OTel SDK initialization."),
 
   // SCL-2: Semantic memory
   EMBEDDING_ENABLED: boolSchema(false)

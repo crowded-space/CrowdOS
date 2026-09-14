@@ -23,7 +23,6 @@ import {
   isScreenLockConfigured,
   matchesWorkspacePin,
   requirePin,
-  verifyHandshakePin,
   invalidatePinCache,
 } from "./pin-gate.js";
 import {
@@ -98,11 +97,6 @@ describe("pin-gate · no hardcoded fallback (explicit opt-in screenlock)", () =>
     expect(request.userId).toBe("local-user");
   });
 
-  it("disabled state: handshake allows when nothing is configured anywhere", async () => {
-    await expect(verifyHandshakePin(undefined, {})).resolves.toBe(true);
-    await expect(verifyHandshakePin({ pin: "anything" }, {})).resolves.toBe(true);
-  });
-
   it("global PIN: correct PIN passes, wrong PIN is rejected", async () => {
     process.env.LOCAL_PIN = "s3cret-workspace";
     const ok = httpCtx({ headers: { "x-pin": "s3cret-workspace" } });
@@ -120,16 +114,7 @@ describe("pin-gate · no hardcoded fallback (explicit opt-in screenlock)", () =>
     expect(legacy.sent).toHaveLength(1);
   });
 
-  it("global PIN: handshake accepts Bearer and rejects unknown", async () => {
-    process.env.LOCAL_PIN = "s3cret-workspace";
-    await expect(
-      verifyHandshakePin(undefined, { authorization: "Bearer s3cret-workspace" }),
-    ).resolves.toBe(true);
-    await expect(verifyHandshakePin({ pin: "nope" }, {})).resolves.toBe(false);
-    await expect(verifyHandshakePin(undefined, {})).resolves.toBe(false);
-  });
-
-  it("workspace PIN: accepted for HTTP + handshake when no global PIN is set", async () => {
+  it("workspace PIN: accepted for HTTP when no global PIN is set", async () => {
     await seedRegistryPin("ws_1", "workspace-pin-1");
     await expect(isScreenLockConfigured()).resolves.toBe(true);
     await expect(matchesWorkspacePin("workspace-pin-1")).resolves.toBe(true);
@@ -142,17 +127,20 @@ describe("pin-gate · no hardcoded fallback (explicit opt-in screenlock)", () =>
     const bad = httpCtx({ headers: { "x-pin": "wrong" } });
     await requirePin(bad.request, bad.reply);
     expect(bad.sent).toHaveLength(1);
-
-    await expect(verifyHandshakePin({ pin: "workspace-pin-1" }, {})).resolves.toBe(true);
-    await expect(verifyHandshakePin({ pin: "wrong" }, {})).resolves.toBe(false);
   });
 
-  it("precedence: global and workspace PINs are each accepted", async () => {
+  it("precedence: global and workspace PINs are each accepted via HTTP", async () => {
     process.env.LOCAL_PIN = "global-pin";
     await seedRegistryPin("ws_1", "workspace-pin-1");
-    await expect(verifyHandshakePin({ pin: "global-pin" }, {})).resolves.toBe(true);
-    await expect(verifyHandshakePin({ pin: "workspace-pin-1" }, {})).resolves.toBe(true);
-    await expect(verifyHandshakePin({ pin: "neither" }, {})).resolves.toBe(false);
+    const okGlobal = httpCtx({ headers: { "x-pin": "global-pin" } });
+    await requirePin(okGlobal.request, okGlobal.reply);
+    expect(okGlobal.sent).toHaveLength(0);
+    const okWs = httpCtx({ headers: { "x-pin": "workspace-pin-1" } });
+    await requirePin(okWs.request, okWs.reply);
+    expect(okWs.sent).toHaveLength(0);
+    const bad = httpCtx({ headers: { "x-pin": "neither" } });
+    await requirePin(bad.request, bad.reply);
+    expect(bad.sent).toHaveLength(1);
   });
 
   it("health paths stay exempt even when a PIN is configured", async () => {

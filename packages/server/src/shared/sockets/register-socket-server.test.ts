@@ -32,10 +32,6 @@ interface Harness {
 }
 
 const ENV_KEYS = [
-  "AUTH_STRICT",
-  "AUTH_TOKEN",
-  "API_KEY",
-  "SOCKET_OPEN",
   "SOCKET_MSG_RATE_CAPACITY",
   "SOCKET_MSG_RATE_REFILL",
   "DURABLE_EVENTS",
@@ -68,10 +64,7 @@ async function setup(
   env: Partial<Record<(typeof ENV_KEYS)[number], string>> = {},
   deps: { executeRun?: (req: any) => Promise<any> } = {},
 ): Promise<Harness> {
-  process.env.AUTH_STRICT = env.AUTH_STRICT ?? "true";
   process.env.DURABLE_EVENTS = env.DURABLE_EVENTS ?? "false";
-  if (env.SOCKET_OPEN !== undefined) process.env.SOCKET_OPEN = env.SOCKET_OPEN;
-  if (env.AUTH_TOKEN !== undefined) process.env.AUTH_TOKEN = env.AUTH_TOKEN;
   if (env.SOCKET_MSG_RATE_CAPACITY !== undefined) process.env.SOCKET_MSG_RATE_CAPACITY = env.SOCKET_MSG_RATE_CAPACITY;
   if (env.SOCKET_MSG_RATE_REFILL !== undefined) process.env.SOCKET_MSG_RATE_REFILL = env.SOCKET_MSG_RATE_REFILL;
   if (env.MAX_PARALLEL_AGENTS !== undefined) process.env.MAX_PARALLEL_AGENTS = env.MAX_PARALLEL_AGENTS;
@@ -312,18 +305,6 @@ describe("SEC-2 · socket trust & room isolation", () => {
     await waitFor(() => harness.io.sockets.sockets.size === 0);
     await waitFor(() => !harness.io.sockets.adapter.rooms.has("channel:chA"));
     await waitFor(() => harness.socketsInternals.limiter!.size === 0);
-  });
-
-  it("SOCKET_OPEN=true restores open rollback behavior in dev", async () => {
-    const harness = await setup({ SOCKET_OPEN: "true" });
-    const connect = connectOf(harness);
-    harness.setChannelOverride(async () => null);
-
-    const { client, error } = await connect({ auth: { userId: "legacy-user", workspaceId: "ws-x" } });
-    expect(error).toBeUndefined();
-
-    client.emit("channel:join", { channelId: "anything-goes" });
-    await waitFor(() => harness.io.sockets.adapter.rooms.has("channel:anything-goes"));
   });
 });
 

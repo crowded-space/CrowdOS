@@ -3,7 +3,7 @@ import { ConversationalRuntime } from './conversational-runtime.js';
 import { ProviderRegistry } from '../providers/provider-registry.js';
 import { EventBroker } from '../../event-broker/event-broker-gate.js';
 import { getDb } from '../../shared/config/database.js';
-import { getChannelMessages } from '../../messages/message-gate.js';
+import { getChannelMessagesPage } from '../../messages/message-gate.js';
 import type { ContextPacket, IProviderAdapter, LLMRequest, LLMResponse } from '../types.js';
 
 describe('E2E Agent Output & Internal Monologue Integration', () => {
@@ -90,7 +90,8 @@ describe('E2E Agent Output & Internal Monologue Integration', () => {
     expect(contentChunks.length).toBeGreaterThan(0);
 
     // Verify channel message retrieval merges monologue into the final card metadata
-    const channelMessages = await getChannelMessages(existingChannel.id, true);
+    const page = await getChannelMessagesPage(existingChannel.id, {});
+    const channelMessages = page.messages;
     const lastAgentMsg = channelMessages.filter(m => m.authorId === existingAgent.id).pop();
     
     expect(lastAgentMsg).toBeDefined();

@@ -33,7 +33,7 @@ describe('Swarm SW-1 — no mocked template strings (grep ban)', () => {
     .filter((f) => f.endsWith('.ts') && !f.endsWith('.test.ts'))
     .map((f) => path.join(swarmDir, f));
 
-  const swarmRuntimePath = path.join(serverSrc, 'runtime', 'runtimes', 'SwarmRuntime.ts');
+  const swarmRuntimePath = path.join(serverSrc, 'runtime', 'runtimes', 'swarm-runtime.ts');
   const allChecked = [...swarmFiles, swarmRuntimePath];
 
   for (const file of allChecked) {
@@ -46,16 +46,8 @@ describe('Swarm SW-1 — no mocked template strings (grep ban)', () => {
     });
   }
 
-  it('AgentSpawnManager legacy strings are retired or gated (no active mock path when SWARM_LEGACY=false)', async () => {
-    const spawnPath = path.join(serverSrc, 'Agents', 'agentSpawnManager.ts');
-    const content = readIfExists(spawnPath);
-    // Legacy file may still contain some strings but must be behind flag check
-    expect(content).toContain('SWARM_LEGACY');
-    expect(content).toContain('Legacy swarm retired');
-    // Ensure the active Swarm files themselves have no banned strings (already checked above) — this extra asserts file-level gating
-    for (const banned of bannedStrings) {
-      const swarmContent = swarmFiles.map(readIfExists).join('\n') + readIfExists(swarmRuntimePath);
-      expect(swarmContent).not.toContain(banned);
-    }
+  it('legacy AgentSpawnManager file is retired', async () => {
+    const spawnPath = path.join(serverSrc, 'agents', 'agent-spawn-manager.ts');
+    expect(fs.existsSync(spawnPath)).toBe(false);
   });
 });

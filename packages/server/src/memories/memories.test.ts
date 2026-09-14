@@ -28,7 +28,7 @@ vi.mock("../tools/safety/hardened-exec.js", () => ({
 }));
 
 vi.mock("../agents/agent-gate.js", () => ({
-  AgentSpawnManager: class {},
+  agentGate: { list: async () => [] },
 }));
 
 import { memTestStore, resetMemTestStore, tick } from "./memory-test-db.js";

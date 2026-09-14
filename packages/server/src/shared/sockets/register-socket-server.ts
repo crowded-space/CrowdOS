@@ -5,7 +5,7 @@ import os from "node:os";
 import { env } from "../config/env.js";
 
 import { EventBroker } from "../../event-broker/event-broker-gate.js";
-import { setSharedBroker } from "../../event-broker/event-broker-gate.js";
+import { getSharedBroker, setSharedBroker } from "../../event-broker/event-broker-gate.js";
 import { MentionParser } from "../core/mention-parser.js";
 import { AgentRegistry } from "../../agents/agent-gate.js";
 import { channelGate } from "../../channels/channel-gate.js";
@@ -18,7 +18,7 @@ import { composerModeToRuntime } from "../../runtime/types.js";
 import { IndexBuilder } from "../core/index-builder.js";
 import { getDb } from "../config/database.js";
 import { startHeartbeatSystem } from "../core/agent-heartbeat.js";
-import { agents, channels, categories, workspaces, runtimeOverrides, spawnRequests, durableEvents } from "../../db/schema.js";
+import { agents, channels, categories, workspaces, runtimeOverrides, durableEvents } from "../../db/schema.js";
 import { desc, gt, and, isNull, lt, sql } from "drizzle-orm";
 import type {
   SocketClientToServerEvents,
@@ -157,7 +157,7 @@ async function emitRuntimeSnapshot(target: any): Promise<void> {
     const db = getDb();
     // Column projection: snapshot maps a fixed field set — never SELECT * the
     // full rows (agents/workspaces carry wide jsonb + secret-adjacent columns).
-    const [dbWorkspaces, dbAgents, dbOverrides, activeSpawns] = await Promise.all([
+    const [dbWorkspaces, dbAgents, dbOverrides] = await Promise.all([
       db.query.workspaces.findMany({
         columns: { id: true, name: true, ownerId: true, status: true, rootPath: true, permissions: true, constraints: true, metadata: true, createdAt: true, updatedAt: true },
       }),
@@ -168,20 +168,10 @@ async function emitRuntimeSnapshot(target: any): Promise<void> {
       db.query.runtimeOverrides.findMany({
         columns: { id: true, targetAgentId: true, overrideType: true, instructionPatch: true, permissionPatch: true, createdBy: true, createdAt: true },
       }),
-      db.query.spawnRequests.findMany({
-        where: (table, { eq }) => eq(table.status, "in_progress"),
-        columns: { id: true, requestedBy: true, workerTemplateId: true, supervisorTemplateId: true, subtasks: true, createdAt: true },
-      }),
     ]);
 
-    const swarms = activeSpawns.map(spawn => ({
-      swarmId: spawn.id,
-      name: `Swarm ${spawn.id.slice(0, 8)}`,
-      status: "active" as const,
-      members: [spawn.requestedBy, spawn.workerTemplateId, spawn.supervisorTemplateId].filter(Boolean),
-      activeTasksCount: spawn.subtasks ? (spawn.subtasks as any[]).length : 0,
-      createdAt: (spawn.createdAt as Date)?.toISOString?.() ?? new Date().toISOString(),
-    }));
+    // ponytail: legacy spawn_requests retired — Swarm gate owns DAG.
+    const swarms: Array<{ swarmId: string; name: string; status: "active"; members: string[]; activeTasksCount: number; createdAt: string }> = [];
 
     // Real telemetry instead of hardcoded 42Mb (P0/P1 HQ5)
     const memUsedMb = Math.round(process.memoryUsage().heapUsed / 1024 / 1024);
@@ -435,8 +425,7 @@ export function registerSocketServer(httpServer: HttpServer, broker: EventBroker
 
   io.on("connection", (socket) => {
     // SEC-2: identity comes exclusively from the verified handshake middleware.
-    // Client-supplied userId/workspaceId claims are advisory and ignored outside
-    // SOCKET_OPEN rollback mode.
+    // Client-supplied userId/workspaceId claims are ignored.
     const identity: SocketIdentity = socket.data.identity;
 
     // Auto-join the identity's own workspace scope room only. The unconditional
@@ -452,7 +441,6 @@ export function registerSocketServer(httpServer: HttpServer, broker: EventBroker
     // channel membership/visibility model; the strongest real rule available is:
     // verified key identity + channel/workspace must exist server-side via gates.
     const canJoinChannelRoom = async (cid: string): Promise<boolean> => {
-      if (identity.mode === "open") return true;
       try {
         return Boolean(await channelGate.get(cid));
       } catch {
@@ -460,7 +448,6 @@ export function registerSocketServer(httpServer: HttpServer, broker: EventBroker
       }
     };
     const canJoinWorkspaceRoom = async (wid: string): Promise<boolean> => {
-      if (identity.mode === "open") return true;
       try {
         const ws = await getDb().query.workspaces.findFirst({ where: eq(workspaces.id, wid) });
         return Boolean(ws);
@@ -880,8 +867,11 @@ export function registerSocketServer(httpServer: HttpServer, broker: EventBroker
           const { runtimeGate } = await import("../../runtime/runtime-gate.js");
           const { agentGate } = await import("../../agents/agent-gate.js");
           // Shared instance: runtime emits fan out + persist via the bridge above.
-          const { EventBroker } = await import("../../event-broker/event-broker-gate.js");
-          const broker = globalBroker ?? new EventBroker();
+          const broker = globalBroker ?? getSharedBroker();
+          if (!broker) {
+            socket.emit("error" as any, { code: "broker_unavailable", message: "EventBroker not initialized." });
+            return;
+          }
           let agent: unknown = null;
           try {
             if (typeof (agentGate as unknown as Record<string, unknown>).getById === "function") {
@@ -990,7 +980,7 @@ export function registerSocketServer(httpServer: HttpServer, broker: EventBroker
         }
       }
       try {
-        const { approvalGate } = await import("../../approvals/approval-gate.js");
+        const { approvalGate, emitDecided } = await import("../../approvals/approval-gate.js");
         const existing = await approvalGate.getById(approvalId);
         if (!existing) {
           socket.emit("error" as any, { code: "not_found", message: `approval ${approvalId} not found` });
@@ -1012,16 +1002,16 @@ export function registerSocketServer(httpServer: HttpServer, broker: EventBroker
           const { runsGate } = await import("../../runs/runs-gate.js");
           const run = await runsGate.getById(updated.runId);
           channelIdForRun = run?.channelId;
-          broker.emit("approval.decided" as never, {
+          emitDecided(broker, {
             runId: updated.runId,
             approvalId: updated.id,
             tool: updated.toolName,
-            decision: decision as "approved" | "denied",
+            decision,
             decidedBy,
             scope: updated.scope,
             riskClass: updated.riskClass,
             channelId: channelIdForRun,
-          } as never, channelIdForRun ? { channelId: channelIdForRun } as never : undefined as never);
+          });
         } catch {}
         // APR-1: ensure run resumes even if no live poller (orphaned). Poller also transitions, so idempotent.
         try {

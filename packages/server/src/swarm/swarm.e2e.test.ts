@@ -12,13 +12,11 @@ describe('Swarm SW-1 e2e', () => {
     broker = new EventBroker();
     swarmGate.resetForTests();
     process.env.SWARM_V1 = 'true';
-    process.env.SWARM_LEGACY = 'false';
     process.env.DATABASE_URL = process.env.DATABASE_URL || 'postgresql://postgres:postgres@localhost:5432/community_agent';
   });
 
   afterEach(() => {
     process.env.SWARM_V1 = originalEnv.SWARM_V1;
-    process.env.SWARM_LEGACY = originalEnv.SWARM_LEGACY;
     vi.restoreAllMocks();
   });
 

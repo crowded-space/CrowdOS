@@ -35,11 +35,10 @@ export async function runsRoutes(app: FastifyInstance) {
       try {
         const { runtimeGate } = await import("../runtime/runtime-gate.js");
         const { agentGate } = await import("../agents/agent-gate.js");
-        // Shared instance so resume execution emits fan out + persist;
-        // fresh fallback only when unregistered (local-only, documented).
+        // ponytail: single shared instance; no orphan fallback.
         const { getSharedBroker } = await import("../event-broker/event-broker-gate.js");
-        const { EventBroker } = await import("../event-broker/event-broker-gate.js");
-        const broker = getSharedBroker() ?? new EventBroker();
+        const broker = getSharedBroker();
+        if (!broker) throw new Error("EventBroker not initialized (no shared broker registered).");
         let agent: unknown = null;
         try {
           if (typeof (agentGate as unknown as Record<string, unknown>).getById === "function") {

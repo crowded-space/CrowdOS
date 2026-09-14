@@ -38,40 +38,15 @@ export class RuntimeExecutor {
   private router = new RuntimeRouter()
   private runtimeMap?: Record<string, IRuntime>
 
-  private isResearchV1Enabled(): boolean {
-    return String(process.env.RESEARCH_V1 ?? "false").trim().toLowerCase() === "true"
-  }
-
-  private isSwarmV1Enabled(): boolean {
-    return String(process.env.SWARM_V1 ?? "false").trim().toLowerCase() === "true"
-  }
-
   private getRuntimeMap(): Record<string, IRuntime> {
     if (!this.runtimeMap) {
-      const agenticInstance = new AgenticRuntime()
-      const codingInstance = new CodingRuntime()
-      const researchEnabled = this.isResearchV1Enabled()
-      const researchRuntime: IRuntime = researchEnabled ? new ResearchRuntime() : agenticInstance
-      if (!researchEnabled) {
-        console.log("[RuntimeExecutor] RESEARCH_V1=false — research routes pinned to agentic (rollback)")
-      } else {
-        console.log("[RuntimeExecutor] RESEARCH_V1=true — research routes to ResearchRuntime")
-      }
+      // ponytail: pin-once in RuntimeRouter — executor trusts resolvedType, no flag checks here.
       this.runtimeMap = {
         conversational: new ConversationalRuntime(),
-        agentic: agenticInstance,
-        coding: codingInstance,
-        research: researchRuntime,
+        agentic: new AgenticRuntime(),
+        coding: new CodingRuntime(),
+        research: new ResearchRuntime(),
         swarm: new SwarmRuntime(),
-      }
-    } else {
-      // Re-evaluate flag at call time for hot reload in tests: if flag flipped after
-      // construction, swap the mapping without rebuilding the whole map.
-      const researchEnabled = this.isResearchV1Enabled()
-      const currentIsResearch = this.runtimeMap["research"] instanceof ResearchRuntime
-      if (researchEnabled !== currentIsResearch) {
-        const agenticInstance = this.runtimeMap["agentic"]
-        this.runtimeMap["research"] = researchEnabled ? new ResearchRuntime() : agenticInstance
       }
     }
     return this.runtimeMap
@@ -91,15 +66,6 @@ export class RuntimeExecutor {
       })
 
       let resolvedType = runtimeType
-      // RT-1 rollback: RESEARCH_V1=false pins research→agentic at executor layer too (belt+braces)
-      if (resolvedType === "research" && !this.isResearchV1Enabled()) {
-        console.log("[RuntimeExecutor] RESEARCH_V1=false — pinning runtime research->agentic (rollback at executor)")
-        resolvedType = "agentic"
-      }
-      if (resolvedType === "swarm" && !this.isSwarmV1Enabled()) {
-        console.log("[RuntimeExecutor] SWARM_V1=false — pinning runtime swarm->agentic (rollback at executor)")
-        resolvedType = "agentic"
-      }
       const runtimes = this.getRuntimeMap()
       let runtime = runtimes[resolvedType]
       if (!runtime) {

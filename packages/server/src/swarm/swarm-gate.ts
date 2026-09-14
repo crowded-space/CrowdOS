@@ -5,7 +5,7 @@ import type { WorkerExecutor } from "./swarm-dispatcher.js";
 import { aggregateSwarmOutputs } from "./swarm-aggregator.js";
 import { verifySwarm } from "./swarm-verifier.js";
 import type { SwarmPlan, SwarmPlanTask, SwarmTaskRow, SwarmTaskStatus, SwarmWorkerResult, SwarmAggregationResult, SwarmVerificationResult, SwarmReport } from "./swarm-types.js";
-import { isSwarmV1Enabled, isSwarmLegacyEnabled } from "./swarm-types.js";
+import { isSwarmV1Enabled } from "./swarm-types.js";
 import {
   createDelegation,
   getDelegationByChild,
@@ -36,7 +36,6 @@ export { DelegationRejectedError };
 
 export const swarmGate = {
   isV1Enabled: isSwarmV1Enabled,
-  isLegacyEnabled: isSwarmLegacyEnabled,
 
   // Repository
   createTasks: createSwarmTasks,

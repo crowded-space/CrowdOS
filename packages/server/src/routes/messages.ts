@@ -12,7 +12,6 @@ export async function messageRoutes(app: FastifyInstance) {
   // GET /api/channels/:channelId/messages
   // PERF-5 keyset pagination: cursor = (timestamp, seq) pair, transparent format `before=<ISO>;<seq>`.
   // Returns newest page first (ORDER BY timestamp DESC, seq DESC) + cursor for the next-older page.
-  // Legacy rollback: absent params return the latest 50; ?limit=N is honored (clamped 1..200).
   app.get<{ Params: GetMessagesParams; Querystring: GetMessagesQuery }>(
     "/api/channels/:channelId/messages",
     {
@@ -23,9 +22,9 @@ export async function messageRoutes(app: FastifyInstance) {
     },
     async (request, reply) => {
       const { channelId } = request.params;
-      const { includeMonologue, before, limit } = request.query;
+      const { before, limit } = request.query;
       try {
-        return await getChannelMessagesPage(channelId, includeMonologue ?? false, {
+        return await getChannelMessagesPage(channelId, {
           limit,
           before: parseBeforeCursor(before),
           db: (request as any).db,

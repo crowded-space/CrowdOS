@@ -112,7 +112,6 @@ describe("PERF-8 · static classifier", () => {
     expect(classifyToolEffect("delete_file", toolRegistry.get("delete_file"))).toBe("write");
     expect(classifyToolEffect("remember", toolRegistry.get("remember"))).toBe("write");
     expect(classifyToolEffect("execute_bash", toolRegistry.get("execute_bash"))).toBe("side-effect");
-    expect(classifyToolEffect("dispatch_agent", toolRegistry.get("dispatch_agent"))).toBe("side-effect");
     expect(classifyToolEffect("totally_unknown_tool")).toBe("write");
   });
 

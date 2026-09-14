@@ -33,7 +33,3 @@ export interface FsBrowseEntry {
   isFile: boolean;
   path: string;
 }
-
-export interface PickFolderOptions {
-  initialPath?: string | null;
-}

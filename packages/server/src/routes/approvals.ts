@@ -1,6 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { authGate } from "../shared/auth/auth-gate.js";
-import { approvalGate } from "../approvals/approval-gate.js";
+import { approvalGate, emitDecided } from "../approvals/approval-gate.js";
 import { runsGate } from "../runs/runs-gate.js";
 
 export async function approvalsRoutes(app: FastifyInstance) {
@@ -49,8 +49,6 @@ export async function approvalsRoutes(app: FastifyInstance) {
     // Emit approval.decided for observers + transition run if waiting
     let channelIdForRun: string | undefined;
     try {
-      // Shared instance for room fan-out + durability; warn-and-skip when
-      // unregistered instead of emitting on a fresh broker that reaches nobody.
       const { getSharedBroker } = await import("../event-broker/event-broker-gate.js");
       let emitBroker: { emit: (t: string, p: unknown, o?: unknown) => void } | null = null;
       try {
@@ -58,22 +56,18 @@ export async function approvalsRoutes(app: FastifyInstance) {
         emitBroker = (globalBroker as unknown as { emit: (t: string, p: unknown, o?: unknown) => void }) ?? null;
       } catch {}
       const targetBroker = emitBroker ?? (getSharedBroker() as unknown as { emit: (t: string, p: unknown, o?: unknown) => void } | null);
-      if (!targetBroker) {
-        console.warn("[approvals] dropped approval.decided: no shared broker registered");
-      } else {
-      const payload = {
+      const run = await runsGate.getById(updated.runId);
+      channelIdForRun = run?.channelId;
+      emitDecided(targetBroker, {
         runId: updated.runId,
         approvalId: updated.id,
         tool: updated.toolName,
-        decision: decision as "approved" | "denied",
+        decision,
         decidedBy,
         scope: updated.scope,
         riskClass: updated.riskClass,
-      };
-      const run = await runsGate.getById(updated.runId);
-      channelIdForRun = run?.channelId;
-      (targetBroker as unknown as { emit: (t: string, p: unknown, o?: unknown) => void }).emit("approval.decided" as never, payload as never, channelIdForRun ? { channelId: channelIdForRun } as never : undefined as never);
-      }
+        channelId: channelIdForRun,
+      });
     } catch {}
 
     // APR-1 policy: run continues after decision (does not cancel). If the run

@@ -76,16 +76,6 @@ describe("channelMountGate & Native OS Mounts", () => {
     });
   });
 
-  describe("pickNative", () => {
-    it("handles pickNative gracefully with initialPath option", async () => {
-      const pickSpy = vi.spyOn(channelMountGate, "pickNative").mockResolvedValue({ path: process.cwd(), canceled: false });
-      const res = await channelMountGate.pickNative({ initialPath: process.cwd() });
-      expect(res.canceled).toBe(false);
-      expect(res.path).toBe(process.cwd());
-      pickSpy.mockRestore();
-    });
-  });
-
   describe("Workspace mount functions", () => {
     it("resolveWorkspace returns none when workspace not found", async () => {
       const res = await channelMountGate.resolveWorkspace("non-existent-workspace-id");

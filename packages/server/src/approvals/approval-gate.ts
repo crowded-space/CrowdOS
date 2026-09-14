@@ -55,3 +55,34 @@ export const approvalGate = {
   mapRisk: mapVerdictToRiskClass,
   argsPreview: argsPreviewFromCommand,
 };
+
+export type ApprovalDecidedPayload = {
+  runId: string;
+  approvalId: string;
+  tool: string;
+  decision: "approved" | "denied" | "expired";
+  decidedBy: string | null;
+  scope?: string | null;
+  riskClass?: string;
+  channelId?: string;
+  workspaceId?: string;
+  autoApproved?: boolean;
+};
+
+// ponytail: single emit — sweeper + REST/socket + executor share one shape, warn-and-skip when unregistered.
+export function emitDecided(
+  broker: any,
+  payload: ApprovalDecidedPayload,
+): void {
+  if (!broker || typeof broker.emit !== "function") {
+    console.warn("[approvals] dropped approval.decided: no shared broker registered");
+    return;
+  }
+  try {
+    broker.emit(
+      "approval.decided" as never,
+      payload as never,
+      payload.channelId ? ({ channelId: payload.channelId } as never) : (undefined as never),
+    );
+  } catch {}
+}

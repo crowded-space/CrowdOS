@@ -1,14 +1,3 @@
-import { WorkspaceManager } from "./workspace-manager.js";
-import {
-  PermissionError,
-  WorkspaceNotActiveError,
-  assertWorkspaceActive,
-  assertPermission,
-  assertCanRead,
-  assertCanWrite,
-  assertCanExecute,
-  validateAgentAccess,
-} from "./permission-guard.js";
 import {
   getWorkspaceDb,
   closeWorkspaceDatabase,
@@ -47,7 +36,6 @@ import {
 export type {
   WorkspaceStatus,
   WorkspaceScope,
-  ArtifactType,
   WorkspaceNodeType,
   WorkspacePermissions,
   RuntimeConstraints,
@@ -57,10 +45,8 @@ export type {
   WorkspaceEvent,
   WorkspaceEventType,
   WorkspaceAgentSession,
-  Artifact,
   CreateWorkspaceInput,
   MountAgentInput,
-  RegisterArtifactInput,
   ScreenLockStatus,
 } from "./workspace-types.js";
 
@@ -70,15 +56,6 @@ export type {
 } from "./workspace-registry.js";
 
 export {
-  WorkspaceManager,
-  PermissionError,
-  WorkspaceNotActiveError,
-  assertWorkspaceActive,
-  assertPermission,
-  assertCanRead,
-  assertCanWrite,
-  assertCanExecute,
-  validateAgentAccess,
   getWorkspaceDb,
   closeWorkspaceDatabase,
   closeAllWorkspaceDatabases,

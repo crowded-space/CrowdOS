@@ -8,9 +8,10 @@ let maintenanceConn: InstanceType<typeof IORedis> | null = null;
 
 async function handleLibrarianDelta(): Promise<void> {
   try {
-    const [{ EventBroker, getSharedBroker }] = await Promise.all([import("../event-broker/event-broker-gate.js")]);
-    // Worker-local by design (no socket server in this process); shared when set at boot.
-    const broker = (getSharedBroker as () => InstanceType<typeof EventBroker> | null)?.() ?? new EventBroker();
+    const [{ getSharedBroker }] = await Promise.all([import("../event-broker/event-broker-gate.js")]);
+    // ponytail: single shared instance; no orphan fallback.
+    const broker = (getSharedBroker as () => unknown | null)?.();
+    if (!broker) throw new Error("EventBroker not initialized (no shared broker registered).");
     const mod = await import("../shared/core/index-builder.js");
     const builder = (mod as unknown as { IndexBuilder: { reindexStaleChannels: (b: unknown) => Promise<void> } }).IndexBuilder;
     await builder.reindexStaleChannels(broker);
@@ -39,9 +40,10 @@ async function handleHeartbeatTouch(): Promise<void> {
 
 async function handleOrphanSweep(): Promise<void> {
   try {
-    const [{ EventBroker, getSharedBroker }] = await Promise.all([import("../event-broker/event-broker-gate.js")]);
-    // Worker-local by design (no socket server in this process); shared when set at boot.
-    const broker = (getSharedBroker as () => InstanceType<typeof EventBroker> | null)?.() ?? new EventBroker();
+    const [{ getSharedBroker }] = await Promise.all([import("../event-broker/event-broker-gate.js")]);
+    // ponytail: single shared instance; no orphan fallback.
+    const broker = (getSharedBroker as () => unknown | null)?.();
+    if (!broker) throw new Error("EventBroker not initialized (no shared broker registered).");
     const mod = await import("../shared/core/agent-heartbeat.js");
     const fn = (mod as Record<string, unknown>).sweepOrphans as
       | ((b: unknown) => Promise<void>)
@@ -55,9 +57,10 @@ async function handleOrphanSweep(): Promise<void> {
 
 async function handleOrphanResume(): Promise<void> {
   try {
-    const [{ EventBroker, getSharedBroker }] = await Promise.all([import("../event-broker/event-broker-gate.js")]);
-    // Worker-local by design (no socket server in this process); shared when set at boot.
-    const broker = (getSharedBroker as () => InstanceType<typeof EventBroker> | null)?.() ?? new EventBroker();
+    const [{ getSharedBroker }] = await Promise.all([import("../event-broker/event-broker-gate.js")]);
+    // ponytail: single shared instance; no orphan fallback.
+    const broker = (getSharedBroker as () => unknown | null)?.();
+    if (!broker) throw new Error("EventBroker not initialized (no shared broker registered).");
     const { runsGate } = await import("../runs/runs-gate.js");
     const fn = (runsGate as unknown as { sweepOrphanedRuns: (b: unknown) => Promise<number> }).sweepOrphanedRuns;
     if (typeof fn === "function") await fn(broker);
@@ -89,18 +92,6 @@ async function handleSuppressExpiry(): Promise<void> {
 
 async function handleRetention(): Promise<void> {
   try {
-    const spawnMod = await import("../agents/agent-gate.js");
-    const fn =
-      ((spawnMod as Record<string, unknown>).runSpawnRetentionSweep as
-        | (() => Promise<void>)
-        | undefined) ||
-      ((spawnMod as Record<string, unknown>).agentGate as unknown as { runRetention?: () => Promise<void> })?.runRetention;
-    if (typeof fn === "function") await fn();
-  } catch (err) {
-    console.error("[maintenance:retention] failed", (err as Error)?.message || err);
-    throw err;
-  }
-  try {
     const tok = await import("../shared/core/token-tracker.js");
     const fn = (tok as Record<string, unknown>).reconcileBudgetUsage as
       | (() => Promise<void>)
@@ -115,9 +106,10 @@ async function handleRetention(): Promise<void> {
 async function handleApprovalExpire(): Promise<void> {
   try {
     const { sweepApprovalsOnce } = await import("../approvals/approval-sweeper.js");
-    const { EventBroker, getSharedBroker } = await import("../event-broker/event-broker-gate.js");
-    // Worker-local by design (no socket server in this process); shared when set at boot.
-    const broker = (getSharedBroker as () => InstanceType<typeof EventBroker> | null)?.() ?? new EventBroker();
+    const { getSharedBroker } = await import("../event-broker/event-broker-gate.js");
+    // ponytail: single shared instance; no orphan fallback.
+    const broker = (getSharedBroker as () => unknown | null)?.();
+    if (!broker) throw new Error("EventBroker not initialized (no shared broker registered).");
     await sweepApprovalsOnce(broker);
   } catch (err) {
     console.error("[maintenance:approval-expire] failed", (err as Error)?.message || err);
@@ -127,10 +119,13 @@ async function handleApprovalExpire(): Promise<void> {
 
 async function handleSnapshotFull(): Promise<void> {
   try {
-    const [{ EventBroker, getSharedBroker }] = await Promise.all([import("../event-broker/event-broker-gate.js")]);
-    // Worker-local by design: runtime:snapshot here reaches no socket;
-    // shared when set at boot (same-process API), fresh otherwise.
-    const broker = (getSharedBroker as () => InstanceType<typeof EventBroker> | null)?.() ?? new EventBroker();
+    const [{ getSharedBroker }] = await Promise.all([import("../event-broker/event-broker-gate.js")]);
+    // ponytail: single shared instance; warn-and-skip snapshot emit when unregistered.
+    const broker = (getSharedBroker as () => { emit: (t: string, p: unknown) => void } | null)?.();
+    if (!broker) {
+      console.warn("[maintenance:snapshot-full] dropped runtime:snapshot: no shared broker registered");
+      return;
+    }
     const dbMod = await import("../shared/config/database.js");
     const getDb = (dbMod as Record<string, unknown>).getDb as () => unknown;
     let db: unknown = null;
@@ -139,16 +134,15 @@ async function handleSnapshotFull(): Promise<void> {
     } catch {}
     if (!db) return;
     const schemaMod = await import("../db/schema.js");
-    const { agents, workspaces, runtimeOverrides, spawnRequests } = schemaMod as Record<string, unknown>;
+    const { agents, workspaces, runtimeOverrides } = schemaMod as Record<string, unknown>;
     try {
       const anyDb = db as {
         query: Record<string, { findMany: (opts?: unknown) => Promise<unknown[]> }>;
       };
-      const [dbWorkspaces, dbAgents, dbOverrides, activeSpawns] = await Promise.all([
+      const [dbWorkspaces, dbAgents, dbOverrides] = await Promise.all([
         anyDb.query.workspaces.findMany().catch(() => []),
         anyDb.query.agents.findMany({}).catch(() => []),
         anyDb.query.runtimeOverrides.findMany().catch(() => []),
-        anyDb.query.spawnRequests.findMany({}).catch(() => []),
       ]);
       const snapshot = {
         workspaces: (dbWorkspaces as Array<Record<string, unknown>>).map((ws) => ({
@@ -180,20 +174,8 @@ async function handleSnapshotFull(): Promise<void> {
             createdAt: (ag.createdAt as Date)?.toISOString?.() ?? new Date().toISOString(),
             updatedAt: (ag.updatedAt as Date)?.toISOString?.() ?? new Date().toISOString(),
           })),
-        swarms: (activeSpawns as Array<Record<string, unknown>>)
-          .filter((s) => (s as { status?: string }).status === "in_progress")
-          .map((spawn) => ({
-            swarmId: spawn.id,
-            name: `Swarm ${(spawn.id as string).slice(0, 8)}`,
-            status: "active" as const,
-            members: [
-              spawn.requestedBy,
-              (spawn as { workerTemplateId?: string }).workerTemplateId,
-              (spawn as { supervisorTemplateId?: string }).supervisorTemplateId,
-            ].filter(Boolean),
-            activeTasksCount: Array.isArray(spawn.subtasks) ? (spawn.subtasks as unknown[]).length : 0,
-            createdAt: (spawn.createdAt as Date)?.toISOString?.() ?? new Date().toISOString(),
-          })),
+        // ponytail: legacy spawn_requests retired — Swarm gate owns DAG, snapshot omits swarms.
+        swarms: [],
         escalations: [],
         sandboxes: (dbWorkspaces as Array<Record<string, unknown>>).map((ws) => ({
           sandboxId: `sb-${ws.id}`,

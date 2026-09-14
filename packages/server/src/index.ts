@@ -17,7 +17,6 @@ import { LocalVFS } from "./vfs/vfs-gate.js";
 import * as path from "node:path";
 import { authGate } from "./shared/auth/auth-gate.js";
 import { seedBootstrapAdminKey } from "./shared/auth/api-key-service.js";
-import { startSpawnRetentionSweeper } from "./agents/agent-gate.js";
 import { startBudgetReconciler } from "./shared/core/token-tracker.js";
 import { initConfig } from "./shared/config/env.js";
 
@@ -115,7 +114,6 @@ initRuntime();
 const queueMode = (process.env.QUEUE_MODE ?? "inline").trim().toLowerCase();
 const isBullMqApi = queueMode === "bullmq";
 if (!isBullMqApi) {
-  startSpawnRetentionSweeper();
   startBudgetReconciler();
   try {
     const { runsGate } = await import("./runs/runs-gate.js");

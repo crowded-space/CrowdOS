@@ -6,8 +6,7 @@ import { logMetric } from "../shared/core/structured-log.js";
  * SCL-3: OTel + cost ledger — lightweight tracing facade.
  *
  * Provides OTel-compatible spans keyed by runId without forcing the full
- * OTel SDK as a hard dependency. When `OTEL_ENABLED=true` and
- * `OTEL_EXPORTER_OTLP_ENDPOINT` is configured, the SDK is dynamically
+ * OTel SDK as a hard dependency. When `OTEL_ENABLED=true`, the SDK is dynamically
  * imported and used as the primary tracer; otherwise an in-memory store
  * backs trace reconstruction for tests and the `/observability` APIs.
  *
@@ -43,6 +42,7 @@ export interface StartSpanOptions {
 }
 
 // In-memory store: runId -> spans[]
+// ponytail: store caps stay local (spans/run vs runs); API row limits use cost-ledger one limit.
 const traceStore = new Map<string, TraceSpan[]>();
 const spanById = new Map<string, TraceSpan>();
 const MAX_SPANS_PER_RUN = 500;
@@ -126,27 +126,19 @@ export function endSpan(span: TraceSpan, opts: { error?: unknown; attributes?: R
     ...span.attributes,
   } as unknown as Parameters<typeof logMetric>[0]);
 
-  // Store for reconstruction
-  if (span.runId) {
-    let arr = traceStore.get(span.runId);
-    if (!arr) {
-      if (traceStore.size >= MAX_RUNS) {
-        const firstKey = traceStore.keys().next().value as string | undefined;
-        if (firstKey) traceStore.delete(firstKey);
-      }
-      arr = [];
-      traceStore.set(span.runId, arr);
+  // Store for reconstruction — runId only; no synthetic __global bucket (budget ledger owns __global).
+  if (!span.runId) return span;
+  let arr = traceStore.get(span.runId);
+  if (!arr) {
+    if (traceStore.size >= MAX_RUNS) {
+      const firstKey = traceStore.keys().next().value as string | undefined;
+      if (firstKey) traceStore.delete(firstKey);
     }
-    if (arr.length >= MAX_SPANS_PER_RUN) arr.shift();
-    arr.push({ ...span });
-  } else {
-    // also store under synthetic key for global queries
-    const globalKey = "__global";
-    let arr = traceStore.get(globalKey);
-    if (!arr) { arr = []; traceStore.set(globalKey, arr); }
-    if (arr.length >= MAX_SPANS_PER_RUN) arr.shift();
-    arr.push({ ...span });
+    arr = [];
+    traceStore.set(span.runId, arr);
   }
+  if (arr.length >= MAX_SPANS_PER_RUN) arr.shift();
+  arr.push({ ...span });
 
   // Close OTel span if present
   const otelSpan = (span as unknown as Record<string, unknown>).__otelSpan as any;
@@ -199,7 +191,6 @@ export function getTrace(runId: string): TraceSpan[] {
 export function getAllTraces(limit = 100): Array<{ runId: string; spans: TraceSpan[] }> {
   const out: Array<{ runId: string; spans: TraceSpan[] }> = [];
   for (const [runId, spans] of traceStore) {
-    if (runId === "__global") continue;
     out.push({ runId, spans: [...spans] });
     if (out.length >= limit) break;
   }

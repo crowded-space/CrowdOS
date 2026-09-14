@@ -3,7 +3,6 @@ import path from "node:path";
 import { eq, isNull, sql } from "drizzle-orm";
 import { Guard } from "./safety/guard.js";
 import { execHardened } from "./safety/hardened-exec.js";
-import { AgentSpawnManager } from "../agents/agent-gate.js";
 import { messageGate } from "../messages/message-gate.js";
 import { globalBroker } from "../shared/sockets/register-socket-server.js";
 import { getDb } from "../shared/config/database.js";
@@ -84,15 +83,12 @@ async function honestSchedulerEmit(
 ): Promise<void> {
   const effectiveChannelId = channelId || "general";
   const content = message || `⏰ Scheduled task: ${task}`;
-  let brokerInst: InstanceType<typeof import("../event-broker/event-broker-gate.js").EventBroker> | null = null;
-  try {
-    const { EventBroker, getSharedBroker } = await import("../event-broker/event-broker-gate.js");
-    // Prefer the live socket broker so room fan-out works; shared holder first,
-    // then the legacy global, then an isolated local instance (documented).
-    brokerInst = (getSharedBroker() as unknown as typeof brokerInst) ?? (globalBroker as unknown as typeof brokerInst) ?? new EventBroker();
-  } catch {
-    const { EventBroker } = await import("../event-broker/event-broker-gate.js");
-    brokerInst = new EventBroker() as unknown as InstanceType<typeof EventBroker>;
+  const { getSharedBroker } = await import("../event-broker/event-broker-gate.js");
+  // ponytail: single shared instance — no orphan new EventBroker(), warn-and-skip when unregistered.
+  const brokerInst = (getSharedBroker() as unknown as { emit: (t: string, p: unknown, o?: unknown) => void } | null) ?? (globalBroker as unknown as { emit: (t: string, p: unknown, o?: unknown) => void } | null);
+  if (!brokerInst) {
+    console.warn("[scheduler] dropped scheduled emit: no shared broker registered");
+    return;
   }
   try {
     const persisted = await messageGate.append(
@@ -248,6 +244,41 @@ export class ToolRegistry {
       }
     });
 
+    // 2b. Filesystem: edit_file — precision search-and-replace (coding-runtime patches richer impl).
+    this.register({
+      id: "edit_file",
+      name: "edit_file",
+      displayName: "Edit File",
+      description: "Performs a search-and-replace edit on an existing workspace file.",
+      category: "filesystem",
+      sourceType: "native",
+      parameters: {
+        type: "object",
+        properties: {
+          path: { type: "string", description: "Target file path relative to workspace" },
+          targetContent: { type: "string", description: "Exact string to replace" },
+          replacementContent: { type: "string", description: "Replacement content" }
+        },
+        required: ["path", "targetContent", "replacementContent"]
+      },
+      dangerLevel: "moderate",
+      authLevelRequired: 3,
+      handler: async (args, ctx) => {
+        try {
+          const resolved = await Guard.validatePath(args.path, ctx?.workspaceId);
+          const original = await fs.readFile(resolved, "utf8");
+          if (!original.includes(String(args.targetContent))) {
+            return { success: false, output: "", error: `Target content not found in ${args.path}` };
+          }
+          const updated = original.replace(String(args.targetContent), String(args.replacementContent));
+          await fs.writeFile(resolved, updated, "utf8");
+          return { success: true, output: `Edited ${args.path}` };
+        } catch (err: any) {
+          return { success: false, output: "", error: err.message || String(err) };
+        }
+      }
+    });
+
     // 3. Filesystem: list_directory
     this.register({
       id: "list_directory",
@@ -390,12 +421,12 @@ export class ToolRegistry {
       }
     });
 
-    // 7. Search: web_search
+    // 7. Search: web_search — real fan-out via searchProviderGate (brave/tavily/serper).
     this.register({
       id: "web_search",
       name: "web_search",
       displayName: "Web Search",
-      description: "Retrieves internet search results for specialized telemetry.",
+      description: "Searches the web via configured providers (brave/tavily/serper).",
       category: "search",
       sourceType: "native",
       parameters: {
@@ -408,10 +439,15 @@ export class ToolRegistry {
       dangerLevel: "safe",
       authLevelRequired: 3,
       handler: async (args) => {
-        const mockResults = [
-          { title: `Search result for ${args.query}`, snippet: "CrowdOS multi-agent orchestrator documentation and references." }
-        ];
-        return { success: true, output: JSON.stringify(mockResults) };
+        try {
+          const { searchProviderGate } = await import("../search-providers/search-provider-gate.js");
+          const query = String(args?.query ?? "").trim();
+          if (!query) throw new Error("query is required.");
+          const results = await searchProviderGate.search(query, { limit: 8 });
+          return { success: true, output: JSON.stringify(results) };
+        } catch (err: unknown) {
+          return { success: false, output: "", error: err instanceof Error ? err.message : String(err) };
+        }
       }
     });
 
@@ -655,134 +691,6 @@ export class ToolRegistry {
     } else {
       console.warn("[tools] system_scheduler disabled via SYSTEM_SCHEDULER_ENABLED=false — tool not registered (honest unregister fallback).");
     }
-
-    // 10. Multi-Agent spawning: dispatch_agent
-    this.register({
-      id: "dispatch_agent",
-      name: "dispatch_agent",
-      displayName: "Dispatch Agent",
-      description: "Spawns a parallel L3 Worker-Supervisor pair to execute subtasks.",
-      category: "swarm",
-      sourceType: "native",
-      parameters: {
-        type: "object",
-        properties: {
-          workerTemplateId: { type: "string" },
-          supervisorTemplateId: { type: "string" },
-          subtasks: {
-            type: "array",
-            items: {
-              type: "object",
-              properties: {
-                id: { type: "string" },
-                title: { type: "string" },
-                instructions: { type: "string" },
-                priority: { type: "string", enum: ["high", "medium", "low"] }
-              },
-              required: ["id", "title", "instructions", "priority"]
-            }
-          },
-          failurePolicy: { type: "string", enum: ["retry", "escalate"] },
-          maxRetries: { type: "integer" },
-          channelId: { type: "string" },
-          requestedBy: { type: "string" }
-        },
-        required: ["workerTemplateId", "supervisorTemplateId", "subtasks", "failurePolicy", "maxRetries"]
-      },
-      dangerLevel: "moderate",
-      authLevelRequired: 2,
-      handler: async (args, ctx) => {
-        try {
-          const db = getDb();
-          let channelId = args.channelId || ctx?.channelId;
-          if (!channelId) {
-            const firstCh = await db.query.channels.findFirst();
-            channelId = firstCh?.id || "general";
-          }
-          let requestedBy = args.requestedBy || ctx?.agentId;
-          if (!requestedBy) {
-            const firstAgent = await db.query.agents.findFirst({
-              where: eq(agents.isTemplate, false),
-            });
-            requestedBy = firstAgent?.id || "agent-l1";
-          }
-
-          if (!globalBroker) {
-            throw new Error("EventBroker not initialized.");
-          }
-
-          // SW-2 delegation contracts: central dispatcher gate for generic sub-agent calls
-          const parentRunIdForDelegation = (ctx as unknown as { runId?: string })?.runId ?? null;
-          const brokerForDelegation = ((ctx as unknown as { broker?: unknown })?.broker as typeof globalBroker) ?? globalBroker;
-          const workspaceIdForDelegation = (ctx as unknown as { workspaceId?: string })?.workspaceId ?? "default";
-          let delegatedChildRunId: string | null = null;
-          if (parentRunIdForDelegation) {
-            try {
-              const { swarmGate: swarmGateForDelegation } = await import("../swarm/swarm-gate.js");
-              const { randomUUID: uuid } = await import("node:crypto");
-              delegatedChildRunId = `run_${uuid().slice(0, 8)}_${Date.now().toString(36)}`;
-              await swarmGateForDelegation.delegate({
-                parentRunId: String(parentRunIdForDelegation),
-                childRunId: delegatedChildRunId,
-                taskId: (args.subtasks as Array<{ id?: string }>)?.[0]?.id ?? "dispatch_agent",
-                broker: brokerForDelegation as never,
-                workspaceId: workspaceIdForDelegation,
-                producerAgent: requestedBy,
-              });
-            } catch (err: unknown) {
-              const maybe = err as { name?: string; code?: string; message?: string };
-              if (maybe?.name === "DelegationRejectedError" || maybe?.code === "cycle" || maybe?.code === "depth") {
-                return { success: false, output: "", error: maybe?.message ?? String(err) };
-              }
-              console.warn("[dispatch_agent] delegation gate pre-check failed, proceeding without guard:", (err as Error)?.message || err);
-              delegatedChildRunId = null;
-            }
-          }
-
-          const report = await AgentSpawnManager.dispatchAgent(globalBroker, requestedBy, channelId, {
-            workerTemplateId: args.workerTemplateId,
-            supervisorTemplateId: args.supervisorTemplateId,
-            subtasks: args.subtasks,
-            failurePolicy: args.failurePolicy || "retry",
-            maxRetries: args.maxRetries ?? 3,
-          });
-
-          const reportJson = JSON.stringify(report);
-
-          // SW-2: child result summarized (≤500 tokens) + artifact pointer; parent context grows ≤ summary size
-          if (parentRunIdForDelegation && delegatedChildRunId) {
-            try {
-              const { swarmGate: swarmGateForComplete } = await import("../swarm/swarm-gate.js");
-              const { summary } = await swarmGateForComplete.completeDelegation({
-                parentRunId: String(parentRunIdForDelegation),
-                childRunId: delegatedChildRunId,
-                fullOutput: reportJson,
-                broker: brokerForDelegation as never,
-                workspaceId: workspaceIdForDelegation,
-                producerAgent: requestedBy,
-              });
-              return {
-                success: report.status === "completed",
-                output: summary,
-              };
-            } catch (err) {
-              console.warn("[dispatch_agent] completeDelegation failed:", (err as Error)?.message || err);
-            }
-          }
-
-          return {
-            success: report.status === "completed",
-            output: reportJson,
-          };
-        } catch (err: any) {
-          return {
-            success: false,
-            output: "",
-            error: err.message || String(err),
-          };
-        }
-      }
-    });
 
     // 11. Omniscient Search: search_all_channels
     this.register({

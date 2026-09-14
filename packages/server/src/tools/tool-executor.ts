@@ -30,7 +30,6 @@ const STATIC_TOOL_EFFECT_CLASSES: Record<string, ToolEffectClass> = {
   lock_out: "write",
   execute_bash: "side-effect",
   execute_safe: "side-effect",
-  dispatch_agent: "side-effect",
   system_scheduler: "side-effect",
 };
 
@@ -232,25 +231,15 @@ export class ToolExecutor {
               });
               // Emit audit events for the auto-approved path (fire-and-forget)
               try {
-                const broker = (partialCtx as unknown as { broker?: unknown })?.broker as { emit?: (t: string, p: unknown, o?: unknown) => void } | undefined;
-                const emitVia = broker ?? (await import("../shared/sockets/register-socket-server.js").then(m => (m as unknown as { globalBroker?: { emit: (t: string, p: unknown, o?: unknown) => void } }).globalBroker).catch(() => null));
+                const { emitDecided } = await import("../approvals/approval-gate.js");
+                const { getSharedBroker } = await import("../event-broker/event-broker-gate.js");
+                const { globalBroker } = await import("../shared/sockets/register-socket-server.js").catch(() => ({ globalBroker: null }));
+                const emitVia = ((partialCtx as unknown as { broker?: unknown })?.broker as { emit: (t: string, p: unknown, o?: unknown) => void } | undefined) ?? (globalBroker as unknown as { emit: (t: string, p: unknown, o?: unknown) => void } | null) ?? (getSharedBroker() as unknown as { emit: (t: string, p: unknown, o?: unknown) => void } | null);
                 const payloadRequested = { runId, approvalId: autoRow.id, tool: toolId, argsPreview, riskClass, scope: scopeHash, autoApproved: true };
-                const payloadDecided = { runId, approvalId: autoRow.id, tool: toolId, decision: "approved" as const, decidedBy: autoRow.decidedBy, scope: scopeHash, autoApproved: true };
-                if (emitVia && typeof (emitVia as { emit?: unknown }).emit === "function") {
-                  (emitVia as { emit: (t: string, p: unknown, o?: unknown) => void }).emit("approval.requested" as never, payloadRequested as never, { channelId: channelIdForEvent } as never);
-                  (emitVia as { emit: (t: string, p: unknown, o?: unknown) => void }).emit("approval.decided" as never, payloadDecided as never, { channelId: channelIdForEvent } as never);
-                } else {
-                  // Shared instance: a fresh EventBroker would reach no subscriber
-                  // (durability + fan-out attach only to the socket server's one).
-                  const { getSharedBroker } = await import("../event-broker/event-broker-gate.js");
-                  const shared = getSharedBroker() as unknown as { emit: (t: string, p: unknown, o?: unknown) => void } | null;
-                  if (shared && typeof shared.emit === "function") {
-                    shared.emit("approval.requested" as never, payloadRequested as never, { channelId: channelIdForEvent } as never);
-                    shared.emit("approval.decided" as never, payloadDecided as never, { channelId: channelIdForEvent } as never);
-                  } else {
-                    console.warn("[ToolExecutor] dropped approval.requested/decided: no shared broker registered");
-                  }
-                }
+                try {
+                  (emitVia as { emit?: (t: string, p: unknown, o?: unknown) => void } | null)?.emit?.("approval.requested" as never, payloadRequested as never, { channelId: channelIdForEvent } as never);
+                } catch {}
+                emitDecided(emitVia, { runId, approvalId: autoRow.id, tool: toolId, decision: "approved", decidedBy: autoRow.decidedBy, scope: scopeHash, autoApproved: true, channelId: channelIdForEvent });
               } catch {}
               // Fall through to handler execution — approval granted via reusable grant
             } catch (e) {
@@ -285,25 +274,14 @@ export class ToolExecutor {
 
             // Emit approval.requested (room-scoped)
             try {
-              const broker = (partialCtx as unknown as { broker?: unknown })?.broker as { emit?: (t: string, p: unknown, o?: unknown) => void } | undefined;
+              const { getSharedBroker } = await import("../event-broker/event-broker-gate.js");
+              const { globalBroker } = await import("../shared/sockets/register-socket-server.js").catch(() => ({ globalBroker: null }));
+              const emitVia = ((partialCtx as unknown as { broker?: unknown })?.broker as { emit?: (t: string, p: unknown, o?: unknown) => void } | undefined) ?? (globalBroker as unknown as { emit?: (t: string, p: unknown, o?: unknown) => void } | null) ?? (getSharedBroker() as unknown as { emit?: (t: string, p: unknown, o?: unknown) => void } | null);
               const payload = { runId, approvalId: pendingRow.id, tool: toolId, argsPreview, riskClass, scope: scopeHash, requestedBy, expiresAt: expiresAt.toISOString(), workspaceId: workspaceIdForEvent };
-              if (broker && typeof broker.emit === "function") {
-                broker.emit("approval.requested" as never, payload as never, { channelId: channelIdForEvent } as never);
+              if (emitVia && typeof emitVia.emit === "function") {
+                emitVia.emit("approval.requested" as never, payload as never, { channelId: channelIdForEvent } as never);
               } else {
-                const { globalBroker } = await import("../shared/sockets/register-socket-server.js");
-                const emitVia = globalBroker as unknown as { emit?: (t: string, p: unknown, o?: unknown) => void } | null;
-                if (emitVia && typeof emitVia.emit === "function") {
-                  emitVia.emit("approval.requested" as never, payload as never, { channelId: channelIdForEvent } as never);
-                } else {
-                  // Shared instance: a fresh EventBroker would reach no subscriber.
-                  const { getSharedBroker } = await import("../event-broker/event-broker-gate.js");
-                  const shared = getSharedBroker() as unknown as { emit: (t: string, p: unknown, o?: unknown) => void } | null;
-                  if (shared && typeof shared.emit === "function") {
-                    shared.emit("approval.requested" as never, payload as never, { channelId: channelIdForEvent } as never);
-                  } else {
-                    console.warn("[ToolExecutor] dropped approval.requested: no shared broker registered");
-                  }
-                }
+                console.warn("[ToolExecutor] dropped approval.requested: no shared broker registered");
               }
             } catch (e) {
               console.warn("[ToolExecutor] approval.requested emit failed:", (e as Error)?.message || e);
@@ -394,12 +372,12 @@ export class ToolExecutor {
                     resolve(null);
                     return;
                   }
+                  // ponytail: sweeper-only expiry — executor never writes expire, resolves locally and lets sweeper persist.
                   if (Date.now() - startWait > pendingTtl + 2000) {
-                    try { await approvalGate.expirePendingApprovals(); } catch {}
                     const after = await approvalGate.getById(pendingId).catch(() => null);
                     cleanup();
                     abortSignal?.removeEventListener('abort', onAbort);
-                    resolve(after);
+                    resolve(after && after.status !== "pending" ? after : after ? ({ ...after, status: "expired" as const } as typeof after) : null);
                     return;
                   }
                   const current = await approvalGate.getById(pendingId).catch(() => null);
@@ -417,11 +395,9 @@ export class ToolExecutor {
                     return;
                   }
                   if (current.expiresAt && Date.now() >= new Date(current.expiresAt).getTime()) {
-                    try { await approvalGate.expirePendingApprovals(); } catch {}
-                    const after2 = await approvalGate.getById(pendingId).catch(() => current);
                     cleanup();
                     abortSignal?.removeEventListener('abort', onAbort);
-                    resolve(after2 ?? ({ ...current, status: 'expired' as const } as typeof current));
+                    resolve({ ...current, status: 'expired' as const } as typeof current);
                     return;
                   }
                   timer = setTimeout(poll, pollBackoff);
@@ -453,35 +429,21 @@ export class ToolExecutor {
 
             // Emit approval.decided for observers (both grant and deny paths)
             try {
+              const { emitDecided } = await import("../approvals/approval-gate.js");
+              const { getSharedBroker } = await import("../event-broker/event-broker-gate.js");
+              const { globalBroker } = await import("../shared/sockets/register-socket-server.js").catch(() => ({ globalBroker: null }));
+              const emitVia = ((partialCtx as unknown as { broker?: unknown })?.broker as { emit: (t: string, p: unknown, o?: unknown) => void } | undefined) ?? (globalBroker as unknown as { emit: (t: string, p: unknown, o?: unknown) => void } | null) ?? (getSharedBroker() as unknown as { emit: (t: string, p: unknown, o?: unknown) => void } | null);
               const decidedStatus = decidedRow!.status;
-              const decidedPayload = {
+              emitDecided(emitVia, {
                 runId,
                 approvalId: pendingRow.id,
                 tool: toolId,
-                decision: decidedStatus === "approved" ? "approved" as const : decidedStatus === "denied" ? "denied" as const : "expired" as const,
+                decision: decidedStatus === "approved" ? "approved" : decidedStatus === "denied" ? "denied" : "expired",
                 decidedBy: (decidedRow as unknown as { decidedBy?: string | null })?.decidedBy ?? null,
                 scope: scopeHash,
                 riskClass,
-              };
-              const broker = (partialCtx as unknown as { broker?: unknown })?.broker as { emit?: (t: string, p: unknown, o?: unknown) => void } | undefined;
-              if (broker && typeof broker.emit === "function") {
-                broker.emit("approval.decided" as never, decidedPayload as never, { channelId: channelIdForEvent } as never);
-              } else {
-                const { globalBroker } = await import("../shared/sockets/register-socket-server.js");
-                const emitVia = globalBroker as unknown as { emit?: (t: string, p: unknown, o?: unknown) => void } | null;
-                if (emitVia && typeof emitVia.emit === "function") {
-                  emitVia.emit("approval.decided" as never, decidedPayload as never, { channelId: channelIdForEvent } as never);
-                } else {
-                  // Shared instance: a fresh EventBroker would reach no subscriber.
-                  const { getSharedBroker } = await import("../event-broker/event-broker-gate.js");
-                  const shared = getSharedBroker() as unknown as { emit: (t: string, p: unknown, o?: unknown) => void } | null;
-                  if (shared && typeof shared.emit === "function") {
-                    shared.emit("approval.decided" as never, decidedPayload as never, { channelId: channelIdForEvent } as never);
-                  } else {
-                    console.warn("[ToolExecutor] dropped approval.decided: no shared broker registered");
-                  }
-                }
-              }
+                channelId: channelIdForEvent,
+              });
             } catch {}
 
             if (decidedRow!.status === "approved") {
@@ -543,12 +505,8 @@ export class ToolExecutor {
           // Try grant lookup
           let hasGrant = false;
           try {
-            const grant = await (approvalGate as any).findGrant?.(toolId, scopeHash, { workspaceId: workspaceIdForEvent, channelId: channelIdForEvent });
-            if (grant) hasGrant = true;
-            else {
-              const reusable = await approvalGate.findReusableGrant(toolId, scopeHash, requestedBy);
-              if (reusable) hasGrant = true;
-            }
+            const reusable = await approvalGate.findReusableGrant(toolId, scopeHash, requestedBy);
+            if (reusable) hasGrant = true;
           } catch {}
           if (hasGrant) {
             // auto-allow via grant, continue to handler
@@ -573,14 +531,14 @@ export class ToolExecutor {
             try { await runsGate.transition(runId, "waiting_for_approval", `approval_required:${toolId}:${riskClass}`); } catch {}
             // Emit approval.requested
             try {
-              const broker = (partialCtx as unknown as { broker?: unknown })?.broker as { emit?: (t: string, p: unknown, o?: unknown) => void } | undefined;
+              const { getSharedBroker } = await import("../event-broker/event-broker-gate.js");
+              const { globalBroker } = await import("../shared/sockets/register-socket-server.js").catch(() => ({ globalBroker: null }));
+              const emitVia = ((partialCtx as unknown as { broker?: unknown })?.broker as { emit?: (t: string, p: unknown, o?: unknown) => void } | undefined) ?? (globalBroker as unknown as { emit?: (t: string, p: unknown, o?: unknown) => void } | null) ?? (getSharedBroker() as unknown as { emit?: (t: string, p: unknown, o?: unknown) => void } | null);
               const payload = { runId, approvalId: pendingRow.id, tool: toolId, argsPreview, riskClass, scope: scopeHash, requestedBy, expiresAt: expiresAt.toISOString(), workspaceId: workspaceIdForEvent };
-              if (broker && typeof broker.emit === "function") broker.emit("approval.requested" as never, payload as never, { channelId: channelIdForEvent } as never);
-              else {
-                const { globalBroker } = await import("../shared/sockets/register-socket-server.js");
-                const emitVia = globalBroker as unknown as { emit?: (t: string, p: unknown, o?: unknown) => void } | null;
-                if (emitVia && typeof emitVia.emit === "function") emitVia.emit("approval.requested" as never, payload as never, { channelId: channelIdForEvent } as never);
-              }
+              try {
+                (emitVia as { emit?: (t: string, p: unknown, o?: unknown) => void } | null)?.emit?.("approval.requested" as never, payload as never, { channelId: channelIdForEvent } as never);
+              } catch {}
+              if (!emitVia) console.warn("[ToolExecutor] dropped approval.requested: no shared broker registered");
             } catch {}
             // Reuse same hybrid wait as bash path — poll for decision
             const abortSignal = (partialCtx as unknown as { abortSignal?: AbortSignal })?.abortSignal;
@@ -594,10 +552,10 @@ export class ToolExecutor {
                 const cleanup = () => { settled = true; if (timer) clearTimeout(timer); };
                 const poll = async () => {
                   if (settled || abortSignal?.aborted) { cleanup(); resolve(null); return; }
+                  // ponytail: sweeper-only expiry — no executor DB write.
                   if (Date.now() - startWait > pendingTtl + 2000) {
-                    try { await approvalGate.expirePendingApprovals(); } catch {}
                     const after = await approvalGate.getById(pendingRow.id).catch(() => null);
-                    cleanup(); resolve(after); return;
+                    cleanup(); resolve(after && after.status !== "pending" ? after : after ? ({ ...after, status: "expired" } as typeof after) : null); return;
                   }
                   const current = await approvalGate.getById(pendingRow.id).catch(() => null);
                   if (!current) { cleanup(); resolve(null); return; }
@@ -615,10 +573,11 @@ export class ToolExecutor {
               throw new Error(decidedRow === null && abortSignal?.aborted ? `Tool "${toolId}" approval wait cancelled by user.` : `Approval ${pendingRow.id} disappeared — denying FS operation.`);
             }
             try {
-              const broker2 = (partialCtx as unknown as { broker?: any })?.broker;
-              const emitVia2 = broker2 ?? (await import("../shared/sockets/register-socket-server.js").then(m => (m as any).globalBroker).catch(() => null));
-              const payloadDecided = { runId, approvalId: pendingRow.id, tool: toolId, decision: decidedRow.status === "approved" ? "approved" as const : decidedRow.status === "denied" ? "denied" as const : "expired" as const, decidedBy: (decidedRow as any)?.decidedBy ?? null, scope: scopeHash, riskClass };
-              if (emitVia2 && typeof emitVia2.emit === "function") emitVia2.emit("approval.decided" as never, payloadDecided as never, { channelId: channelIdForEvent } as never);
+              const { emitDecided } = await import("../approvals/approval-gate.js");
+              const { getSharedBroker } = await import("../event-broker/event-broker-gate.js");
+              const { globalBroker } = await import("../shared/sockets/register-socket-server.js").catch(() => ({ globalBroker: null }));
+              const emitVia = ((partialCtx as unknown as { broker?: unknown })?.broker as { emit: (t: string, p: unknown, o?: unknown) => void } | undefined) ?? (globalBroker as unknown as { emit: (t: string, p: unknown, o?: unknown) => void } | null) ?? (getSharedBroker() as unknown as { emit: (t: string, p: unknown, o?: unknown) => void } | null);
+              emitDecided(emitVia, { runId, approvalId: pendingRow.id, tool: toolId, decision: decidedRow.status === "approved" ? "approved" : decidedRow.status === "denied" ? "denied" : "expired", decidedBy: (decidedRow as any)?.decidedBy ?? null, scope: scopeHash, riskClass, channelId: channelIdForEvent });
             } catch {}
             if (decidedRow.status === "approved") {
               try { await runsGate.transition(runId, "running", "approval_granted"); } catch {}

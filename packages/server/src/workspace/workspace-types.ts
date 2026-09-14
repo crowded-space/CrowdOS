@@ -2,7 +2,6 @@
 
 export type WorkspaceStatus = "CREATED" | "INITIALIZING" | "ACTIVE" | "PAUSED" | "TERMINATED" | "ARCHIVED";
 export type WorkspaceScope = "private" | "shared" | "readonly" | "ephemeral";
-export type ArtifactType = "reasoning_trace" | "execution_log" | "analysis_report" | "generated_component" | "task_result" | "runtime_snapshot";
 export type WorkspaceNodeType = "file" | "directory";
 
 export interface WorkspacePermissions {
@@ -86,17 +85,6 @@ export interface WorkspaceAgentSession {
   createdAt: Date;
 }
 
-export interface Artifact {
-  id: string;
-  workspaceId: string;
-  producerAgent: string;
-  artifactType: ArtifactType;
-  path: string | null;
-  semanticTags: string[];
-  metadata: Record<string, unknown>;
-  createdAt: Date;
-}
-
 export interface CreateWorkspaceInput {
   name: string;
   ownerId?: string;
@@ -109,14 +97,6 @@ export interface MountAgentInput {
   agentId: string;
   scope?: WorkspaceScope;
   permissions?: Partial<VFSPermissions>;
-}
-
-export interface RegisterArtifactInput {
-  producerAgent: string;
-  artifactType: ArtifactType;
-  path?: string;
-  semanticTags?: string[];
-  metadata?: Record<string, unknown>;
 }
 
 export interface ScreenLockStatus {

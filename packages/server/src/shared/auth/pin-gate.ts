@@ -268,35 +268,6 @@ export async function requirePin(request: FastifyRequest, reply: FastifyReply): 
   sendUnauthorized(reply);
 }
 
-export async function verifyHandshakePin(
-  auth: Record<string, unknown> | undefined,
-  headers: Record<string, string | undefined>,
-  _query?: Record<string, unknown> | undefined,
-): Promise<boolean> {
-  void _query;
-  const global = getGlobalPin();
-  const candidates: string[] = [];
-  if (auth) {
-    const aPin = (auth as any).pin ?? (auth as any).key ?? (auth as any).token;
-    if (typeof aPin === "string") candidates.push(aPin.trim());
-  }
-  const hPin = headers["x-pin"];
-  if (hPin) candidates.push(hPin.trim());
-  const hLegacy = headers["x-api-key"];
-  if (hLegacy) candidates.push(hLegacy.trim());
-  const authH = headers["authorization"];
-  if (authH && authH.startsWith("Bearer ")) candidates.push(authH.slice(7).trim());
-  const presented = candidates.filter((c) => c.length > 0);
-  if (global !== null) {
-    if (presented.some((c) => c === global)) return true;
-  }
-  for (const c of presented) {
-    if (await matchesWorkspacePin(c)) return true;
-  }
-  if (global === null && !(await isScreenLockConfigured())) return true;
-  return false;
-}
-
 /** Test seam: the effective global PIN (null = unset). Workspace state needs a DB. */
 export function getPinForTests(): string | null {
   return getGlobalPin();
@@ -304,7 +275,6 @@ export function getPinForTests(): string | null {
 
 export const pinGate = {
   requirePin,
-  verifyHandshakePin,
   getPin: getPinForTests,
   getGlobalPin,
   isScreenLockConfigured,

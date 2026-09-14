@@ -1,78 +1,17 @@
 import type { ContextPacket, RuntimeResult, RuntimeEvent, ModelModuleConfig, LLMRequest } from "../types.js"
 import type { EventBroker } from "../../event-broker/event-broker-gate.js"
 import { BaseRuntime } from "./base-runtime.js"
-import { searchProviderGate, normalizeUrl } from "../../search-providers/search-provider-gate.js"
+import { searchProviderGate } from "../../search-providers/search-provider-gate.js"
 import type { SearchResult } from "../../search-providers/search-provider-gate.js"
+// ponytail: dedupe/sort live in searchProviderGate — re-exported here for compat.
+export { dedupeEvidence, sortByFreshness } from "../../search-providers/search-provider-gate.js"
 import { estimateTokens } from "../kernel/context-budget.js"
 import { logMetric } from "../../shared/core/structured-log.js"
 import { ProviderRegistry } from "../providers/provider-registry.js"
 
 // ---------------------------------------------------------------------------
-// Helpers: normalization, similarity, freshness, fetch
+// Helpers: fetch
 // ---------------------------------------------------------------------------
-
-function tokenizeSnippet(text: string): Set<string> {
-  return new Set(
-    text
-      .toLowerCase()
-      .split(/[^a-z0-9]+/g)
-      .filter((t) => t.length > 2)
-  )
-}
-
-function jaccard(a: Set<string>, b: Set<string>): number {
-  if (a.size === 0 && b.size === 0) return 1
-  let inter = 0
-  for (const tok of a) if (b.has(tok)) inter++
-  const union = a.size + b.size - inter
-  return union === 0 ? 0 : inter / union
-}
-
-export function dedupeEvidence(
-  results: SearchResult[],
-  similarityThreshold = 0.8
-): { deduped: SearchResult[]; duplicates: Array<{ url: string; reason: string; duplicateOf?: string; snippetSimilarity?: number }> } {
-  const deduped: SearchResult[] = []
-  const duplicates: Array<{ url: string; reason: string; duplicateOf?: string; snippetSimilarity?: number }> = []
-  const seenUrls = new Map<string, SearchResult>()
-  const seenSnippets: Array<{ result: SearchResult; tokens: Set<string> }> = []
-
-  for (const r of results) {
-    const nUrl = normalizeUrl(r.url)
-    if (seenUrls.has(nUrl)) {
-      duplicates.push({ url: r.url, reason: "duplicate_url", duplicateOf: seenUrls.get(nUrl)!.url })
-      continue
-    }
-    // Snippet similarity check against already kept results
-    const tok = tokenizeSnippet(r.snippet)
-    let isNearDup = false
-    for (const { result: kept, tokens: keptTok } of seenSnippets) {
-      const sim = jaccard(tok, keptTok)
-      if (sim >= similarityThreshold) {
-        duplicates.push({ url: r.url, reason: "near_duplicate_snippet", duplicateOf: kept.url, snippetSimilarity: Math.round(sim * 100) / 100 })
-        isNearDup = true
-        break
-      }
-    }
-    if (isNearDup) continue
-
-    seenUrls.set(nUrl, r)
-    seenSnippets.push({ result: r, tokens: tok })
-    deduped.push(r)
-  }
-  return { deduped, duplicates }
-}
-
-export function sortByFreshness(results: SearchResult[]): SearchResult[] {
-  return [...results].sort((a, b) => {
-    const ta = a.timestamp ? Date.parse(a.timestamp) : 0
-    const tb = b.timestamp ? Date.parse(b.timestamp) : 0
-    const na = Number.isNaN(ta) ? 0 : ta
-    const nb = Number.isNaN(tb) ? 0 : tb
-    // Newest first
-    return nb - na
-  })
-}
 
 async function fetchUrlContent(url: string, signal?: AbortSignal): Promise<string | null> {
   const controller = new AbortController()
@@ -553,27 +492,9 @@ export class ResearchRuntime extends BaseRuntime {
       const rawCount = flatRaw.length
 
       // (c) Aggregate evidence bundle: dedupe by URL+similarity, freshness sort, timestamps preserved
-      const { deduped: urlDeduped, duplicates: urlDups } = (() => {
-        // Use gate's URL normalize but ResearchRuntime also does URL+similarity
-        const seen = new Map<string, SearchResult>()
-        const out: SearchResult[] = []
-        const dups: Array<{ url: string; reason: string; duplicateOf?: string }> = []
-        for (const r of flatRaw) {
-          const key = normalizeUrl(r.url)
-          if (seen.has(key)) dups.push({ url: r.url, reason: "duplicate_url", duplicateOf: seen.get(key)!.url })
-          else {
-            seen.set(key, r)
-            out.push(r)
-          }
-        }
-        return { deduped: out, duplicates: dups }
-      })()
-
-      // Now snippet similarity dedupe + freshness
-      const { deduped: similarityDeduped, duplicates: simDups } = dedupeEvidence(urlDeduped, 0.8)
-      const allDuplicates = [...urlDups, ...simDups]
-      const dedupedUnsorted = similarityDeduped
-      const dedupedSorted = sortByFreshness(dedupedUnsorted)
+      const { deduped, duplicates } = searchProviderGate.dedupeEvidence(flatRaw, 0.8)
+      const dedupedSorted = searchProviderGate.sortByFreshness(deduped)
+      const allDuplicates = duplicates
 
       const evidenceBundle = {
         query,

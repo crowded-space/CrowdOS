@@ -1,7 +1,5 @@
 import { agentRegistry, AgentRegistry } from "./agent-service.js";
-import { AgentSpawnManager } from "./agent-spawn-manager.js";
 import { EscalationChain, AgentError } from "./agent-errors.js";
-import { startSpawnRetentionSweeper } from "./spawn-retention-sweeper.js";
 import type {
   AgentProfile,
   AuthorityLevel,
@@ -26,8 +24,7 @@ import type {
   UpdateAgentBody,
 } from "./agent-validators.js";
 
-export { AgentRegistry, agentRegistry, AgentSpawnManager, EscalationChain, AgentError };
-export { startSpawnRetentionSweeper };
+export { AgentRegistry, agentRegistry, EscalationChain, AgentError };
 export type {
   AgentProfile,
   AuthorityLevel,
@@ -53,7 +50,6 @@ export const agentGate = {
   create: (input: CreateAgentProfileInput, db?: any) => agentRegistry.create(input, db),
   update: (id: string, input: UpdateAgentProfileInput, db?: any) => agentRegistry.update(id, input, db),
   delete: (id: string, db?: any) => agentRegistry.delete(id, db),
-  dispatch: AgentSpawnManager.dispatchAgent,
   escalate: EscalationChain.escalate,
   setStatus: (agentId: string, status: AgentStatus, opts?: { broker?: any; db?: any; errorInfo?: { code: string; message: string } }) =>
     agentRegistry.setStatus(agentId, status, opts as never),

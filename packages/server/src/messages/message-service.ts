@@ -199,15 +199,8 @@ function mergeMessageRows(list: Array<typeof messages.$inferSelect>, channelId: 
   return mergedList;
 }
 
-/** @deprecated Legacy getter — delegates to getChannelMessagesPage with limit 50. Use getChannelMessagesPage instead. */
-export async function getChannelMessages(channelId: string, includeMonologue: boolean) {
-  const page = await getChannelMessagesPage(channelId, includeMonologue, { limit: 50 });
-  return page.messages;
-}
-
 export async function getChannelMessagesPage(
   channelId: string,
-  includeMonologue: boolean,
   opts: { limit?: number; before?: { timestamp: Date; seq: number }; db?: any } = {}
 ): Promise<ChannelMessagesPage> {
   const db = opts.db || getDb();

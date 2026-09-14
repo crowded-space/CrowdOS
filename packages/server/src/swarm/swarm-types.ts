@@ -66,7 +66,3 @@ export interface SwarmReport {
 export function isSwarmV1Enabled(): boolean {
   return process.env.SWARM_V1 === "true";
 }
-
-export function isSwarmLegacyEnabled(): boolean {
-  return process.env.SWARM_LEGACY === "true";
-}

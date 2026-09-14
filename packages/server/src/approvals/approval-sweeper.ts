@@ -1,4 +1,4 @@
-import { approvalGate } from "./approval-gate.js";
+import { approvalGate, emitDecided } from "./approval-gate.js";
 import { runsGate } from "../runs/runs-gate.js";
 import { EventBroker } from "../event-broker/event-broker-gate.js";
 import { getSharedBroker } from "../event-broker/event-broker-gate.js";
@@ -32,9 +32,6 @@ async function sweepOneDb(broker?: unknown, workspaceId?: string | null): Promis
     emitBroker = (globalBroker as unknown as EventBroker) ?? null;
   } catch {}
   const target = emitBroker ?? eb;
-  if (!target) {
-    console.warn("[ApprovalSweeper] dropped approval.decided emits: no shared broker registered");
-  }
   for (const row of expiredRows) {
     try {
       const run = await runsGate.getById(row.runId);
@@ -43,25 +40,19 @@ async function sweepOneDb(broker?: unknown, workspaceId?: string | null): Promis
       if (run && run.status === "waiting_for_approval") {
         await runsGate.transition(row.runId, "running", "approval_expired_default_deny");
       }
-      // Emit approval.decided with expired for observers
-      try {
-        (target as unknown as { emit: (t: string, p: unknown, o?: unknown) => void }).emit(
-          "approval.decided" as never,
-          {
-            runId: row.runId,
-            approvalId: row.id,
-            tool: row.toolName,
-            decision: "expired" as const,
-            decidedBy: null,
-            scope: row.scope,
-            riskClass: row.riskClass,
-            channelId,
-            // ponytail: tag the owning workspace so clients ignore foreign decisions.
-            workspaceId: (run as any)?.workspaceId ?? workspaceId ?? undefined,
-          } as never,
-          channelId ? ({ channelId } as never) : (undefined as never)
-        );
-      } catch {}
+      // Emit approval.decided with expired for observers (sweeper is sole expiry owner)
+      emitDecided(target, {
+        runId: row.runId,
+        approvalId: row.id,
+        tool: row.toolName,
+        decision: "expired",
+        decidedBy: null,
+        scope: row.scope,
+        riskClass: row.riskClass,
+        channelId,
+        // ponytail: tag the owning workspace so clients ignore foreign decisions.
+        workspaceId: (run as any)?.workspaceId ?? workspaceId ?? undefined,
+      });
     } catch (e) {
       console.warn("[ApprovalSweeper] failed to handle expired approval", row.id, (e as Error)?.message || e);
     }

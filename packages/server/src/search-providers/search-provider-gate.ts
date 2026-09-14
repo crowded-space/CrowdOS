@@ -60,6 +60,63 @@ export function dedupeByUrl(results: SearchResult[]): { deduped: SearchResult[];
   return { deduped, duplicates }
 }
 
+function tokenizeSnippet(text: string): Set<string> {
+  return new Set(
+    text
+      .toLowerCase()
+      .split(/[^a-z0-9]+/g)
+      .filter((t) => t.length > 2)
+  )
+}
+
+function jaccard(a: Set<string>, b: Set<string>): number {
+  if (a.size === 0 && b.size === 0) return 1
+  let inter = 0
+  for (const tok of a) if (b.has(tok)) inter++
+  const union = a.size + b.size - inter
+  return union === 0 ? 0 : inter / union
+}
+
+export function dedupeEvidence(
+  results: SearchResult[],
+  similarityThreshold = 0.8
+): { deduped: SearchResult[]; duplicates: Array<{ url: string; reason: string; duplicateOf?: string; snippetSimilarity?: number }> } {
+  const deduped: SearchResult[] = []
+  const duplicates: Array<{ url: string; reason: string; duplicateOf?: string; snippetSimilarity?: number }> = []
+  const seenUrls = new Map<string, SearchResult>()
+  const seenSnippets: Array<{ result: SearchResult; tokens: Set<string> }> = []
+  for (const r of results) {
+    const nUrl = normalizeUrl(r.url)
+    if (seenUrls.has(nUrl)) {
+      duplicates.push({ url: r.url, reason: "duplicate_url", duplicateOf: seenUrls.get(nUrl)!.url })
+      continue
+    }
+    const tok = tokenizeSnippet(r.snippet)
+    let isNearDup = false
+    for (const { result: kept, tokens: keptTok } of seenSnippets) {
+      const sim = jaccard(tok, keptTok)
+      if (sim >= similarityThreshold) {
+        duplicates.push({ url: r.url, reason: "near_duplicate_snippet", duplicateOf: kept.url, snippetSimilarity: Math.round(sim * 100) / 100 })
+        isNearDup = true
+        break
+      }
+    }
+    if (isNearDup) continue
+    seenUrls.set(nUrl, r)
+    seenSnippets.push({ result: r, tokens: tok })
+    deduped.push(r)
+  }
+  return { deduped, duplicates }
+}
+
+export function sortByFreshness(results: SearchResult[]): SearchResult[] {
+  return [...results].sort((a, b) => {
+    const ta = a.timestamp ? Date.parse(a.timestamp) : 0
+    const tb = b.timestamp ? Date.parse(b.timestamp) : 0
+    return (Number.isNaN(tb) ? 0 : tb) - (Number.isNaN(ta) ? 0 : ta)
+  })
+}
+
 type ProviderEntry = { name: string; provider: typeof braveProvider }
 
 function configuredProviders(): ProviderEntry[] {
@@ -128,6 +185,8 @@ export const searchProviderGate = {
   search: searchProviders,
   normalizeUrl,
   dedupeByUrl,
+  dedupeEvidence,
+  sortByFreshness,
 }
 
 // Re-export types for consumers

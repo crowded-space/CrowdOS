@@ -288,18 +288,13 @@ describe("ResearchRuntime rollback flag", () => {
     expect(chosen3).toBe("research")
   })
 
-  it("RuntimeExecutor pins research->agentic when RESEARCH_V1=false", async () => {
+  it("RuntimeExecutor trusts router pin (no executor-layer flag check)", async () => {
     process.env.RESEARCH_V1 = "false"
     const { RuntimeExecutor } = await import("../runtime-executor.js")
     const exec = new RuntimeExecutor()
     const map: any = (exec as any).getRuntimeMap()
-    // research should be same instance as agentic when disabled
-    expect(map.research).toBe(map.agentic)
-    process.env.RESEARCH_V1 = "true"
-    const exec2 = new RuntimeExecutor()
-    const map2: any = (exec2 as any).getRuntimeMap()
-    expect(map2.research).not.toBe(map2.agentic)
-    // Check instance type
-    expect(map2.research.type).toBe("research")
+    // ponytail: pin-once in router — executor always holds the real ResearchRuntime.
+    expect(map.research.type).toBe("research")
+    expect(map.agentic.type).toBe("agentic")
   })
 })

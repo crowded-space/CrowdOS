@@ -87,7 +87,7 @@ describe.skipIf(!DATABASE_URL)("PERF-5 · keyset pagination page walk (real dev 
     }
     requireDb();
 
-    const page1 = await getChannelMessagesPage(CHANNEL_ID, false, {});
+    const page1 = await getChannelMessagesPage(CHANNEL_ID, {});
     expect(page1.messages).toHaveLength(50);
     expect(seqs(page1)).toEqual(Array.from({ length: 50 }, (_, i) => TOTAL - i));
     expect(page1.cursor).not.toBeNull();
@@ -95,7 +95,6 @@ describe.skipIf(!DATABASE_URL)("PERF-5 · keyset pagination page walk (real dev 
 
     const page2 = await getChannelMessagesPage(
       CHANNEL_ID,
-      false,
       { before: { timestamp: new Date(page1.cursor!.before.timestamp), seq: page1.cursor!.before.seq } }
     );
     expect(page2.messages).toHaveLength(50);
@@ -104,7 +103,6 @@ describe.skipIf(!DATABASE_URL)("PERF-5 · keyset pagination page walk (real dev 
 
     const page3 = await getChannelMessagesPage(
       CHANNEL_ID,
-      false,
       { before: { timestamp: new Date(page2.cursor!.before.timestamp), seq: page2.cursor!.before.seq } }
     );
     expect(page3.messages).toHaveLength(20);
@@ -122,7 +120,7 @@ describe.skipIf(!DATABASE_URL)("PERF-5 · keyset pagination page walk (real dev 
     }
     requireDb();
 
-    const page = await getChannelMessagesPage(CHANNEL_ID, false, { limit: 30 });
+    const page = await getChannelMessagesPage(CHANNEL_ID, { limit: 30 });
     const pairs = page.messages.map((m) => ({
       ts: new Date(m.timestamp).getTime(),
       seq: m.sequenceNumber,
@@ -141,7 +139,7 @@ describe.skipIf(!DATABASE_URL)("PERF-5 · keyset pagination page walk (real dev 
     }
     requireDb();
 
-    const page = await getChannelMessagesPage(CHANNEL_ID, false, { limit: 10 });
+    const page = await getChannelMessagesPage(CHANNEL_ID, { limit: 10 });
     expect(page.messages).toHaveLength(10);
     expect(seqs(page)[0]).toBe(TOTAL);
     expect(seqs(page)[9]).toBe(TOTAL - 9);
@@ -167,7 +165,7 @@ describe.skipIf(!DATABASE_URL)("PERF-5 · keyset pagination page walk (real dev 
     }
     requireDb();
 
-    const beyond = await getChannelMessagesPage(CHANNEL_ID, false, {
+    const beyond = await getChannelMessagesPage(CHANNEL_ID, {
       before: { timestamp: new Date(BASE_TS), seq: 1 },
     });
     expect(beyond.messages).toEqual([]);

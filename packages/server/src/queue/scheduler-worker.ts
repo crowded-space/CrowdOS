@@ -27,18 +27,10 @@ async function handleScheduledTrigger(job: Job<ScheduledJobData>): Promise<void>
   const messageId = (job.id as string | undefined) || data.id;
 
   // Persist + emit a real system message into the channel (honest firing).
-  // We reuse the same transactional sequence pattern as the socket layer (DB-2)
-  // but fall back to an ephemeral emit when DB is unavailable (test fakes,
-  // offline dev). Either path emits via EventBroker so sockets/replays see it.
-  // Prefer the live socket broker if available (shared holder; no static cycle
-  // with registerSocketServer). Fresh fallback is local-only (documented).
-  let broker: InstanceType<typeof EventBroker>;
-  try {
-    const { getSharedBroker } = (await import("../event-broker/event-broker-gate.js")) as unknown as { getSharedBroker?: () => InstanceType<typeof EventBroker> | null };
-    broker = getSharedBroker?.() ?? new EventBroker();
-  } catch {
-    broker = new EventBroker();
-  }
+  // Single shared instance; warn-and-skip emits when unregistered (no orphans).
+  const { getSharedBroker } = (await import("../event-broker/event-broker-gate.js")) as unknown as { getSharedBroker?: () => InstanceType<typeof EventBroker> | null };
+  const broker = getSharedBroker?.() ?? null;
+  if (!broker) console.warn("[scheduler] no shared broker registered — persisting without emit");
 
   // Try to persist message via the Messages owner gate (sequence + insert + emit).
   try {
@@ -72,13 +64,13 @@ async function handleScheduledTrigger(job: Job<ScheduledJobData>): Promise<void>
       timestamp: new Date(),
     };
     try {
-      (broker as unknown as { emit: (t: string, p: unknown, o?: unknown) => void }).emit("message:new", ephemeral as unknown as never, { channelId });
+      (broker as unknown as { emit: (t: string, p: unknown, o?: unknown) => void } | null)?.emit("message:new", ephemeral as unknown as never, { channelId });
     } catch {}
   }
 
   // Also emit a dedicated scheduled event for observability/consumers (additive)
   try {
-    (broker as unknown as { emit: (t: string, p: unknown, o?: unknown) => void }).emit("scheduled:triggered" as string, {
+    (broker as unknown as { emit: (t: string, p: unknown, o?: unknown) => void } | null)?.emit("scheduled:triggered" as string, {
       id: data.id,
       channelId,
       task: data.task,

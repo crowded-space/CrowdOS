@@ -268,11 +268,14 @@ describe.skipIf(!probe.ok)("Approvals APR-1 ToolExecutor pause flow (e2e with re
     for(let i=0;i<20;i++){ await new Promise(r=>setTimeout(r,200)); const p=await approvalRepo!.findPendingByRun(runId); if(p.length){pendingRow=p[0];break;} }
     expect(pendingRow).not.toBeNull();
     createdApprovalIds.push(pendingRow!.id);
-    // Do NOT decide; wait for TTL to expire (poll interval 300ms + TTL 1200ms + slack)
+    // Do NOT decide; wait for TTL to expire (poll interval + TTL 1200ms + slack).
+    // ponytail: sweeper-only expiry — executor resolves locally; sweeper persists the DB flip.
     const result = await execPromise;
     expect(result.success).toBe(false);
     expect(result.error).toMatch(/expired|denied|TTL/i);
     expect(handlerCalled).toBe(false);
+    const { approvalGate } = await import("./approval-gate.js");
+    await approvalGate.sweepExpired();
     const after = await approvalRepo!.getById(pendingRow!.id);
     expect(after?.status).toBe("expired");
     const runAfter = await runsRepo!.getRunById(runId);

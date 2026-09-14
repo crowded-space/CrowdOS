@@ -23,7 +23,6 @@ vi.mock("../skills/skills-gate.js", () => ({
         "web_search",
         "query_database",
         "system_scheduler",
-        "dispatch_agent",
         "search_all_channels",
         "open_memory",
         "remember",

@@ -16,7 +16,6 @@ import { runWithDb, closeDatabaseConnection } from "./shared/config/database.js"
 import { closeAllWorkspaceDatabases, listWorkspaceRecords, getWorkspaceDb, getWorkspacePinHash } from "./workspace/workspace-gate.js";
 import { LocalVFS } from "./vfs/vfs-gate.js";
 import { pinGate, isWorkspaceManagementPath } from "./shared/auth/pin-gate.js";
-import { startSpawnRetentionSweeper } from "./agents/agent-gate.js";
 import { startBudgetReconciler } from "./shared/core/token-tracker.js";
 import { runsGate } from "./runs/runs-gate.js";
 import { startApprovalSweeper } from "./approvals/approval-sweeper.js";
@@ -295,7 +294,6 @@ export async function buildServer(opts?: BuildServerOptions): Promise<BuiltServe
   // suppresses all local sweep timers; skipTimers suppresses regardless.
   const skipTimers = opts?.skipTimers ?? false;
   if (!skipTimers && !isBullMqApi) {
-    startSpawnRetentionSweeper();
     startBudgetReconciler();
     try {
       await (runsGate as unknown as { startRunOrphanSweeper: (b: unknown) => Promise<void> }).startRunOrphanSweeper(eventBroker);

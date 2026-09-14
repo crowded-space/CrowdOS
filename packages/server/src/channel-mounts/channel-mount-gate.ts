@@ -8,12 +8,10 @@ import {
   browseFs,
   validateMountPath,
   getAllowedRootsList,
-  pickFolderNative,
-  isServerPickerAllowed,
 } from "./channel-mount-service.js";
-import type { MountInfo, WorkspaceMountRecord, PickFolderOptions } from "./channel-mount-types.js";
+import type { MountInfo, WorkspaceMountRecord } from "./channel-mount-types.js";
 
-export type { MountInfo, WorkspaceMountRecord, PickFolderOptions };
+export type { MountInfo, WorkspaceMountRecord };
 
 export const channelMountGate = {
   resolve: resolveChannelMount,
@@ -25,6 +23,4 @@ export const channelMountGate = {
   browse: browseFs,
   validate: validateMountPath,
   allowedRoots: getAllowedRootsList,
-  pickNative: pickFolderNative,
-  isServerPickerAllowed,
 };

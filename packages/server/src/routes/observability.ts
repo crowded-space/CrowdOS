@@ -1,17 +1,17 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
-import { observabilityGate } from "../observability/observability-gate.js";
+import { observabilityGate, clampObsLimit, OBS_LIMIT_MAX } from "../observability/observability-gate.js";
 import { authGate } from "../shared/auth/auth-gate.js";
 
 const traceQuerySchema = z.object({
-  limit: z.coerce.number().int().min(1).max(200).optional(),
+  limit: z.coerce.number().int().min(1).max(OBS_LIMIT_MAX).optional(),
 });
 
 const costQuerySchema = z.object({
   runId: z.string().optional(),
   channelId: z.string().optional(),
   agentId: z.string().optional(),
-  limit: z.coerce.number().int().min(1).max(1000).optional(),
+  limit: z.coerce.number().int().min(1).max(OBS_LIMIT_MAX).optional(),
 });
 
 /**
@@ -34,7 +34,7 @@ export async function observabilityRoutes(app: FastifyInstance) {
 
   app.get("/api/observability/traces", { preHandler: adminPreHandler }, async (request) => {
     const query = traceQuerySchema.parse((request.query as Record<string, unknown>) ?? {});
-    const traces = observabilityGate.getAllTraces(query.limit ?? 50);
+    const traces = observabilityGate.getAllTraces(clampObsLimit(query.limit));
     const stats = observabilityGate.getTraceStats();
     return { traces, stats };
   });
@@ -46,14 +46,15 @@ export async function observabilityRoutes(app: FastifyInstance) {
       runId: query.runId ?? null,
       channelId: query.channelId ?? null,
       agentId: query.agentId ?? null,
-      limit: query.limit ?? 100,
+      limit: clampObsLimit(query.limit),
     });
     const rollup = observabilityGate.rollupFromEntries(ledger);
     return { ledger, rollup, count: ledger.length };
   });
 
-  app.get("/api/observability/cost/dashboard", { preHandler: adminPreHandler }, async () => {
-    const dashboard = await observabilityGate.getCostDashboard({ limit: 500 });
+  app.get("/api/observability/cost/dashboard", { preHandler: adminPreHandler }, async (request) => {
+    const query = costQuerySchema.parse((request.query as Record<string, unknown>) ?? {});
+    const dashboard = await observabilityGate.getCostDashboard({ limit: clampObsLimit(query.limit) });
     return dashboard;
   });
 
