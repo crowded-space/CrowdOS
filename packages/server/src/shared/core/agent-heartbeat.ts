@@ -1,7 +1,3 @@
-import { and, asc, eq, inArray, lt } from "drizzle-orm";
-import { getDb, runWithDb } from "../config/database.js";
-import { forEachWorkspaceDb } from "../../workspace/workspace-gate.js";
-import { agents, runtimeStates } from "../../db/schema.js";
 import type { EventBroker } from "../../event-broker/event-broker-gate.js";
 import { startMemorySweeper } from "../../memories/memories-gate.js";
 
@@ -19,11 +15,6 @@ import { startMemorySweeper } from "../../memories/memories-gate.js";
  *   decides, so multi-process deployments stay correct.
  */
 
-const ORPHAN_AFTER_MS = (() => {
-  const raw = Number(process.env.ORPHAN_AFTER_MS);
-  return Number.isFinite(raw) && raw >= 10_000 ? raw : 60_000;
-})();
-
 const TOUCH_INTERVAL_MS = 15_000;
 const SWEEP_INTERVAL_MS = 20_000;
 
@@ -39,60 +30,15 @@ export function markAgentIdle(agentId: string): void {
 
 async function touchWorkingAgents(): Promise<void> {
   if (locallyWorkingAgents.size === 0) return;
-  const ids = [...locallyWorkingAgents];
-  // ponytail: touch every database — a locally working agent may belong to
-  // any workspace; row misses elsewhere are no-ops.
-  await forEachWorkspaceDb(async (db) => {
-    await runWithDb(db, async () => {
-      try {
-        await getDb()
-          .update(runtimeStates)
-          .set({ lastHeartbeat: new Date() })
-          .where(inArray(runtimeStates.agentId, ids));
-      } catch (err) {
-        console.error("[Heartbeat] Failed to touch working agents:", (err as any)?.message || err);
-      }
-    });
-  });
+  // Agents owns runtime_states writes; Shared keeps only the in-mem lease.
+  const { agentGate } = await import("../../agents/agent-gate.js");
+  await agentGate.touchHeartbeat([...locallyWorkingAgents]);
 }
 
 export async function sweepOrphans(broker: EventBroker): Promise<void> {
-  await forEachWorkspaceDb(async (db, workspaceId) => {
-    await runWithDb(db, async () => {
-      try {
-        const cutoff = new Date(Date.now() - ORPHAN_AFTER_MS);
-
-        const stale = await getDb()
-          .select()
-          .from(runtimeStates)
-          .where(and(eq(runtimeStates.status, "working"), lt(runtimeStates.lastHeartbeat, cutoff)))
-          .orderBy(asc(runtimeStates.lastHeartbeat))
-          .limit(50)
-          .for("update", { skipLocked: true });
-
-        for (const state of stale) {
-          // A live local run would be heartbeating — if it's in our set, skip
-          // (covers clock skew between touch interval and threshold).
-          if (locallyWorkingAgents.has(state.agentId)) continue;
-
-          console.warn(`[Heartbeat] Orphaned 'working' agent ${state.agentId} detected (no heartbeat since ${state.lastHeartbeat?.toISOString() ?? "never"}) — pausing.`);
-
-          await getDb().update(agents).set({ status: "paused" }).where(eq(agents.id, state.agentId));
-          await getDb()
-            .update(runtimeStates)
-            .set({ status: "paused", errorInfo: { code: "ORPHANED", message: "Heartbeat expired; run presumed dead.", timestamp: new Date().toISOString() } })
-            .where(eq(runtimeStates.agentId, state.agentId));
-
-          // ponytail: tag the owning workspace so clients ignore foreign pauses.
-          const wid = workspaceId ? { workspaceId } : {};
-          broker.emit("agent:status", { agentId: state.agentId, status: "paused", ...wid } as never);
-          broker.emit("agent:paused", { agentId: state.agentId, reason: "Heartbeat expired; run presumed dead.", ...wid });
-        }
-      } catch (err) {
-        console.error("[Heartbeat] Orphan sweep failed:", (err as any)?.message || err);
-      }
-    });
-  });
+  // Agents owns the orphan sweep; Shared passes the live-lease check.
+  const { agentGate } = await import("../../agents/agent-gate.js");
+  await agentGate.sweepOrphans(broker, { isLive: (id) => locallyWorkingAgents.has(id) });
 }
 
 let started = false;
@@ -118,5 +64,5 @@ export function startHeartbeatSystem(broker: EventBroker): void {
 
   startMemorySweeper();
 
-  console.log(`[Heartbeat] Active — touch every ${TOUCH_INTERVAL_MS}ms, orphan threshold ${ORPHAN_AFTER_MS}ms.`);
+  console.log(`[Heartbeat] Active — touch every ${TOUCH_INTERVAL_MS}ms, sweep every ${SWEEP_INTERVAL_MS}ms (threshold owned by Agents).`);
 }

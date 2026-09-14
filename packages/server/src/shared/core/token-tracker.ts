@@ -1,21 +1,18 @@
 import { randomUUID } from "node:crypto";
 import { eq, sql, sum } from "drizzle-orm";
-import { getDb, withTransaction, dbScopeKey, runWithDb } from "../config/database.js";
+import { getDb, dbScopeKey, runWithDb } from "../config/database.js";
 import { forEachWorkspaceDb } from "../../workspace/workspace-gate.js";
 import {
   modelModules,
   tokenUsageLog,
   workspaceSettings,
-  messages,
 } from "../../db/schema.js";
 import type { EventBroker } from "../../event-broker/event-broker-gate.js";
 import type { AgentProfile } from "../../agents/agent-gate.js";
-import type { ChannelMessage } from "../../messages/message-gate.js";
+import { messageGate } from "../../messages/message-gate.js";
 import { EscalationChain } from "../../agents/agent-gate.js";
 import { TtlCache } from "./ttl-cache.js";
 import { logMetric } from "./structured-log.js";
-import { allocateSequence } from "./sequence-number.js";
-import { monotonicUlid } from "./ulid.js";
 
 const DEFAULT_RECONCILE_INTERVAL_MS = 24 * 60 * 60 * 1000;
 
@@ -131,28 +128,17 @@ export class TokenTracker {
         );
       }
 
-      const warnMsg = await withTransaction(async (tx) => {
-        const sequenceNumber = await allocateSequence(channelId, 1, tx);
-        const msg: ChannelMessage = {
-          id: monotonicUlid(),
+      await messageGate.append(
+        {
           channelId,
           authorId: "system",
           authorName: "System Warning",
           authorLevel: "stakeholder",
           authorType: "system",
           content: `⚠️ Token usage has reached 80%+ of the workspace budget soft cap (${consumedTokens} / ${globalSoftCap} tokens). Please allocate additional budget to prevent automatic worker standbys.`,
-          mentions: [],
-          isInternalMonologue: false,
-          sequenceNumber,
-          timestamp: new Date(),
-        };
-        await tx.insert(messages).values({
-          ...msg,
-          authorLevel: String(msg.authorLevel),
-        });
-        return msg;
-      });
-      broker.emit("message:new", warnMsg, { channelId });
+        },
+        { broker }
+      );
     } else {
       TokenTracker.budgetWarningState.warned = false;
       TokenTracker.budgetWarningState.cap = globalSoftCap;

@@ -1,11 +1,10 @@
 import { and, eq, isNull } from "drizzle-orm";
 import { getDb } from "../shared/config/database.js";
-import { agents, runtimeStates, messages } from "../db/schema.js";
+import { agents } from "../db/schema.js";
+import { agentRegistry } from "./agent-service.js";
+import { messageGate } from "../messages/message-gate.js";
 import type { EventBroker } from "../event-broker/event-broker-gate.js";
 import type { AgentProfile } from "./agent-types.js";
-import type { ChannelMessage } from "../messages/message-gate.js";
-import { getNextSequenceNumber } from "../shared/core/sequence-number.js";
-import { monotonicUlid } from "../shared/core/ulid.js";
 
 export type AgentErrorType =
   | "LLM_API_ERROR"
@@ -64,25 +63,9 @@ export class EscalationChain {
       });
     }
 
-    // 1. Pause the failing agent
-    await db.update(agents).set({ status: "paused" }).where(eq(agents.id, agent.id));
-    broker.emit("agent:status", { agentId: agent.id, status: "paused" });
+    // 1. Pause the failing agent (Agents owns agents.status + runtime_states)
+    await agentRegistry.setStatus(agent.id, "paused", { broker, errorInfo: { code: errorType, message: errorMessage } });
     broker.emit("agent:paused", { agentId: agent.id, reason: `${errorType}: ${errorMessage}` });
-
-    // Update RuntimeState
-    const [state] = await db.select().from(runtimeStates).where(eq(runtimeStates.agentId, agent.id)).limit(1);
-    if (state) {
-      await db.update(runtimeStates)
-        .set({
-          status: "paused",
-          errorInfo: {
-            code: errorType,
-            message: errorMessage,
-            timestamp: new Date().toISOString()
-          }
-        })
-        .where(eq(runtimeStates.agentId, agent.id));
-    }
 
     // 2. Resolve escalation target
     let escalatedTo = "User (Stakeholder)";
@@ -99,8 +82,6 @@ export class EscalationChain {
       targetLevel = null;
     }
 
-    const nextSeq = await getNextSequenceNumber(channelId);
-
     if (targetLevel !== null) {
       // Find active coordinators at targetLevel
       const allAgents = await db.query.agents.findMany({
@@ -112,56 +93,38 @@ export class EscalationChain {
         escalatedTo = targetAgent.id;
         const msgContent = `[ESCALATION] ⚠️ Agent @${agent.name} (L${agent.authorityLevel}) encountered error [${errorType}]: "${errorMessage}". Escalating to @${targetAgent.name} (L${targetAgent.authorityLevel}) for resolution.`;
 
-        const escMsg: ChannelMessage = {
-          id: monotonicUlid(),
-          channelId,
-          authorId: "system",
-          authorName: "System Safety Monitor",
-          authorLevel: "stakeholder",
-          authorType: "system",
-          content: msgContent,
-          mentions: [{ type: "agent", targetId: targetAgent.id, targetName: targetAgent.name, position: 0, flag: "escalation" }],
-          isInternalMonologue: false,
-          sequenceNumber: nextSeq,
-          timestamp: new Date(),
-        };
+        await messageGate.append(
+          {
+            channelId,
+            authorId: "system",
+            authorName: "System Safety Monitor",
+            authorLevel: "stakeholder",
+            authorType: "system",
+            content: msgContent,
+            mentions: [{ type: "agent", targetId: targetAgent.id, targetName: targetAgent.name, position: 0, flag: "escalation" }],
+          },
+          { broker }
+        );
 
-        await db.insert(messages).values({
-          ...escMsg,
-          authorLevel: String(escMsg.authorLevel),
-        });
-        broker.emit("message:new", escMsg, { channelId });
-
-        // Trigger active target agent status
-        await db.update(agents).set({ status: "working" }).where(eq(agents.id, targetAgent.id));
-        broker.emit("agent:status", { agentId: targetAgent.id, status: "working" });
+        // Trigger active target agent status (Agents owns the flip)
+        await agentRegistry.setStatus(targetAgent.id, "working", { broker });
         broker.emit("agent:thinking", { agentId: targetAgent.id, channelId }, { channelId });
 
         setTimeout(async () => {
           const replyContent = `I am @${targetAgent.name}, L${targetAgent.authorityLevel} Coordinator. I have taken over the error escalation from @${agent.name}. Examining error stack and initializing fallback pipelines.`;
-          const replySeq = await getNextSequenceNumber(channelId);
-          const replyMsg: ChannelMessage = {
-            id: monotonicUlid(),
-            channelId,
-            authorId: targetAgent.id,
-            authorName: targetAgent.name,
-            authorLevel: targetAgent.authorityLevel as any,
-            authorType: "agent",
-            content: replyContent,
-            mentions: [],
-            isInternalMonologue: false,
-            sequenceNumber: replySeq,
-            timestamp: new Date(),
-          };
+          await messageGate.append(
+            {
+              channelId,
+              authorId: targetAgent.id,
+              authorName: targetAgent.name,
+              authorLevel: targetAgent.authorityLevel,
+              authorType: "agent",
+              content: replyContent,
+            },
+            { broker }
+          );
 
-          await db.insert(messages).values({
-            ...replyMsg,
-            authorLevel: String(replyMsg.authorLevel),
-          });
-          broker.emit("message:new", replyMsg, { channelId });
-
-          await db.update(agents).set({ status: "idle" }).where(eq(agents.id, targetAgent.id));
-          broker.emit("agent:status", { agentId: targetAgent.id, status: "idle" });
+          await agentRegistry.setStatus(targetAgent.id, "idle", { broker });
         }, 1200);
 
         return;
@@ -171,25 +134,17 @@ export class EscalationChain {
     // Direct User Escalation
     const userMsgContent = `[EMERGENCY NOTIFICATION] 🚨 Fatal escalation block reached. Agent @${agent.name} (L${agent.authorityLevel}) encountered unresolved error [${errorType}]: "${errorMessage}". System swarm paused. Operator intervention required! Opsi: Reset budget, update agent prompt, or clear Sandbox files.`;
 
-    const userMsg: ChannelMessage = {
-      id: monotonicUlid(),
-      channelId,
-      authorId: "system",
-      authorName: "System Warning",
-      authorLevel: "stakeholder",
-      authorType: "system",
-      content: userMsgContent,
-      mentions: [],
-      isInternalMonologue: false,
-      sequenceNumber: nextSeq,
-      timestamp: new Date(),
-    };
-
-    await db.insert(messages).values({
-      ...userMsg,
-      authorLevel: String(userMsg.authorLevel),
-    });
-    broker.emit("message:new", userMsg, { channelId });
+    await messageGate.append(
+      {
+        channelId,
+        authorId: "system",
+        authorName: "System Warning",
+        authorLevel: "stakeholder",
+        authorType: "system",
+        content: userMsgContent,
+      },
+      { broker }
+    );
     broker.emit("budget:exceeded", { profileId: agent.modelModuleId || "default", pausedAgents: [agent.id] }, { channelId });
   }
 }

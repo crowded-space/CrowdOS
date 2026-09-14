@@ -1,8 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { eq, and, gt, isNull, sql } from "drizzle-orm";
-import { getDb, withTransaction } from "../config/database.js";
+import { getDb } from "../config/database.js";
 import {
-  agents,
   channels,
   messages,
   modelModules,
@@ -12,7 +11,8 @@ import {
 } from "../../db/schema.js";
 import type { EventBroker } from "../../event-broker/event-broker-gate.js";
 import type { AgentProfile } from "../../agents/agent-gate.js";
-import type { ChannelMessage } from "../../messages/message-gate.js";
+import { agentGate } from "../../agents/agent-gate.js";
+import { messageGate } from "../../messages/message-gate.js";
 import { TokenTracker } from "./token-tracker.js";
 import { LoopArbiter } from "./loop-arbiter.js";
 import { compileGoogleEndpoint, isGemmaModel, parseGemmaThoughts } from "./google-model-helpers.js";
@@ -20,8 +20,6 @@ import { loadRoutingModules, resolveModelModule } from "./model-routing.js";
 import { decrypt as secretBoxDecrypt, isEncrypted } from "./secret-box.js";
 import { redactSecrets } from "./redact.js";
 import { logMetric } from "./structured-log.js";
-import { allocateSequence } from "./sequence-number.js";
-import { monotonicUlid } from "./ulid.js";
 
 const DEGRADED_SUMMARY_PLACEHOLDER = "[INDEX DEGRADED] Summary unavailable — provider call failed.";
 
@@ -82,11 +80,8 @@ export class LibrarianRuntime {
    * Main execute command called when the Librarian agent is mentioned.
    */
   async execute(broker: EventBroker, channelId: string, librarianAgent: AgentProfile, userMsgContent: string): Promise<void> {
-    const db = getDb();
-
-    // 1. Set status to working & thinking
-    await db.update(agents).set({ status: "working" }).where(eq(agents.id, librarianAgent.id));
-    broker.emit("agent:status", { agentId: librarianAgent.id, status: "working" });
+    // 1. Set status to working & thinking (Agents owns the flip)
+    await agentGate.setStatus(librarianAgent.id, "working", { broker });
     broker.emit("agent:thinking", { agentId: librarianAgent.id, channelId }, { channelId });
 
     const contentLower = userMsgContent.toLowerCase();
@@ -135,28 +130,18 @@ Available commands:
     broker.emit("message:stream", { channelId, agentId: librarianAgent.id, chunk: replyContent }, { channelId });
 
     setTimeout(async () => {
-      const repMsg = await withTransaction(async (tx) => {
-        const sequenceNumber = await allocateSequence(channelId, 1, tx);
-        const msg: ChannelMessage = {
-          id: monotonicUlid(),
+      // Messages owns the table: sequence + insert + emit live in messageGate.append.
+      const repMsg = await messageGate.append(
+        {
           channelId,
           authorId: librarianAgent.id,
           authorName: librarianAgent.name,
-          authorLevel: librarianAgent.authorityLevel as any,
+          authorLevel: librarianAgent.authorityLevel,
           authorType: "agent",
           content: replyContent,
-          mentions: [],
-          isInternalMonologue: false,
-          sequenceNumber,
-          timestamp: new Date(),
-        };
-        await tx.insert(messages).values({
-          ...msg,
-          authorLevel: String(msg.authorLevel),
-        });
-        return msg;
-      });
-      broker.emit("message:new", repMsg, { channelId });
+        },
+        { broker }
+      );
 
       // Token Tracking & Loop Check
       const promptTokens = Math.ceil(userMsgContent.length / 4);
@@ -166,8 +151,7 @@ Available commands:
         await LoopArbiter.checkLoop(broker, librarianAgent, channelId, repMsg.content);
       }
 
-      await db.update(agents).set({ status: "idle" }).where(eq(agents.id, librarianAgent.id));
-      broker.emit("agent:status", { agentId: librarianAgent.id, status: "idle" });
+      await agentGate.setStatus(librarianAgent.id, "idle", { broker });
     }, streamDelay);
   }
 

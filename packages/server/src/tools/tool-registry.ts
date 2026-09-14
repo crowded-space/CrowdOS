@@ -4,6 +4,7 @@ import { eq, isNull, sql } from "drizzle-orm";
 import { Guard } from "./safety/guard.js";
 import { execHardened } from "./safety/hardened-exec.js";
 import { AgentSpawnManager } from "../agents/agent-gate.js";
+import { messageGate } from "../messages/message-gate.js";
 import { globalBroker } from "../shared/sockets/register-socket-server.js";
 import { getDb } from "../shared/config/database.js";
 import { agents } from "../db/schema.js";
@@ -94,32 +95,19 @@ async function honestSchedulerEmit(
     brokerInst = new EventBroker() as unknown as InstanceType<typeof EventBroker>;
   }
   try {
-    const { withTransaction } = await import("../shared/config/database.js");
-    const { allocateSequence } = await import("../shared/core/sequence-number.js");
-    const { monotonicUlid } = await import("../shared/core/ulid.js");
-    const { messages } = await import("../db/schema.js");
-    const persisted = await (withTransaction as (fn: (tx: unknown) => Promise<unknown>) => Promise<unknown>)(async (tx: unknown) => {
-      const seq = await (allocateSequence as (cid: string, n: number, t: unknown) => Promise<number>)(effectiveChannelId, 1, tx);
-      const msg = {
-        id: monotonicUlid(),
+    const persisted = await messageGate.append(
+      {
         channelId: effectiveChannelId,
         authorId: "system-scheduler",
         authorName: "Scheduler",
         authorLevel: "system",
-        authorType: "system" as const,
+        authorType: "system",
         content,
-        mentions: [] as unknown[],
-        isInternalMonologue: false,
-        sequenceNumber: seq,
-        timestamp: new Date(),
-      };
-      await (tx as { insert: (table: unknown) => { values: (v: unknown) => Promise<void> } }).insert(messages).values({
-        ...(msg as Record<string, unknown>),
-        authorLevel: String((msg as Record<string, unknown>).authorLevel),
-      });
-      return msg;
-    });
-    (brokerInst as unknown as { emit: (t: string, p: unknown, o?: unknown) => void }).emit("message:new", persisted as never, { channelId: effectiveChannelId });
+        workspaceId: workspaceId ?? null,
+      },
+      { broker: brokerInst as never }
+    );
+    void persisted;
   } catch {
     const ephemeral = {
       id: `sched-msg-${Date.now()}`,

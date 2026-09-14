@@ -1,12 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { threadGate } from "../threads/thread-gate.js";
-import { getDb } from "../shared/config/database.js";
-import { messages } from "../db/schema.js";
-import { eq } from "drizzle-orm";
-import { allocateThreadSequence } from "../shared/core/thread-sequence.js";
-import { monotonicUlid } from "../shared/core/ulid.js";
-import { withTransaction } from "../shared/config/database.js";
+import { messageGate } from "../messages/message-gate.js";
 import { MentionParser } from "../shared/core/mention-parser.js";
 
 const createThreadSchema = z.object({
@@ -93,24 +88,16 @@ export async function threadRoutes(app: FastifyInstance) {
     const mentions = await mentionParser.parseMentions(content);
     const authorId = request.body.authorId ?? "local-user";
     const authorName = request.body.authorName ?? "User";
-    const msg = await withTransaction(async (tx) => {
-      const seq = await allocateThreadSequence(thread.id, 1, tx);
-      const row = {
-        id: monotonicUlid(),
-        channelId: thread.channelId,
-        threadId: thread.id,
-        authorId,
-        authorName,
-        authorLevel: "stakeholder",
-        authorType: "user" as const,
-        content,
-        mentions,
-        isInternalMonologue: false,
-        sequenceNumber: seq,
-        timestamp: new Date(),
-      };
-      await tx.insert(messages).values({ ...row, authorLevel: String(row.authorLevel) });
-      return row;
+    // Messages owns the table (thread sequence when threadId is set).
+    const msg = await messageGate.append({
+      channelId: thread.channelId,
+      threadId: thread.id,
+      authorId,
+      authorName,
+      authorLevel: "stakeholder",
+      authorType: "user",
+      content,
+      mentions,
     });
     await threadGate.incrementCount(thread.id);
     // Emit via global broker (lazy import to avoid cycle)

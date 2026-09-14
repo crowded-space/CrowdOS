@@ -9,15 +9,16 @@ import { setSharedBroker } from "../../event-broker/event-broker-gate.js";
 import { MentionParser } from "../core/mention-parser.js";
 import { AgentRegistry } from "../../agents/agent-gate.js";
 import { channelGate } from "../../channels/channel-gate.js";
+import { messageGate } from "../../messages/message-gate.js";
 import { resolveSocketIdentity } from "./socket-auth.js";
 import type { SocketIdentity } from "./socket-auth.js";
 import { createSocketRateLimiter } from "./rate-limiter.js";
 import { runtimeGate } from "../../runtime/runtime-gate.js";
 import { composerModeToRuntime } from "../../runtime/types.js";
 import { IndexBuilder } from "../core/index-builder.js";
-import { getDb, withTransaction } from "../config/database.js";
+import { getDb } from "../config/database.js";
 import { startHeartbeatSystem } from "../core/agent-heartbeat.js";
-import { messages, agents, channels, categories, workspaces, runtimeOverrides, spawnRequests, durableEvents } from "../../db/schema.js";
+import { agents, channels, categories, workspaces, runtimeOverrides, spawnRequests, durableEvents } from "../../db/schema.js";
 import { desc, gt, and, isNull, lt, sql } from "drizzle-orm";
 import type {
   SocketClientToServerEvents,
@@ -25,10 +26,7 @@ import type {
   EventEnvelope,
   BrokerEventType,
 } from "../../event-broker/event-broker-gate.js";
-import type { ChannelMessage } from "../../messages/message-gate.js";
 import type { AgentProfile } from "../../agents/agent-gate.js";
-import { allocateSequence } from "../core/sequence-number.js";
-import { monotonicUlid } from "../core/ulid.js";
 import { logMetric } from "../core/structured-log.js";
 import { queueGate } from "../../queue/queue-gate.js";
 
@@ -139,30 +137,18 @@ function endRun(key: string, entry: ActiveRunEntry): void {
 // Agent execution is handled by RuntimeExecutor
 
 async function triggerSystemWarning(broker: EventBroker, channelId: string, content: string): Promise<void> {
-  // DB-2: reservation + insert commit atomically (no SELECT-MAX+1 race).
-  const warningMsg = await withTransaction(async (tx) => {
-    const sequenceNumber = await allocateSequence(channelId, 1, tx);
-    const msg: ChannelMessage = {
-      id: monotonicUlid(),
+  // Messages owns the table: sequence + insert + emit live in messageGate.append.
+  await messageGate.append(
+    {
       channelId,
       authorId: "system",
       authorName: "System Warning",
       authorLevel: "stakeholder",
       authorType: "system",
       content,
-      mentions: [],
-      isInternalMonologue: false,
-      sequenceNumber,
-      timestamp: new Date(),
-    };
-    await tx.insert(messages).values({
-      ...msg,
-      authorLevel: String(msg.authorLevel),
-    });
-    return msg;
-  });
-
-  broker.emit("message:new", warningMsg, { channelId });
+    },
+    { broker }
+  );
 }
 
 async function emitRuntimeSnapshot(target: any): Promise<void> {
@@ -610,17 +596,14 @@ export function registerSocketServer(httpServer: HttpServer, broker: EventBroker
 
         // 2. Persist the human operator's message — author identity is the
         // server-verified key identity; client authorId/authorName claims are
-        // advisory only and never persisted (SEC-2). DB-2: reservation +
-        // insert commit atomically (no SELECT-MAX+1 race, no PK collisions).
+        // advisory only and never persisted (SEC-2). Messages owns the table.
         const authorId = identity.userId;
         const authorName = identity.mode === "apikey"
           ? (identity.label || identity.keyId || authorId)
           : ((payload as any).authorName || (authorId === "user-1" ? "Juan Hamzah" : authorId));
 
-        const userMsg: ChannelMessage = await withTransaction(async (tx) => {
-          const sequenceNumber = await allocateSequence(channelId, 1, tx);
-          const msg: ChannelMessage = {
-            id: monotonicUlid(),
+        const userMsg = await messageGate.append(
+          {
             channelId,
             authorId,
             authorName,
@@ -628,18 +611,9 @@ export function registerSocketServer(httpServer: HttpServer, broker: EventBroker
             authorType: "user",
             content,
             mentions: resolvedMentions,
-            isInternalMonologue: false,
-            sequenceNumber,
-            timestamp: new Date(),
-          };
-          await tx.insert(messages).values({
-            ...msg,
-            authorLevel: String(msg.authorLevel),
-          });
-          return msg;
-        });
-
-        broker.emit("message:new", userMsg, { channelId });
+          },
+          { broker }
+        );
 
         // 3. Process mentions and triggers
         const allAgents = await agentRegistry.list({ isTemplate: false });

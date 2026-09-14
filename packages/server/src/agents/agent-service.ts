@@ -1,9 +1,13 @@
 import { randomUUID } from "node:crypto";
 
-import { and, eq, isNull } from "drizzle-orm";
+import { and, asc, eq, inArray, isNull, lt } from "drizzle-orm";
 
-import { getDb, dbScopeKey } from "../shared/config/database.js";
+import { getDb, dbScopeKey, withTransaction, runWithDb } from "../shared/config/database.js";
 import { skillsGate } from "../skills/skills-gate.js";
+import { forEachWorkspaceDb } from "../workspace/workspace-gate.js";
+import { markAgentWorking, markAgentIdle } from "../shared/core/agent-heartbeat.js";
+import type { EventBroker } from "../event-broker/event-broker-gate.js";
+import type { RuntimeStatus } from "../types/runtime.types.js";
 import { getCachedRoster, invalidateRosterCache } from "./agent-roster-cache.js";
 import {
   agents,
@@ -238,6 +242,92 @@ export class AgentRegistry {
     const result = await db.delete(agents).where(eq(agents.id, id)).returning({ id: agents.id });
     invalidateRosterCache();
     return result.length > 0;
+  }
+
+  /** Sole owner write for `agents.status` + `runtime_states`: atomic flip + heartbeat + `agent:status`. */
+  async setStatus(
+    agentId: string,
+    status: RuntimeStatus,
+    opts: { broker?: EventBroker; db?: any; errorInfo?: { code: string; message: string } } = {}
+  ): Promise<void> {
+    const write = async (tx: any) => {
+      await tx.update(agents).set({ status }).where(eq(agents.id, agentId));
+      await tx
+        .update(runtimeStates)
+        .set({
+          status,
+          lastHeartbeat: new Date(),
+          ...(opts.errorInfo
+            ? { errorInfo: { ...opts.errorInfo, timestamp: new Date().toISOString() } }
+            : {}),
+        })
+        .where(eq(runtimeStates.agentId, agentId));
+    };
+    if (opts.db) await runWithDb(opts.db, () => withTransaction(write));
+    else await withTransaction(write);
+
+    if (status === "working") markAgentWorking(agentId);
+    else markAgentIdle(agentId);
+
+    opts.broker?.emit("agent:status", { agentId, status } as never);
+  }
+
+  /** Sole owner heartbeat touch for locally-active agents across workspace DBs. */
+  async touchHeartbeat(agentIds: string[], dbOverride?: any): Promise<void> {
+    if (agentIds.length === 0) return;
+    const touch = async (db: any) => {
+      try {
+        await db.update(runtimeStates).set({ lastHeartbeat: new Date() }).where(inArray(runtimeStates.agentId, agentIds));
+      } catch (err) {
+        console.error("[Heartbeat] Failed to touch working agents:", (err as any)?.message || err);
+      }
+    };
+    if (dbOverride) {
+      await touch(dbOverride);
+      return;
+    }
+    // ponytail: touch every database — a locally working agent may belong to
+    // any workspace; row misses elsewhere are no-ops.
+    await forEachWorkspaceDb(async (db) => {
+      await touch(db);
+    });
+  }
+
+  /** Sole owner orphan sweep: pause stale `working` rows whose heartbeat expired. Returns paused count. */
+  async sweepOrphans(broker: EventBroker, opts: { orphanAfterMs?: number; isLive?: (agentId: string) => boolean } = {}): Promise<number> {
+    const raw = opts.orphanAfterMs ?? Number(process.env.ORPHAN_AFTER_MS);
+    const orphanAfterMs = Number.isFinite(raw) && (raw as number) >= 10_000 ? (raw as number) : 60_000;
+    let paused = 0;
+    await forEachWorkspaceDb(async (db, workspaceId) => {
+      try {
+        const cutoff = new Date(Date.now() - orphanAfterMs);
+        const stale = await db
+          .select()
+          .from(runtimeStates)
+          .where(and(eq(runtimeStates.status, "working"), lt(runtimeStates.lastHeartbeat, cutoff)))
+          .orderBy(asc(runtimeStates.lastHeartbeat))
+          .limit(50)
+          .for("update", { skipLocked: true });
+
+        for (const state of stale) {
+          if (opts.isLive?.(state.agentId)) continue;
+          console.warn(`[Heartbeat] Orphaned 'working' agent ${state.agentId} detected (no heartbeat since ${state.lastHeartbeat?.toISOString?.() ?? "never"}) — pausing.`);
+          await db.update(agents).set({ status: "paused" }).where(eq(agents.id, state.agentId));
+          await db
+            .update(runtimeStates)
+            .set({ status: "paused", errorInfo: { code: "ORPHANED", message: "Heartbeat expired; run presumed dead.", timestamp: new Date().toISOString() } })
+            .where(eq(runtimeStates.agentId, state.agentId));
+          // ponytail: tag the owning workspace so clients ignore foreign pauses.
+          const wid = workspaceId ? { workspaceId } : {};
+          broker.emit("agent:status", { agentId: state.agentId, status: "paused", ...wid } as never);
+          broker.emit("agent:paused", { agentId: state.agentId, reason: "Heartbeat expired; run presumed dead.", ...wid } as never);
+          paused++;
+        }
+      } catch (err) {
+        console.error("[Heartbeat] Orphan sweep failed:", (err as any)?.message || err);
+      }
+    });
+    return paused;
   }
 
   private async ensureValidReferences(input: CreateAgentProfileInput, currentAgentId?: string, dbOverride?: any): Promise<void> {

@@ -40,35 +40,22 @@ async function handleScheduledTrigger(job: Job<ScheduledJobData>): Promise<void>
     broker = new EventBroker();
   }
 
-  // Try to persist message transactionally
+  // Try to persist message via the Messages owner gate (sequence + insert + emit).
   try {
-    const { withTransaction } = await import("../shared/config/database.js");
-    const { allocateSequence } = await import("../shared/core/sequence-number.js");
-    const { monotonicUlid } = await import("../shared/core/ulid.js");
-    const { messages } = await import("../db/schema.js");
-
-    const persisted = await withTransaction(async (tx: unknown) => {
-      const seq = await (allocateSequence as (cid: string, n: number, t: unknown) => Promise<number>)(channelId, 1, tx);
-      const msg = {
-        id: messageId || monotonicUlid(),
+    const { messageGate } = await import("../messages/message-gate.js");
+    await messageGate.append(
+      {
+        id: typeof messageId === "string" ? messageId : undefined,
         channelId,
         authorId: "system-scheduler",
         authorName: "Scheduler",
         authorLevel: "system",
-        authorType: "system" as const,
+        authorType: "system",
         content,
-        mentions: [] as unknown[],
-        isInternalMonologue: false,
-        sequenceNumber: seq,
-        timestamp: new Date(),
-      };
-      await (tx as { insert: (table: unknown) => { values: (v: unknown) => Promise<void> } }).insert(messages).values({
-        ...(msg as Record<string, unknown>),
-        authorLevel: String((msg as Record<string, unknown>).authorLevel),
-      });
-      return msg;
-    });
-    (broker as unknown as { emit: (t: string, p: unknown, o?: unknown) => void }).emit("message:new", persisted as unknown as never, { channelId });
+        workspaceId,
+      },
+      { broker: broker as never }
+    );
   } catch {
     // Ephemeral fallback when DB not reachable (e.g., in-memory test fake without messages table)
     const ephemeral = {

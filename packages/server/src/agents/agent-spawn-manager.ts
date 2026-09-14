@@ -7,7 +7,6 @@ import { getDb } from "../shared/config/database.js";
 import {
   agents,
   channels,
-  messages,
   spawnRequests,
   taskFiles,
   runtimeStates,
@@ -16,7 +15,8 @@ import {
 import type { EventBroker } from "../event-broker/event-broker-gate.js";
 import type { AgentProfile } from "./agent-types.js";
 import type { SubtaskDefinition, SpawnFailurePolicy, TaskPriority } from "../types/task.types.js";
-import type { ChannelMessage } from "../messages/message-gate.js";
+import { agentRegistry } from "./agent-service.js";
+import { messageGate } from "../messages/message-gate.js";
 
 function getWorkspaceDir(): string {
   // Resolve workspace dir via env or sandbox fallback (P0-5, HQ5) — never hard-coded Windows path
@@ -43,9 +43,6 @@ export interface AggregationReport {
   items: AggregationReportItem[];
   timestamp: Date;
 }
-
-import { getNextSequenceNumber } from "../shared/core/sequence-number.js";
-import { monotonicUlid } from "../shared/core/ulid.js";
 
 export class AgentSpawnManager {
   /**
@@ -314,77 +311,42 @@ export class AgentSpawnManager {
     let workerOutput = "";
     let supervisorEvaluation = "";
 
-    // Welcome greeting in the private channel
+    // Welcome greeting in the private channel (Messages owns the table)
     const welcomeMsgContent = `[SYSTEM] Welcome to private processing channel **#${pairChannelName}**. \nSpawning coordinates:\n* L3 Worker: @${uniqueWorkerName}\n* L3 Supervisor: @${uniqueSpvName}\n* Subtask: ${subtask.title}`;
-    const startSeq = await getNextSequenceNumber(pairChannelId);
-    const welcomeMsgId = monotonicUlid();
-    await db.insert(messages).values({
-      id: welcomeMsgId,
-      channelId: pairChannelId,
-      authorId: "system",
-      authorName: "System Coordinator",
-      authorLevel: "stakeholder",
-      authorType: "system",
-      content: welcomeMsgContent,
-      mentions: [],
-      isInternalMonologue: false,
-      sequenceNumber: startSeq,
-      timestamp: new Date(),
-    });
-    broker.emit("message:new", {
-      id: welcomeMsgId,
-      channelId: pairChannelId,
-      authorId: "system",
-      authorName: "System Coordinator",
-      authorLevel: "stakeholder",
-      authorType: "system" as const,
-      content: welcomeMsgContent,
-      mentions: [],
-      isInternalMonologue: false,
-      sequenceNumber: startSeq,
-      timestamp: new Date(),
-    }, { channelId: pairChannelId });
+    await messageGate.append(
+      {
+        channelId: pairChannelId,
+        authorId: "system",
+        authorName: "System Coordinator",
+        authorLevel: "stakeholder",
+        authorType: "system",
+        content: welcomeMsgContent,
+      },
+      { broker }
+    );
 
     // 4. Execution Loop (Retry policies and supervisor feedback)
     while (retryCount <= maxRetries) {
       if (retryCount > 0) {
         const retryMsgContent = `[SYSTEM] Initiating retry cycle **${retryCount}** of ${maxRetries} due to Supervisor failure feedback.`;
-        const retrySeq = await getNextSequenceNumber(pairChannelId);
-        const retryMsgId = monotonicUlid();
-        await db.insert(messages).values({
-          id: retryMsgId,
-          channelId: pairChannelId,
-          authorId: "system",
-          authorName: "System Coordinator",
-          authorLevel: "stakeholder",
-          authorType: "system",
-          content: retryMsgContent,
-          mentions: [],
-          isInternalMonologue: false,
-          sequenceNumber: retrySeq,
-          timestamp: new Date(),
-        });
-        broker.emit("message:new", {
-          id: retryMsgId,
-          channelId: pairChannelId,
-          authorId: "system",
-          authorName: "System Coordinator",
-          authorLevel: "stakeholder",
-          authorType: "system" as const,
-          content: retryMsgContent,
-          mentions: [],
-          isInternalMonologue: false,
-          sequenceNumber: retrySeq,
-          timestamp: new Date(),
-        }, { channelId: pairChannelId });
+        await messageGate.append(
+          {
+            channelId: pairChannelId,
+            authorId: "system",
+            authorName: "System Coordinator",
+            authorLevel: "stakeholder",
+            authorType: "system",
+            content: retryMsgContent,
+          },
+          { broker }
+        );
       }
 
       // Update task file status
       await db.update(taskFiles).set({ status: "in_progress" }).where(eq(taskFiles.id, taskFileId));
 
-      // --- RUN WORKER ---
-      await db.update(agents).set({ status: "working" }).where(eq(agents.id, workerId));
-      broker.emit("agent:status", { agentId: workerId, status: "working" });
+      // --- RUN WORKER --- (Agents owns the status flip + heartbeat)
+      await agentRegistry.setStatus(workerId, "working", { broker });
       broker.emit("agent:thinking", { agentId: workerId, channelId: pairChannelId }, { channelId: pairChannelId });
 
       // Legacy path: simulated execution (retired) — gated by SWARM_LEGACY, honest delay noted
@@ -406,33 +368,22 @@ export class AgentSpawnManager {
       // Stream Worker response
       broker.emit("message:stream", { channelId: pairChannelId, agentId: workerId, chunk: workerOutput }, { channelId: pairChannelId });
 
-      const wSeq = await getNextSequenceNumber(pairChannelId);
-      const workerMsg: ChannelMessage = {
-        id: monotonicUlid(),
-        channelId: pairChannelId,
-        authorId: workerId,
-        authorName: uniqueWorkerName,
-        authorLevel: 3,
-        authorType: "agent",
-        content: workerOutput,
-        mentions: [],
-        isInternalMonologue: false,
-        sequenceNumber: wSeq,
-        timestamp: new Date(),
-      };
+      await messageGate.append(
+        {
+          channelId: pairChannelId,
+          authorId: workerId,
+          authorName: uniqueWorkerName,
+          authorLevel: 3,
+          authorType: "agent",
+          content: workerOutput,
+        },
+        { broker }
+      );
 
-      await db.insert(messages).values({
-        ...workerMsg,
-        authorLevel: String(workerMsg.authorLevel),
-      });
-      broker.emit("message:new", workerMsg, { channelId: pairChannelId });
+      await agentRegistry.setStatus(workerId, "idle", { broker });
 
-      await db.update(agents).set({ status: "idle" }).where(eq(agents.id, workerId));
-      broker.emit("agent:status", { agentId: workerId, status: "idle" });
-
-      // --- RUN SUPERVISOR ---
-      await db.update(agents).set({ status: "working" }).where(eq(agents.id, spvId));
-      broker.emit("agent:status", { agentId: spvId, status: "working" });
+      // --- RUN SUPERVISOR --- (Agents owns the status flip + heartbeat)
+      await agentRegistry.setStatus(spvId, "working", { broker });
       broker.emit("agent:thinking", { agentId: spvId, channelId: pairChannelId }, { channelId: pairChannelId });
 
       await new Promise((resolve) => setTimeout(resolve, 50));
@@ -451,29 +402,19 @@ export class AgentSpawnManager {
 
       broker.emit("message:stream", { channelId: pairChannelId, agentId: spvId, chunk: supervisorEvaluation }, { channelId: pairChannelId });
 
-      const sSeq = await getNextSequenceNumber(pairChannelId);
-      const spvMsg: ChannelMessage = {
-        id: monotonicUlid(),
-        channelId: pairChannelId,
-        authorId: spvId,
-        authorName: uniqueSpvName,
-        authorLevel: 3,
-        authorType: "agent",
-        content: supervisorEvaluation,
-        mentions: [],
-        isInternalMonologue: false,
-        sequenceNumber: sSeq,
-        timestamp: new Date(),
-      };
+      await messageGate.append(
+        {
+          channelId: pairChannelId,
+          authorId: spvId,
+          authorName: uniqueSpvName,
+          authorLevel: 3,
+          authorType: "agent",
+          content: supervisorEvaluation,
+        },
+        { broker }
+      );
 
-      await db.insert(messages).values({
-        ...spvMsg,
-        authorLevel: String(spvMsg.authorLevel),
-      });
-      broker.emit("message:new", spvMsg, { channelId: pairChannelId });
-
-      await db.update(agents).set({ status: "idle" }).where(eq(agents.id, spvId));
-      broker.emit("agent:status", { agentId: spvId, status: "idle" });
+      await agentRegistry.setStatus(spvId, "idle", { broker });
 
       if (finalVerdict === "success") {
         break;

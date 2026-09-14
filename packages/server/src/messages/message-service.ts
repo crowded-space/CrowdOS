@@ -1,8 +1,12 @@
 import { eq, and, sql } from "drizzle-orm";
-import { getDb } from "../shared/config/database.js";
+import { getDb, withTransaction, runWithDb } from "../shared/config/database.js";
 import { messages } from "../db/schema.js";
 import { stripToolCalls, parseToolCalls } from "@crowdspace/shared";
-import type { StructuredToolCall, MessagePageCursor, ChannelMessagesPage } from "./message-types.js";
+import { allocateSequence } from "../shared/core/sequence-number.js";
+import { allocateThreadSequence } from "../shared/core/thread-sequence.js";
+import { monotonicUlid } from "../shared/core/ulid.js";
+import type { StructuredToolCall, MessagePageCursor, ChannelMessagesPage, MessageAuthorType } from "./message-types.js";
+import type { EventBroker } from "../event-broker/event-broker-gate.js";
 
 interface ToolExecutionCard {
   id: string;
@@ -243,4 +247,68 @@ export async function getChannelMessagesPage(
     : null;
 
   return { messages: mergedList.reverse(), cursor };
+}
+
+export interface AppendMessageInput {
+  channelId: string;
+  authorId: string;
+  authorName: string;
+  authorLevel: string | number;
+  authorType: MessageAuthorType;
+  content: string;
+  mentions?: unknown[];
+  metadata?: Record<string, unknown>;
+  toolCalls?: StructuredToolCall[];
+  isInternalMonologue?: boolean;
+  threadId?: string | null;
+  workspaceId?: string | null;
+  id?: string;
+}
+
+export interface AppendMessageOpts {
+  broker?: EventBroker;
+  db?: any;
+  tx?: any;
+}
+
+/** Single owner write path for `messages`: sequence reserve + insert commit atomically, then `message:new`. */
+export async function appendMessage(input: AppendMessageInput, opts: AppendMessageOpts = {}): Promise<typeof messages.$inferSelect> {
+  const msgId = input.id ?? monotonicUlid();
+  const timestamp = new Date();
+  const write = async (tx: any) => {
+    const sequenceNumber = input.threadId
+      ? await allocateThreadSequence(input.threadId, 1, tx)
+      : await allocateSequence(input.channelId, 1, tx);
+    const row = {
+      id: msgId,
+      channelId: input.channelId,
+      threadId: input.threadId ?? null,
+      workspaceId: input.workspaceId ?? null,
+      authorId: input.authorId,
+      authorName: input.authorName,
+      authorLevel: String(input.authorLevel),
+      authorType: input.authorType,
+      content: input.content,
+      mentions: (input.mentions ?? []) as any,
+      metadata: input.metadata as any,
+      toolCalls: input.toolCalls as any,
+      isInternalMonologue: input.isInternalMonologue ?? false,
+      sequenceNumber,
+      timestamp,
+    };
+    await tx.insert(messages).values(row);
+    return { ...row, authorLevel: input.authorLevel } as unknown as typeof messages.$inferSelect;
+  };
+
+  let msg: typeof messages.$inferSelect;
+  if (opts.tx) {
+    msg = await write(opts.tx);
+  } else if (opts.db) {
+    msg = await runWithDb(opts.db, () => withTransaction(write));
+  } else {
+    msg = await withTransaction(write);
+  }
+
+  opts.broker?.emit("message:new", msg as never, { channelId: input.channelId } as never);
+  return msg;
 }

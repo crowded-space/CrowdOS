@@ -55,4 +55,9 @@ export const agentGate = {
   delete: (id: string, db?: any) => agentRegistry.delete(id, db),
   dispatch: AgentSpawnManager.dispatchAgent,
   escalate: EscalationChain.escalate,
+  setStatus: (agentId: string, status: AgentStatus, opts?: { broker?: any; db?: any; errorInfo?: { code: string; message: string } }) =>
+    agentRegistry.setStatus(agentId, status, opts as never),
+  touchHeartbeat: (agentIds: string[], db?: any) => agentRegistry.touchHeartbeat(agentIds, db),
+  sweepOrphans: (broker: any, opts?: { orphanAfterMs?: number; isLive?: (agentId: string) => boolean }) =>
+    agentRegistry.sweepOrphans(broker, opts),
 };

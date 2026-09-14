@@ -1,9 +1,6 @@
-import { eq } from 'drizzle-orm'
 import { performance } from 'node:perf_hooks'
-import { withTransaction } from '../../shared/config/database.js'
-import { allocateSequence } from '../../shared/core/sequence-number.js'
-import { monotonicUlid } from '../../shared/core/ulid.js'
-import { agents, messages, runtimeStates } from '../../db/schema.js'
+import { messageGate } from '../../messages/message-gate.js'
+import { agentGate } from '../../agents/agent-gate.js'
 import type { EventBroker } from '../../event-broker/event-broker-gate.js'
 import type { StructuredToolCall } from '../../messages/message-gate.js'
 import type { RuntimeStatus } from '../../types/runtime.types.js'
@@ -15,7 +12,6 @@ import type {
 } from '../types.js'
 import { ProviderRegistry } from '../providers/provider-registry.js'
 import { ReActStreamParser } from './re-act-stream-parser.js'
-import { markAgentWorking, markAgentIdle } from '../../shared/core/agent-heartbeat.js'
 import { logMetric } from '../../shared/core/structured-log.js'
 import { recordTiming } from '../../shared/core/perf-metrics.js'
 import { createChunkCoalescer, resolveStreamBatchMs, type ChunkCoalescer } from '../../shared/core/stream-coalescer.js'
@@ -168,37 +164,27 @@ export class RuntimeKernel {
     const tracing: typeof import("../../observability/tracing.js") | null = await import("../../observability/tracing.js").catch(() => null);
     const span = tracing ? tracing.startSpan("persist", { runId, channelId, agentId, attributes: { op: "persist.message" } }) : null;
 
-    const msgId = monotonicUlid()
-    const timestamp = new Date()
-
-    // DB-2: sequence reservation and the dependent message insert commit
-    // atomically — a failed insert rolls the reservation back, so no 23505
-    // and no gaps under concurrent writers.
+    // Messages owns the table: sequence + insert + emit live in messageGate.append.
     let sequenceNumber: number
-    let persistError: unknown = null
     try {
-      sequenceNumber = await withTransaction(async (tx) => {
-        const seq = await allocateSequence(channelId, 1, tx)
-        await tx.insert(messages).values({
-          id: msgId,
+      const row = await messageGate.append(
+        {
           channelId,
-          workspaceId: workspaceId ?? null,
           authorId: agentId,
           authorName: agentName,
-          authorLevel: String(authorityLevel),
-          authorType: 'agent',
+          authorLevel: authorityLevel,
+          authorType: "agent",
           content,
           mentions: [],
-          isInternalMonologue,
           metadata,
           toolCalls,
-          sequenceNumber: seq,
-          timestamp,
-        })
-        return seq
-      })
+          isInternalMonologue,
+          workspaceId: workspaceId ?? null,
+        },
+        { broker }
+      );
+      sequenceNumber = row.sequenceNumber;
     } catch (err) {
-      persistError = err
       if (span && tracing) tracing.endSpan(span, { error: err })
       throw err
     }
@@ -206,27 +192,7 @@ export class RuntimeKernel {
     const persistDurationMs = Math.round(performance.now() - start)
     recordTiming('persist.message', persistDurationMs)
     logMetric({ stage: 'persist.message', durationMs: persistDurationMs, channelId, runId: runId ?? undefined })
-    if (span && tracing && !persistError) tracing.endSpan(span, { attributes: { durationMs: persistDurationMs } })
-
-    broker.emit(
-      'message:new',
-      {
-        id: msgId,
-        channelId,
-        authorId: agentId,
-        authorName: agentName,
-        authorLevel: authorityLevel as any,
-        authorType: 'agent',
-        content,
-        mentions: [],
-        isInternalMonologue,
-        metadata,
-        toolCalls,
-        sequenceNumber,
-        timestamp,
-      },
-      { channelId }
-    )
+    if (span && tracing) tracing.endSpan(span, { attributes: { durationMs: persistDurationMs } })
 
     return sequenceNumber
   }
@@ -236,24 +202,8 @@ export class RuntimeKernel {
     agentId: string,
     status: RuntimeStatus
   ): Promise<void> {
-    // DB-2: agents.status and runtimeStates.status/heartbeat flip atomically.
-    await withTransaction(async (tx) => {
-      await tx.update(agents).set({ status }).where(eq(agents.id, agentId))
-
-      // Keep runtimeStates in sync + write an immediate heartbeat (P0-4) so
-      // zombie detection works even if the process dies mid-run.
-      await tx
-        .update(runtimeStates)
-        .set({ status, lastHeartbeat: new Date() })
-        .where(eq(runtimeStates.agentId, agentId))
-    })
-
-    // Heartbeat registration (P0-4): track working agents so the orphan sweeper
-    // can distinguish live runs from crashed zombies.
-    if (status === 'working') markAgentWorking(agentId)
-    else markAgentIdle(agentId)
-
-    broker.emit('agent:status', { agentId, status })
+    // Agents owns agents.status + runtime_states: flip + heartbeat + emit live in agentGate.
+    await agentGate.setStatus(agentId, status, { broker });
   }
 
   streamChunk(
