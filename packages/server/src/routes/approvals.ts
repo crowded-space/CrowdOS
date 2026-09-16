@@ -1,41 +1,40 @@
 import type { FastifyInstance } from "fastify";
-import { authGate } from "../shared/auth/auth-gate.js";
 import { approvalGate, emitDecided } from "../approvals/approval-gate.js";
 import { runsGate } from "../runs/runs-gate.js";
 
 export async function approvalsRoutes(app: FastifyInstance) {
   // List approvals for a run
-  app.get("/api/approvals", { preHandler: authGate.requireRole("viewer") }, async (request, reply) => {
+  // Local-first: loopback is the trust boundary; no role gates (single user).
+  app.get("/api/approvals", async (request, reply) => {
     const { runId } = request.query as { runId?: string };
     if (!runId) return reply.status(400).send({ error: "runId query required" });
     const rows = await approvalGate.listByRun(runId);
     return reply.send({ runId, approvals: rows });
   });
 
-  app.get("/api/approvals/:id", { preHandler: authGate.requireRole("viewer") }, async (request, reply) => {
+  app.get("/api/approvals/:id", async (request, reply) => {
     const { id } = request.params as { id: string };
     const row = await approvalGate.getById(id);
     if (!row) return reply.status(404).send({ error: "approval not found" });
     return reply.send({ approval: row });
   });
 
-  app.get("/api/runs/:id/approvals", { preHandler: authGate.requireRole("viewer") }, async (request, reply) => {
+  app.get("/api/runs/:id/approvals", async (request, reply) => {
     const { id } = request.params as { id: string };
     const [run, rows] = await Promise.all([runsGate.getById(id), approvalGate.listByRun(id)]);
     if (!run) return reply.status(404).send({ error: "run not found" });
     return reply.send({ runId: id, approvals: rows });
   });
 
-  // Decision endpoint — operator role required (SEC-1 decided_by)
-  app.post("/api/approvals/:id/decision", { preHandler: authGate.requireRole("operator"), config: { rateLimit: { max: 30, timeWindow: 60_000 } } }, async (request, reply) => {
+  // Decision endpoint — single-user local: no role gate; decidedBy is the local operator.
+  app.post("/api/approvals/:id/decision", { config: { rateLimit: { max: 30, timeWindow: 60_000 } } }, async (request, reply) => {
     const { id } = request.params as { id: string };
     const body = request.body as { decision?: string; scope?: string | null; expiresAt?: string | null } | undefined;
     const decision = body?.decision;
     if (decision !== "approved" && decision !== "denied") {
       return reply.status(400).send({ error: "decision must be 'approved'|'denied'" });
     }
-    const identity = (request as unknown as { identity?: { id?: string; label?: string | null } }).identity;
-    const decidedBy = identity?.id ? `apikey:${identity.id}` : ((request as unknown as { userId?: string }).userId ?? "operator");
+    const decidedBy = ((request as unknown as { userId?: string }).userId ?? "local-user");
     const scope = body?.scope ?? null;
     const expiresAt = body?.expiresAt ? new Date(body.expiresAt) : undefined;
 
@@ -85,7 +84,8 @@ export async function approvalsRoutes(app: FastifyInstance) {
   });
 
   // Bulk sweep endpoint (admin only) — triggers TTL default-deny expiry
-  app.post("/api/approvals/sweep", { preHandler: authGate.requireAdmin }, async (_request, reply) => {
+  // Bulk sweep endpoint — single-user local: no role gate.
+  app.post("/api/approvals/sweep", async (_request, reply) => {
     const count = await approvalGate.sweepExpired();
     // After sweeper flips pending→expired, any run still WAITING_FOR_APPROVAL
     // for an expired approval should be resumed as denied (default-deny).

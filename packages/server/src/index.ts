@@ -16,7 +16,6 @@ import { workspaces } from "./db/schema.js";
 import { LocalVFS } from "./vfs/vfs-gate.js";
 import * as path from "node:path";
 import { authGate } from "./shared/auth/auth-gate.js";
-import { seedBootstrapAdminKey } from "./shared/auth/api-key-service.js";
 import { startBudgetReconciler } from "./shared/core/token-tracker.js";
 import { initConfig } from "./shared/config/env.js";
 
@@ -201,7 +200,7 @@ try {
 
   // SEC-1: guarantee an admin API key exists so strict default-deny is operable.
   try {
-    await seedBootstrapAdminKey();
+    await authGate.seedBootstrapAdminKey();
   } catch (error) {
     app.log.error(`Failed to seed bootstrap admin key: ${error instanceof Error ? error.message : String(error)}`);
   }

@@ -43,7 +43,8 @@ export class ContextAssembler {
     options: AssembleOptions
   ): Promise<ContextPacket & { _modelConfig: ModelModuleConfig }> {
     const { agent, channelId, workspaceId, userInput, runtimeType, policyOverrides, abortSignal, runId } = options;
-    const tracing: typeof import("../../observability/tracing.js") | null = await import("../../observability/tracing.js").catch(() => null);
+    const obsMod: typeof import("../../observability/observability-gate.js") | null = await import("../../observability/observability-gate.js").catch(() => null);
+    const tracing = obsMod?.observabilityGate ?? null;
     const span = tracing ? tracing.startSpan("assemble", { runId: runId ?? null, channelId, agentId: agent.id, attributes: { runtimeType } }) : null;
     try {
       const compiled = await contextPipeline.assemble({

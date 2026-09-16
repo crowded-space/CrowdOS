@@ -47,7 +47,9 @@ const budgetUpdateSchema = z.object({
 const createWorkspaceSchema = z.object({
   name: z.string().trim().min(1, "Workspace name is required").max(100),
   icon: z.string().trim().min(1).max(50).optional().default("💼"),
-  databaseUrl: z.string().min(1, "Database URL is required"),
+  // C3 local-first (§17-18): DB is optional. Absent/empty = registry-only
+  // local workspace; PG is RAG-only and chat degrades honestly until set.
+  databaseUrl: z.string().trim().min(1).optional().default(""),
   rootPath: z.string().optional(),
 });
 
@@ -100,48 +102,52 @@ export async function workspaceRoutes(app: FastifyInstance) {
     }
   });
 
-  // POST /api/workspaces - Create workspace with mandatory Name, Icon, and Database URL
+  // POST /api/workspaces - Create workspace (DB-optional per local-first §17-18)
   app.post<{ Body: z.infer<typeof createWorkspaceSchema> }>(
     "/api/workspaces",
     { schema: { body: createWorkspaceSchema }, bodyLimit: 8_192, config: { rateLimit: { max: 10, timeWindow: 60_000 } } },
     async (request, reply) => {
-      const { name, icon, databaseUrl, rootPath } = request.body;
+      const { name, icon, rootPath } = request.body;
+      const databaseUrl = (request.body.databaseUrl ?? "").trim();
+      const hasDb = databaseUrl.length > 0;
 
-      // 1. Validate DB URL structure
-      try {
-        parseWorkspaceDatabaseUrl(databaseUrl);
-      } catch (err: any) {
-        return reply.status(400).send({
-          statusCode: 400,
-          error: "Bad Request",
-          message: `Invalid workspace database URL: ${err?.message ?? err}`,
-        });
-      }
-
-      // 2. Test database connection
-      try {
-        await testWorkspaceDatabaseConnection(databaseUrl);
-      } catch (err: any) {
-        return reply.status(400).send({
-          statusCode: 400,
-          error: "Bad Request",
-          message: `Invalid workspace database URL: ${err?.message ?? err}`,
-        });
-      }
-
-      // 3. Auto-provision Drizzle schema migrations (serialized per target DB —
-      // concurrent migrates wedge each other in DDL locks and abort partial).
-      await withProvisionLock(databaseUrl, async () => {
+      if (hasDb) {
+        // 1. Validate DB URL structure
         try {
-          // ponytail: cold 16-migration run measures ~14s; 15s wedged fresh
-          // workspaces into partial schema + partial seeds. 90s keeps margin
-          // under the client's 120s fetch timeout.
-          await provisionWorkspaceDatabase(databaseUrl, 90_000);
+          parseWorkspaceDatabaseUrl(databaseUrl);
         } catch (err: any) {
-          // In mock / offline test scenarios, don't hard-fail if migrations can't run
-          request.log.warn({ err }, "Notice: provisionWorkspaceDatabase did not complete schema");
+          return reply.status(400).send({
+            statusCode: 400,
+            error: "Bad Request",
+            message: `Invalid workspace database URL: ${err?.message ?? err}`,
+          });
         }
-      });
+
+        // 2. Test database connection
+        try {
+          await testWorkspaceDatabaseConnection(databaseUrl);
+        } catch (err: any) {
+          return reply.status(400).send({
+            statusCode: 400,
+            error: "Bad Request",
+            message: `Invalid workspace database URL: ${err?.message ?? err}`,
+          });
+        }
+
+        // 3. Auto-provision Drizzle schema migrations (serialized per target DB —
+        // concurrent migrates wedge each other in DDL locks and abort partial).
+        await withProvisionLock(databaseUrl, async () => {
+          try {
+            // ponytail: cold 16-migration run measures ~14s; 15s wedged fresh
+            // workspaces into partial schema + partial seeds. 90s keeps margin
+            // under the client's 120s fetch timeout.
+            await provisionWorkspaceDatabase(databaseUrl, 90_000);
+          } catch (err: any) {
+            // In mock / offline test scenarios, don't hard-fail if migrations can't run
+            request.log.warn({ err }, "Notice: provisionWorkspaceDatabase did not complete schema");
+          }
+        });
+      }
 
       // 4. Generate workspace ID and sandbox directory
       const id = "ws_" + randomUUID().replace(/-/g, "").slice(0, 12);
@@ -178,38 +184,41 @@ export async function workspaceRoutes(app: FastifyInstance) {
         request.log.warn({ err }, "Notice: sandbox directory deferred, VFS will bootstrap on first use");
       }
 
-      // 6. Seed presets on the attached database (same per-DB lock as provision)
-      await withProvisionLock(databaseUrl, async () => {
-        try {
-          const wsDbResult = await getWorkspaceDb(id);
-          if (wsDbResult?.db) {
-            await seedWorkspacePresets(wsDbResult.db, id);
+      // 6. Seed presets on the attached database when one was given.
+      let dbMeta = { configured: false, host: "", database: "", port: null as number | null };
+      if (hasDb) {
+        await withProvisionLock(databaseUrl, async () => {
+          try {
+            const wsDbResult = await getWorkspaceDb(id);
+            if (wsDbResult?.db) {
+              await seedWorkspacePresets(wsDbResult.db, id);
+            }
+          } catch (err: any) {
+            request.log.warn({ err }, "Notice: preset seeding skipped or deferred");
           }
-        } catch (err: any) {
-          request.log.warn({ err }, "Notice: preset seeding skipped or deferred");
-        }
-      });
-
-      // 7. Mirror to DB workspaces row if DB is reachable
-      const parsed = parseWorkspaceDatabaseUrl(databaseUrl);
-      const dbMeta = {
-        configured: true,
-        host: parsed.host,
-        port: parsed.port,
-        database: parsed.database,
-      };
-      try {
-        const { db } = await getWorkspaceDb(id);
-        await db.insert(workspaces).values({
-          id,
-          name,
-          ownerId: "system",
-          rootPath: resolvedSandbox,
-          metadata: { icon: icon || "💼", database: dbMeta },
-          createdAt: new Date(),
-          updatedAt: new Date(),
         });
-      } catch {}
+
+        // 7. Mirror to DB workspaces row if DB is reachable
+        try {
+          const parsed = parseWorkspaceDatabaseUrl(databaseUrl);
+          dbMeta = {
+            configured: true,
+            host: parsed.host,
+            port: parsed.port,
+            database: parsed.database,
+          };
+          const { db } = await getWorkspaceDb(id);
+          await db.insert(workspaces).values({
+            id,
+            name,
+            ownerId: "system",
+            rootPath: resolvedSandbox,
+            metadata: { icon: icon || "💼", database: dbMeta },
+            createdAt: new Date(),
+            updatedAt: new Date(),
+          });
+        } catch {}
+      }
 
       const descriptor = await getWorkspaceDescriptor(id);
       return reply.status(201).send({

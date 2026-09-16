@@ -1,7 +1,10 @@
 import type { FastifyRequest, FastifyReply } from "fastify";
 
-import { verifyKey } from "./api-key-service.js";
+import { verifyKey, createApiKey, revokeKey, seedBootstrapAdminKey, generateApiKey, hashApiKey, verifyHashMatch, API_KEY_PREFIX } from "./api-key-service.js";
 import type { ApiKeyRecord, ApiKeyRole } from "./api-key-service.js";
+
+export { verifyKey, createApiKey, revokeKey, seedBootstrapAdminKey, generateApiKey, hashApiKey, verifyHashMatch, API_KEY_PREFIX };
+export type { ApiKeyRecord, ApiKeyRole };
 
 /**
  * SEC-1 authentication gate — strict-only (default-deny API-key auth).
@@ -109,4 +112,8 @@ export const authGate = {
   requireAdmin,
   requireRole,
   isStrictAuth,
+  verifyKey,
+  createApiKey,
+  revokeKey,
+  seedBootstrapAdminKey,
 };

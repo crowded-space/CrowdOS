@@ -35,42 +35,25 @@ const agentRegistry = new AgentRegistry();
 // Agent execution is routed through runtimeGate
 export let globalBroker: EventBroker | null = null;
 
-const DEFAULT_MAX_PARALLEL_AGENTS = 4;
-
-function resolveMaxParallelAgents(): number {
-  const raw = process.env.MAX_PARALLEL_AGENTS;
-  if (raw === undefined || raw.trim() === "") return DEFAULT_MAX_PARALLEL_AGENTS;
-  const parsed = Number(raw);
-  if (!Number.isFinite(parsed)) return DEFAULT_MAX_PARALLEL_AGENTS;
-  return Math.max(1, Math.floor(parsed));
-}
-
 /**
- * PERF-1: bounded worker pool over matched agents. Each task is an independent
- * per-agent dispatch; a rejection is isolated to its own slot (allSettled
- * semantics) so one failing agent never fails its siblings. limit=1 reproduces
- * the legacy serial for…await behavior exactly (rollback path).
+ * CrowdOS §10: multi-mention executes serially — B sees A's output via the
+ * shared channel context committed before the next dispatch starts.
+ * Each task is isolated (allSettled semantics) so one failure never
+ * fails its siblings. MAX_PARALLEL_AGENTS is intentionally ignored.
  */
 async function runBoundedBatch(
   tasks: ReadonlyArray<() => Promise<void>>,
-  limit: number,
+  _limit?: number,
 ): Promise<PromiseSettledResult<void>[]> {
   const results: PromiseSettledResult<void>[] = new Array(tasks.length);
-  if (tasks.length === 0) return results;
-  const width = Math.max(1, Math.min(limit, tasks.length));
-  let cursor = 0;
-  const runners = Array.from({ length: width }, async () => {
-    while (cursor < tasks.length) {
-      const index = cursor++;
-      try {
-        await tasks[index]();
-        results[index] = { status: "fulfilled", value: undefined };
-      } catch (reason) {
-        results[index] = { status: "rejected", reason };
-      }
+  for (let index = 0; index < tasks.length; index++) {
+    try {
+      await tasks[index]();
+      results[index] = { status: "fulfilled", value: undefined };
+    } catch (reason) {
+      results[index] = { status: "rejected", reason };
     }
-  });
-  await Promise.allSettled(runners);
+  }
   return results;
 }
 
@@ -607,12 +590,11 @@ export function registerSocketServer(httpServer: HttpServer, broker: EventBroker
 
         console.log(`[Socket] user:message received in channel ${channelId}: "${content}" (resolved mentions: ${resolvedMentions.length})`);
 
-        // PERF-1: one shared per-agent dispatch body. Status gating, busy
+        // One shared per-agent dispatch body (§10 serial). Status gating, busy
         // rejection (via runOrReportBusy), cancellation/failed handling and
         // error isolation are identical for explicit mentions, role mentions
         // and auto-triggered agents. Sequence numbers are allocated at persist
-        // time inside triggerSystemWarning / the runtime layer (DB-2), so
-        // message ordering never depends on completion order.
+        // time inside triggerSystemWarning / the runtime layer (DB-2).
         const dispatchAgent = async (agent: AgentProfile, announce: string): Promise<void> => {
           if (agent.status === "paused") {
             await triggerSystemWarning(broker, channelId, `Agent @${agent.name} is currently paused.`);
@@ -694,7 +676,7 @@ export function registerSocketServer(httpServer: HttpServer, broker: EventBroker
             for (const agent of targetAgents) agentsToEnqueue.push(agent);
           }
 
-          // Optimized: pre-filter paused/offline, then parallel enqueue (was serial await per agent)
+          // Pre-filter paused/offline, then serial enqueue per §10.
           const enqueueTasks: Array<() => Promise<void>> = [];
           for (const agent of agentsToEnqueue) {
             if (agent.status === "paused") {
@@ -735,7 +717,7 @@ export function registerSocketServer(httpServer: HttpServer, broker: EventBroker
               }
             });
           }
-          await runBoundedBatch(enqueueTasks, Math.min(4, enqueueTasks.length) || 1);
+          await runBoundedBatch(enqueueTasks);
         } else {
           const batch: Array<() => Promise<void>> = [];
 
@@ -806,14 +788,13 @@ export function registerSocketServer(httpServer: HttpServer, broker: EventBroker
           }
 
           if (batch.length > 0) {
-            const parallelLimit = resolveMaxParallelAgents();
             const batchStartedAt = Date.now();
-            await runBoundedBatch(batch, parallelLimit);
+            await runBoundedBatch(batch);
             logMetric({
               stage: "mention.dispatch",
               durationMs: Date.now() - batchStartedAt,
               agents: batch.length,
-              parallel: parallelLimit,
+              parallel: 1,
             });
           }
         }

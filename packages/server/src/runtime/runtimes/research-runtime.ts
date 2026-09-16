@@ -389,8 +389,7 @@ export class ResearchRuntime extends BaseRuntime {
         if (parentRunId) {
           try {
             const { runsGate } = await import("../../runs/runs-gate.js")
-            const child = await runsGate.create({ agentId: packet.agentId, channelId: packet.channelId, workspaceId: packet.workspaceId, runtimeType: "research" } as unknown as Parameters<typeof runsGate.create>[0])
-            // runsGate.create may not support parentRunId in current signature; try raw createRun with parentRunId
+            const child = await runsGate.create({ parentRunId, agentId: packet.agentId, channelId: packet.channelId, workspaceId: packet.workspaceId, runtimeType: "research" })
             if (child && (child as unknown as { id: string }).id) {
               childId = (child as unknown as { id: string }).id
               childRunIds.push(childId)
@@ -398,16 +397,6 @@ export class ResearchRuntime extends BaseRuntime {
               try {
                 await runsGate.transition(childId, "starting", "research_child_starting")
                 await runsGate.transition(childId, "running", "research_child_running")
-              } catch {}
-            } else if (parentRunId) {
-              // Fallback: try direct repository with parentRunId if gate doesn't expose it
-              try {
-                const { createRun } = await import("../../runs/runs-repository.js")
-                const child2 = await createRun({ parentRunId, agentId: packet.agentId, channelId: packet.channelId, workspaceId: packet.workspaceId, runtimeType: "research" })
-                if (child2?.id) {
-                  childId = child2.id
-                  childRunIds.push(childId)
-                }
               } catch {}
             }
           } catch {}

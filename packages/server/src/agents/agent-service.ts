@@ -11,11 +11,6 @@ import type { RuntimeStatus } from "../types/runtime.types.js";
 import { getCachedRoster, invalidateRosterCache } from "./agent-roster-cache.js";
 import {
   agents,
-  capabilitiesModules,
-  constraintsModules,
-  instructionModules,
-  modelModules,
-  toolkitModules,
   runtimeStates,
 } from "../db/schema.js";
 import type {
@@ -341,48 +336,24 @@ export class AgentRegistry {
       throw new Error("An agent cannot fallback to itself.");
     }
 
-    const [modelModule, instructionModule, toolkitModule, constraintsModule, capabilitiesModule, fallbackAgent] =
-      await Promise.all([
-        input.modelModuleId
-          ? db.query.modelModules.findFirst({ where: eq(modelModules.id, input.modelModuleId) })
-          : Promise.resolve(null),
-        db.query.instructionModules.findFirst({ where: eq(instructionModules.id, input.instructionModuleId) }),
-        input.toolkitModuleId
-          ? db.query.toolkitModules.findFirst({ where: eq(toolkitModules.id, input.toolkitModuleId) })
-          : Promise.resolve(null),
-        input.constraintsModuleId
-          ? db.query.constraintsModules.findFirst({ where: eq(constraintsModules.id, input.constraintsModuleId) })
-          : Promise.resolve(null),
-        input.capabilitiesModuleId
-          ? db.query.capabilitiesModules.findFirst({ where: eq(capabilitiesModules.id, input.capabilitiesModuleId) })
-          : Promise.resolve(null),
-        input.fallbackAgentId
-          ? db.query.agents.findFirst({ where: eq(agents.id, input.fallbackAgentId) })
-          : Promise.resolve(null),
-      ]);
+    // Modules owns module rows: validate via gate (dynamic import avoids Agents↔Modules↔Runtime cycle).
+    const { moduleGate } = await import("../modules/module-gate.js");
+    await moduleGate.validateReferences(
+      {
+        modelModuleId: input.modelModuleId,
+        instructionModuleId: input.instructionModuleId,
+        toolkitModuleId: input.toolkitModuleId,
+        constraintsModuleId: input.constraintsModuleId,
+        capabilitiesModuleId: input.capabilitiesModuleId,
+      },
+      db,
+    );
 
-    if (input.modelModuleId && !modelModule) {
-      throw new Error(`ModelModule not found: ${input.modelModuleId}`);
-    }
-
-    if (!instructionModule) {
-      throw new Error(`InstructionModule not found: ${input.instructionModuleId}`);
-    }
-
-    if (input.toolkitModuleId && !toolkitModule) {
-      throw new Error(`ToolkitModule not found: ${input.toolkitModuleId}`);
-    }
-
-    if (input.constraintsModuleId && !constraintsModule) {
-      throw new Error(`ConstraintsModule not found: ${input.constraintsModuleId}`);
-    }
-
-    if (input.capabilitiesModuleId && !capabilitiesModule) {
-      throw new Error(`CapabilitiesModule not found: ${input.capabilitiesModuleId}`);
-    }
-
-    if (input.fallbackAgentId && !fallbackAgent) {
-      throw new Error(`Fallback agent not found: ${input.fallbackAgentId}`);
+    if (input.fallbackAgentId) {
+      const fallbackAgent = await db.query.agents.findFirst({ where: eq(agents.id, input.fallbackAgentId) });
+      if (!fallbackAgent) {
+        throw new Error(`Fallback agent not found: ${input.fallbackAgentId}`);
+      }
     }
   }
 }

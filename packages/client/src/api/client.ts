@@ -143,7 +143,7 @@ export const apiClient = {
     );
   },
 
-  async createWorkspace(input: { name: string; icon?: string; databaseUrl: string; rootPath?: string }): Promise<WorkspaceDescriptorDto> {
+  async createWorkspace(input: { name: string; icon?: string; databaseUrl?: string; rootPath?: string }): Promise<WorkspaceDescriptorDto> {
     return fetchJsonOrThrow<WorkspaceDescriptorDto>(
       `${BACKEND_URL}/api/workspaces`,
       {

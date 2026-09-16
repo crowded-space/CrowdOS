@@ -1,22 +1,17 @@
 import type { FastifyInstance } from "fastify";
 
-import { authGate } from "../shared/auth/auth-gate.js";
 import { getMetricsSnapshot } from "../shared/core/perf-metrics.js";
 import { observabilityGate } from "../observability/observability-gate.js";
 
 /**
  * OBS-1: GET /metrics — perfMetrics latency snapshot (p50/p95 per stage).
  * Flag: METRICS_ENABLED=false disables the route entirely (rollback switch);
- * default is enabled. Auth: the global requireAuth hook already applies
- * (strict API-key). When WORKSPACE_ADMIN_TOKEN is configured,
- * authGate.requireAdmin additionally enforces it.
+ * default is enabled. Local-first: loopback is the trust boundary (single user).
  */
 export async function metricsRoutes(app: FastifyInstance) {
   if (process.env.METRICS_ENABLED === "false") return;
 
-  const adminPreHandler = process.env.WORKSPACE_ADMIN_TOKEN ? authGate.requireAdmin : undefined;
-
-  app.get("/metrics", { preHandler: adminPreHandler }, async () => {
+  app.get("/metrics", async () => {
     const traceStats = (() => {
       try { return observabilityGate.getTraceStats(); } catch { return null; }
     })();
@@ -24,7 +19,7 @@ export async function metricsRoutes(app: FastifyInstance) {
   });
 
   // Alias under /api for client parity (frontend fetches /api/metrics via proxy)
-  app.get("/api/metrics", { preHandler: adminPreHandler }, async () => {
+  app.get("/api/metrics", async () => {
     const traceStats = (() => {
       try { return observabilityGate.getTraceStats(); } catch { return null; }
     })();

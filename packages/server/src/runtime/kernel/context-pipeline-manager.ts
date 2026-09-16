@@ -1,6 +1,4 @@
-import { eq } from "drizzle-orm";
-import { getDb, dbScopeKey } from "../../shared/config/database.js";
-import { modelModules } from "../../db/schema.js";
+import { dbScopeKey } from "../../shared/config/database.js";
 import { TtlCache } from "../../shared/core/ttl-cache.js";
 import { timeAsync } from "../../shared/core/perf-metrics.js";
 import { decrypt } from "../../shared/core/secret-box.js";
@@ -77,7 +75,6 @@ export class ContextPipelineManager {
   }
 
   private async _assemble(ctx: ContextBuildContext): Promise<ContextPacket & { _modelConfig: ModelModuleConfig }> {
-    const db = getDb();
     const defaultEnvApiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
     let modelConfig: ModelModuleConfig = ctx.modelConfig || {
       provider: "google",
@@ -94,9 +91,9 @@ export class ContextPipelineManager {
       if (cached) {
         modelConfig = cached;
       } else {
-        const row = await db.query.modelModules.findFirst({
-          where: eq(modelModules.id, ctx.agent.modelModuleId),
-        });
+        // Modules owns model rows: resolve via gate (dynamic import avoids Context↔Modules↔Runtime cycle).
+        const { moduleGate } = await import("../../modules/module-gate.js");
+        const row = await moduleGate.model.get(ctx.agent.modelModuleId);
         if (row) {
           const envApiKey =
             row.provider === "google" ? (process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY) :

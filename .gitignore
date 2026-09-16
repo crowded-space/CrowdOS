@@ -52,6 +52,7 @@ dont readme.md
 
 # Archived / dead code
 _archive/
+*.zip
 
 # Tests: generated artifacts only
 e2e-screenshots/

@@ -100,7 +100,7 @@ export const envSchema = z.object({
 
   SOCKET_MSG_RATE_CAPACITY: numSchema(0.000001, 15, "Per-socket token-bucket capacity for throttled user-content socket events (float allowed)."),
   SOCKET_MSG_RATE_REFILL: numSchema(0.000001, 5, "Token-bucket refill rate in tokens per second for socket event throttling."),
-  MAX_PARALLEL_AGENTS: intSchema(1, null, 4, "PERF-1: bounded worker-pool width for concurrent mention dispatch per user:message; 1 reproduces legacy serial dispatch."),
+  MAX_PARALLEL_AGENTS: intSchema(1, null, 4, "Deprecated: ignored — multi-mention is always serial per CrowdOS §10."),
   DURABLE_EVENTS: boolSchema(true)
     .describe("Durable event fan-out persistence; false skips durable_events writes (legacy ephemeral broker behavior)."),
 

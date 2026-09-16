@@ -1,10 +1,10 @@
 import type { FastifyInstance } from "fastify";
-import { authGate } from "../shared/auth/auth-gate.js";
 import { runsGate } from "../runs/runs-gate.js";
 import { queueGate } from "../queue/queue-gate.js";
 
 export async function runsRoutes(app: FastifyInstance) {
-  app.post("/api/runs/:id/resume", { preHandler: authGate.requireRole("operator") }, async (request, reply) => {
+  // Local-first: loopback is the trust boundary; no role gates (single user).
+  app.post("/api/runs/:id/resume", async (request, reply) => {
     const { id } = request.params as { id: string };
     const result = await runsGate.resumeRun(id);
     if (!result) {
@@ -69,14 +69,14 @@ export async function runsRoutes(app: FastifyInstance) {
     return reply.send({ runId: run.id, status: run.status, resumeFrom: checkpoint });
   });
 
-  app.get("/api/runs/:id/compensations", { preHandler: authGate.requireAdmin }, async (request, reply) => {
+  app.get("/api/runs/:id/compensations", async (request, reply) => {
     const { id } = request.params as { id: string };
     const [run, entries] = await Promise.all([runsGate.getById(id), runsGate.listCompensations(id)]);
     if (!run) return reply.status(404).send({ error: "run not found" });
     return reply.send({ runId: id, entries });
   });
 
-  app.post("/api/runs/:id/compensations/:compId/undo", { preHandler: authGate.requireAdmin }, async (request, reply) => {
+  app.post("/api/runs/:id/compensations/:compId/undo", async (request, reply) => {
     const { id, compId } = request.params as { id: string; compId: string };
     const run = await runsGate.getById(id);
     if (!run) return reply.status(404).send({ error: "run not found" });
@@ -95,7 +95,7 @@ export async function runsRoutes(app: FastifyInstance) {
     return reply.send({ runId: id, entries });
   });
 
-  app.get("/api/runs/:id", { preHandler: authGate.requireRole("operator") }, async (request, reply) => {
+  app.get("/api/runs/:id", async (request, reply) => {
     const { id } = request.params as { id: string };
     const [run, entries] = await Promise.all([runsGate.getById(id), runsGate.listCompensations(id)]);
     if (!run) return reply.status(404).send({ error: "run not found" });

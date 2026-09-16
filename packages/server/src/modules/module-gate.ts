@@ -37,6 +37,7 @@ import type {
 } from "./module-validators.js";
 import {
   findReferencingAgent,
+  validateModuleReferences,
   testConnectionHelper,
   listAllModules,
   listModelModules,
@@ -106,6 +107,7 @@ export type {
 };
 export {
   findReferencingAgent,
+  validateModuleReferences,
   testConnectionHelper,
   listAllModules,
   listModelModules,
@@ -138,6 +140,7 @@ export {
 
 export const moduleGate = {
   findReferencingAgent,
+  validateReferences: validateModuleReferences,
   testConnection: testConnectionHelper,
   listAll: listAllModules,
   model: {

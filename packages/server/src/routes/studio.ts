@@ -14,11 +14,9 @@ import { toolsGate } from "../tools/tools-gate.js";
 import { contextPipeline, runtimeGate } from "../runtime/context-gate.js";
 import { globalBroker } from "../shared/sockets/register-socket-server.js";
 import { redactSecrets, redactApiKeyFields } from "../shared/core/redact.js";
-import { authGate } from "../shared/auth/auth-gate.js";
 
 export async function studioRoutes(app: FastifyInstance) {
-  // SEC-1: every /api/studio/* route requires an admin API key (strict mode).
-  app.addHook("preHandler", authGate.requireAdmin);
+  // Local-first: loopback is the trust boundary; no role gates (single user).
 
   // GET /api/studio/agents/:id/manifest
   app.get<{ Params: { id: string } }>(

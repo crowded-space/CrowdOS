@@ -44,10 +44,28 @@ export function dbScopeKey(): string {
 
 function requireDatabaseUrl(): string {
   if (!env.DATABASE_URL) {
-    throw new Error("DATABASE_URL is not set. Configure it before using the database layer.");
+    throw new Error(
+      "DATABASE_URL is not set. Local workspace registry remains available; PG-backed features (chat history, RAG) are degraded until a database is configured."
+    );
   }
 
   return env.DATABASE_URL;
+}
+
+/** C3 local-first (§17-18): true when a PG URL is configured. */
+export function isDatabaseConfigured(): boolean {
+  return Boolean(env.DATABASE_URL?.trim());
+}
+
+/** Null-safe handle for degraded-without-DB paths; null = local-only mode. */
+export function tryGetDb(): DbInstance | null {
+  try {
+    if (dbContext.getStore()) return dbContext.getStore()!;
+    if (!isDatabaseConfigured()) return null;
+    return (dbInstance ??= drizzle(getSqlClient(), { schema }));
+  } catch {
+    return null;
+  }
 }
 
 function parsePositiveIntEnv(raw: string | undefined, fallback: number): number {

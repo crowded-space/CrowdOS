@@ -596,8 +596,8 @@ function makeDelayedExecutor(opts: { delays?: Record<string, number>; failIds?: 
   return { executor, calls };
 }
 
-describe("PERF-1 · parallel mention dispatch", () => {
-  it("dispatches 3 mentioned agents concurrently — batch completes in <1.3× slowest agent", { timeout: 20_000 }, async () => {
+describe("CrowdOS §10 · serial multi-mention dispatch", () => {
+  it("dispatches 3 mentioned agents serially — batch takes cumulative time, B sees A's output", { timeout: 20_000 }, async () => {
     const delayed = makeDelayedExecutor({ delays: { "agent-alpha": 300, "agent-beta": 100, "agent-gamma": 200 } });
     const harness = await setup({}, { executeRun: delayed.executor as any });
     const metrics = captureMetrics();
@@ -615,15 +615,15 @@ describe("PERF-1 · parallel mention dispatch", () => {
       session.client.emit("user:message", { channelId: "chP1", content: "@Alpha @Beta @Gamma go" });
 
       await waitFor(() => metrics.metrics.find((m) => m.stage === "mention.dispatch"));
-      expect(delayed.calls.sort()).toEqual(["agent-alpha", "agent-beta", "agent-gamma"]);
+      expect(delayed.calls).toEqual(["agent-alpha", "agent-beta", "agent-gamma"]);
       expect(harness.socketsInternals.activeRuns()).toHaveLength(0);
 
       const metric = metrics.metrics.find((m) => m.stage === "mention.dispatch")!;
       expect(metric.agents).toBe(3);
-      expect(metric.parallel).toBe(4);
-      const maxDelay = 300;
-      expect(metric.durationMs!).toBeLessThan(maxDelay * 1.3);
-      expect(metric.durationMs!).toBeGreaterThanOrEqual(maxDelay - 40);
+      expect(metric.parallel).toBe(1);
+      // Serial: ~600ms cumulative, not <1.3× slowest (390ms).
+      expect(metric.durationMs!).toBeGreaterThanOrEqual(590);
+      expect(metric.durationMs!).toBeLessThan(2500);
     } finally {
       metrics.restore();
       await sleep(50);
@@ -632,9 +632,9 @@ describe("PERF-1 · parallel mention dispatch", () => {
     }
   });
 
-  it("MAX_PARALLEL_AGENTS=1 restores legacy serial cumulative timing (rollback path)", { timeout: 20_000 }, async () => {
+  it("MAX_PARALLEL_AGENTS is ignored — dispatch stays serial per §10", { timeout: 20_000 }, async () => {
     const delayed = makeDelayedExecutor({ delays: { "agent-alpha": 120, "agent-beta": 120, "agent-gamma": 120 } });
-    const harness = await setup({ MAX_PARALLEL_AGENTS: "1" }, { executeRun: delayed.executor as any });
+    const harness = await setup({ MAX_PARALLEL_AGENTS: "4" }, { executeRun: delayed.executor as any });
     const metrics = captureMetrics();
     try {
       const connect = connectOf(harness);

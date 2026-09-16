@@ -7,7 +7,7 @@ import { skillsGate } from "../skills/skills-gate.js";
 import { timeAsync, recordTiming } from "../shared/core/perf-metrics.js";
 import type { ToolResult, ToolExecutionContext, ToolEffectClass } from "./tool-types.js";
 import { ToolTimeoutError } from "./tool-types.js";
-import { approvalGate } from "../approvals/approval-gate.js";
+import { approvalGate, APPROVAL_REUSABLE_TTL_MS } from "../approvals/approval-gate.js";
 import { runsGate } from "../runs/runs-gate.js";
 
 /**
@@ -149,7 +149,8 @@ export class ToolExecutor {
     const startTime = Date.now();
     const __runId = (partialCtx as unknown as { runId?: string | null })?.runId ?? null;
     const __channelId = (partialCtx as unknown as { channelId?: string })?.channelId ?? "general";
-    const __tracing: typeof import("../observability/tracing.js") | null = await import("../observability/tracing.js").catch(() => null);
+    const __obsMod: typeof import("../observability/observability-gate.js") | null = await import("../observability/observability-gate.js").catch(() => null);
+    const __tracing = __obsMod?.observabilityGate ?? null;
     const __span = __tracing ? __tracing.startSpan("tool", { runId: __runId, channelId: __channelId, agentId, attributes: { tool: toolId } }) : null;
 
     try {
@@ -216,7 +217,7 @@ export class ToolExecutor {
           // Reusable grant check — auto-approve without new pending row if a
           // still-valid grant exists for (tool, scopeHash, requester). Audit
           // still logs a new approved row.
-          const reusable = await (approvalGate as any).findReusableGrant?.(toolId, scopeHash, requestedBy);
+          const reusable = await approvalGate.findReusableGrant(toolId, scopeHash, requestedBy);
           if (reusable) {
             try {
               const autoRow = await approvalGate.createApproved({
@@ -227,7 +228,7 @@ export class ToolExecutor {
                 requestedBy,
                 scope: scopeHash,
                 decidedBy: reusable.decidedBy ?? requestedBy,
-                expiresAt: new Date(Date.now() + 60 * 60 * 1000),
+                expiresAt: new Date(Date.now() + APPROVAL_REUSABLE_TTL_MS),
               });
               // Emit audit events for the auto-approved path (fire-and-forget)
               try {
@@ -502,13 +503,40 @@ export class ToolExecutor {
           const requestedBy = agentId;
           const argsPreview = approvalGate.argsPreview(toolId, args as Record<string, unknown>) ?? { path: String((args as any).path ?? "").slice(0, 500) };
           const scopeHash = approvalGate.computeScopeHash(toolId, argsPreview);
-          // Try grant lookup
-          let hasGrant = false;
+          // Try grant lookup (typed gate port — reusable audit mirrors bash path)
+          let reusable: Awaited<ReturnType<typeof approvalGate.findReusableGrant>> = null;
           try {
-            const reusable = await approvalGate.findReusableGrant(toolId, scopeHash, requestedBy);
-            if (reusable) hasGrant = true;
+            reusable = await approvalGate.findReusableGrant(toolId, scopeHash, requestedBy);
           } catch {}
-          if (hasGrant) {
+          if (reusable) {
+            // Reusable-grant audit so FS auto-approvals leave a trail (bash parity).
+            // No runId → nothing to attach the audit row to; still allow execution.
+            if (runId) {
+              try {
+                const autoRow = await approvalGate.createApproved({
+                  runId,
+                  toolName: toolId,
+                  argsPreview: argsPreview as Record<string, unknown>,
+                  riskClass: approvalGate.mapRisk("destructive", toolId),
+                  requestedBy,
+                  scope: scopeHash,
+                  decidedBy: reusable.decidedBy ?? requestedBy,
+                  expiresAt: new Date(Date.now() + APPROVAL_REUSABLE_TTL_MS),
+                });
+                try {
+                  const { emitDecided } = await import("../approvals/approval-gate.js");
+                  const { getSharedBroker } = await import("../event-broker/event-broker-gate.js");
+                  const { globalBroker } = await import("../shared/sockets/register-socket-server.js").catch(() => ({ globalBroker: null }));
+                  const emitVia = ((partialCtx as unknown as { broker?: unknown })?.broker as { emit: (t: string, p: unknown, o?: unknown) => void } | undefined) ?? (globalBroker as unknown as { emit: (t: string, p: unknown, o?: unknown) => void } | null) ?? (getSharedBroker() as unknown as { emit: (t: string, p: unknown, o?: unknown) => void } | null);
+                  try {
+                    (emitVia as { emit?: (t: string, p: unknown, o?: unknown) => void } | null)?.emit?.("approval.requested" as never, { runId, approvalId: autoRow.id, tool: toolId, argsPreview, riskClass: autoRow.riskClass, scope: scopeHash, autoApproved: true } as never, { channelId: channelIdForEvent } as never);
+                  } catch {}
+                  emitDecided(emitVia, { runId, approvalId: autoRow.id, tool: toolId, decision: "approved", decidedBy: autoRow.decidedBy, scope: scopeHash, autoApproved: true, channelId: channelIdForEvent });
+                } catch {}
+              } catch (e) {
+                console.warn(`[ToolExecutor] reusable grant audit failed for ${toolId}:`, (e as Error)?.message || e);
+              }
+            }
             // auto-allow via grant, continue to handler
           } else if (!approvalsEnabled) {
             throw new Error(`Safety ASK: FS ${toolOp} on "${(args as any).path}" requires approval for channel #${channelIdForEvent} (policy: ${requiresApprovalFor.join(",")})`);

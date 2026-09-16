@@ -13,7 +13,7 @@ import { registerRateLimit } from "./routes/rate-limit.js";
 import { registerSocketServer } from "./shared/sockets/register-socket-server.js";
 import { initRuntime } from "./runtime/runtime-gate.js";
 import { runWithDb, closeDatabaseConnection } from "./shared/config/database.js";
-import { closeAllWorkspaceDatabases, listWorkspaceRecords, getWorkspaceDb, getWorkspacePinHash } from "./workspace/workspace-gate.js";
+import { closeAllWorkspaceDatabases, listWorkspaceRecords, getWorkspaceDb, getWorkspacePinHash, getWorkspaceRecord } from "./workspace/workspace-gate.js";
 import { LocalVFS } from "./vfs/vfs-gate.js";
 import { pinGate, isWorkspaceManagementPath } from "./shared/auth/pin-gate.js";
 import { startBudgetReconciler } from "./shared/core/token-tracker.js";
@@ -256,19 +256,40 @@ export async function buildServer(opts?: BuildServerOptions): Promise<BuiltServe
       });
     };
     void getWorkspaceDb(trimmedWsId).then(
-      (wsDb) => {
+      async (wsDb) => {
         if (wsDb.source !== "workspace") {
           if (dbOptional) {
             settle(() => done());
             return;
           }
+          // C3 local-first: registry-only workspaces (no DB URL) stay usable
+          // for local paths; PG-backed routes degrade honestly downstream.
+          try {
+            const record = await getWorkspaceRecord(trimmedWsId);
+            if (record && !record.databaseUrl?.trim()) {
+              request.db = null;
+              settle(() => done());
+              return;
+            }
+          } catch {}
           fail(`Workspace database is not configured for workspace ${trimmedWsId}.`);
           return;
         }
         request.db = wsDb.db;
         settle(() => runWithDb(wsDb.db, done));
       },
-      (err: any) => fail(err?.message || `Workspace database is unreachable for workspace ${trimmedWsId}.`),
+      async (err: any) => {
+        // C3: DATABASE_URL unset + registry-only workspace = local mode, not 503 here.
+        try {
+          const record = await getWorkspaceRecord(trimmedWsId);
+          if (record && !record.databaseUrl?.trim()) {
+            request.db = null;
+            settle(() => done());
+            return;
+          }
+        } catch {}
+        fail(err?.message || `Workspace database is unreachable for workspace ${trimmedWsId}.`);
+      },
     );
   });
 

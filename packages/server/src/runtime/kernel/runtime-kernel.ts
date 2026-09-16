@@ -44,8 +44,9 @@ export class RuntimeKernel {
     userPromptOverride?: string
   ): Promise<LLMResponse> {
     const start = performance.now()
-    // SCL-3: OTel span for llm stage keyed by runId
-    const tracing: typeof import("../../observability/tracing.js") | null = await import("../../observability/tracing.js").catch(() => null);
+    // SCL-3: OTel span for llm stage keyed by runId (via observabilityGate)
+    const obsMod: typeof import("../../observability/observability-gate.js") | null = await import("../../observability/observability-gate.js").catch(() => null);
+    const tracing = obsMod?.observabilityGate ?? null;
     const runId = (packet as unknown as { runId?: string | null }).runId ?? null;
     const span = tracing ? tracing.startSpan("llm", { runId, channelId: packet.channelId, agentId: packet.agentId, attributes: { provider: packet.metadata.provider, model: packet.metadata.modelName } }) : null;
     try {
@@ -161,7 +162,8 @@ export class RuntimeKernel {
   ): Promise<number> {
     const start = performance.now()
     const runId = (metadata as Record<string, unknown> | undefined)?.runId as string | undefined ?? null
-    const tracing: typeof import("../../observability/tracing.js") | null = await import("../../observability/tracing.js").catch(() => null);
+    const obsMod: typeof import("../../observability/observability-gate.js") | null = await import("../../observability/observability-gate.js").catch(() => null);
+    const tracing = obsMod?.observabilityGate ?? null;
     const span = tracing ? tracing.startSpan("persist", { runId, channelId, agentId, attributes: { op: "persist.message" } }) : null;
 
     // Messages owns the table: sequence + insert + emit live in messageGate.append.

@@ -1,6 +1,6 @@
 import type { IncomingHttpHeaders } from "node:http";
 
-import { verifyKey } from "../auth/api-key-service.js";
+import { authGate } from "../auth/auth-gate.js";
 import type { ApiKeyRole } from "../../db/schema.js";
 
 /**
@@ -46,9 +46,9 @@ export async function resolveSocketIdentity(handshake: {
   const headers = handshake.headers || {};
   const key = extractHandshakeKey(auth, headers);
   if (!key) return null;
-  let record: Awaited<ReturnType<typeof verifyKey>> = null;
+  let record: Awaited<ReturnType<typeof authGate.verifyKey>> = null;
   try {
-    record = await verifyKey(key);
+    record = await authGate.verifyKey(key);
   } catch {
     record = null;
   }

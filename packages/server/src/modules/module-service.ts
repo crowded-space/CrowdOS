@@ -46,6 +46,40 @@ export async function findReferencingAgent(moduleType: ModuleType, moduleId: str
   return db.query.agents.findFirst({ where: eq(agents.capabilitiesModuleId, moduleId) });
 }
 
+export interface ModuleReferenceIds {
+  modelModuleId?: string | null;
+  instructionModuleId: string;
+  toolkitModuleId?: string | null;
+  constraintsModuleId?: string | null;
+  capabilitiesModuleId?: string | null;
+}
+
+// Single choke point for module-reference validation (Agents calls this via gate).
+export async function validateModuleReferences(ids: ModuleReferenceIds, dbOverride?: any): Promise<void> {
+  const db = dbOverride || getDb();
+  const [modelModule, instructionModule, toolkitModule, constraintsModule, capabilitiesModule] =
+    await Promise.all([
+      ids.modelModuleId
+        ? db.query.modelModules.findFirst({ where: eq(modelModules.id, ids.modelModuleId) })
+        : Promise.resolve(null),
+      db.query.instructionModules.findFirst({ where: eq(instructionModules.id, ids.instructionModuleId) }),
+      ids.toolkitModuleId
+        ? db.query.toolkitModules.findFirst({ where: eq(toolkitModules.id, ids.toolkitModuleId) })
+        : Promise.resolve(null),
+      ids.constraintsModuleId
+        ? db.query.constraintsModules.findFirst({ where: eq(constraintsModules.id, ids.constraintsModuleId) })
+        : Promise.resolve(null),
+      ids.capabilitiesModuleId
+        ? db.query.capabilitiesModules.findFirst({ where: eq(capabilitiesModules.id, ids.capabilitiesModuleId) })
+        : Promise.resolve(null),
+    ]);
+  if (ids.modelModuleId && !modelModule) throw new Error(`ModelModule not found: ${ids.modelModuleId}`);
+  if (!instructionModule) throw new Error(`InstructionModule not found: ${ids.instructionModuleId}`);
+  if (ids.toolkitModuleId && !toolkitModule) throw new Error(`ToolkitModule not found: ${ids.toolkitModuleId}`);
+  if (ids.constraintsModuleId && !constraintsModule) throw new Error(`ConstraintsModule not found: ${ids.constraintsModuleId}`);
+  if (ids.capabilitiesModuleId && !capabilitiesModule) throw new Error(`CapabilitiesModule not found: ${ids.capabilitiesModuleId}`);
+}
+
 export async function testConnectionHelper(
   provider: string,
   modelName: string,

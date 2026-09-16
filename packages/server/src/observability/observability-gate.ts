@@ -1,4 +1,4 @@
-import { startSpan as _startSpan, endSpan as _endSpan, withSpan as _withSpan, withSpanSync as _withSpanSync, getTrace as _getTrace, getAllTraces as _getAllTraces, getTraceStats as _getTraceStats, clearTracesForTests as _clearTracesForTests } from "./tracing.js";
+import { startSpan as _startSpan, endSpan as _endSpan, withSpan as _withSpan, withSpanSync as _withSpanSync, getTrace as _getTrace, getAllTraces as _getAllTraces, getSpanById as _getSpanById, getTraceStats as _getTraceStats, clearTracesForTests as _clearTracesForTests } from "./tracing.js";
 import type { TraceSpan, StartSpanOptions } from "./tracing.js";
 import { getPerRunCostLedger as _getPerRunCostLedger, getPerRunRollup as _getPerRunRollup, rollupFromEntries as _rollupFromEntries, getCostDashboard as _getCostDashboard, verifyLedgerAccuracy as _verifyLedgerAccuracy, computeRowCostUsd as _computeRowCostUsd, clampObsLimit as _clampObsLimit, OBS_LIMIT_MAX as _OBS_LIMIT_MAX, OBS_LIMIT_DEFAULT as _OBS_LIMIT_DEFAULT } from "./cost-ledger.js";
 import type { CostLedgerEntry, PerRunCostRollup, CostDashboard } from "./cost-ledger.js";
@@ -13,6 +13,7 @@ export const observabilityGate = {
   withSpanSync: _withSpanSync,
   getTrace: _getTrace,
   getAllTraces: _getAllTraces,
+  getSpanById: _getSpanById,
   getTraceStats: _getTraceStats,
   clearTracesForTests: _clearTracesForTests,
   getPerRunCostLedger: _getPerRunCostLedger,

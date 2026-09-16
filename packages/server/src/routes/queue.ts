@@ -1,6 +1,5 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
-import { authGate } from "../shared/auth/auth-gate.js";
 import { queueGate } from "../queue/queue-gate.js";
 
 const failedJobsQuery = z.object({
@@ -8,7 +7,8 @@ const failedJobsQuery = z.object({
 });
 
 export async function queueRoutes(app: FastifyInstance) {
-  app.get("/api/queue/failed", { preHandler: authGate.requireAdmin, schema: { querystring: failedJobsQuery } }, async (request, reply) => {
+  // Local-first: loopback is the trust boundary; no role gates (single user).
+  app.get("/api/queue/failed", { schema: { querystring: failedJobsQuery } }, async (request, reply) => {
     if (queueGate.mode() !== "bullmq") {
       return reply.send({ jobs: [], mode: "inline", note: "queue disabled in inline mode" });
     }
