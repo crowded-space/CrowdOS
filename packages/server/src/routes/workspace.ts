@@ -184,8 +184,22 @@ export async function workspaceRoutes(app: FastifyInstance) {
         request.log.warn({ err }, "Notice: sandbox directory deferred, VFS will bootstrap on first use");
       }
 
-      // 6. Seed presets on the attached database when one was given.
+      // 6. Seed presets: attached database when one was given, else local
+      // files (default category + #general + default-assistant) so a
+      // registry-only workspace is immediately chattable (§2 portal flow).
       let dbMeta = { configured: false, host: "", database: "", port: null as number | null };
+      if (!hasDb) {
+        try {
+          const { localCreateCategory } = await import("../channels/channel-local-store.js");
+          const { localCreateChannel } = await import("../channels/channel-local-store.js");
+          const { localSeedDefaultAgent } = await import("../agents/agent-local-store.js");
+          const cat = await localCreateCategory({ name: "General", workspaceId: id, createdBy: "system", position: 0 });
+          await localCreateChannel({ name: "general", type: "standard", createdBy: "system", categoryId: cat.id, workspaceId: id, position: 0 });
+          await localSeedDefaultAgent();
+        } catch (err: any) {
+          request.log.warn({ err }, "Notice: local preset seeding skipped or deferred");
+        }
+      }
       if (hasDb) {
         await withProvisionLock(databaseUrl, async () => {
           try {

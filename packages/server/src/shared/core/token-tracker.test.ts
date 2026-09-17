@@ -5,6 +5,9 @@ vi.mock("../config/database.js", async () => {
   return {
     getDb: () => h.fakeBudgetDb,
     withTransaction: h.fakeWithTransaction,
+    dbScopeKey: () => "global",
+    runWithDb: (_db: unknown, fn: () => unknown) => (fn as () => Promise<unknown>)(),
+    isDatabaseConfigured: () => true,
   };
 });
 

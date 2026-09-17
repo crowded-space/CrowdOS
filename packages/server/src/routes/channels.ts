@@ -42,7 +42,7 @@ export async function channelRoutes(app: FastifyInstance) {
     "/api/channels",
     { schema: { body: createChannelSchema } },
     async (request, reply) => {
-      const result = await createChannel(request.body, (request as any).db);
+      const result = await createChannel(request.body, (request as any).db, (request as any).workspaceId ?? null);
       if ("error" in result) {
         return reply.status(400).send({
           error: "Bad Request",

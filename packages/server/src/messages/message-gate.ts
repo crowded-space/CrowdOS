@@ -3,6 +3,7 @@ import { getMessagesParamsSchema, getMessagesQuerySchema } from "./message-valid
 import type { GetMessagesParams, GetMessagesQuery } from "./message-validators.js";
 import {
   getChannelMessagesPage,
+  listRecentMessages,
   parseBeforeCursor,
   MalformedCursorError,
   DEFAULT_PAGE_LIMIT,
@@ -13,11 +14,12 @@ import type { AppendMessageInput, AppendMessageOpts } from "./message-service.js
 export type { ChannelMessage, StructuredToolCall, ChannelMessagesPage, MessagePageCursor };
 export { getMessagesParamsSchema, getMessagesQuerySchema };
 export type { GetMessagesParams, GetMessagesQuery };
-export { getChannelMessagesPage, parseBeforeCursor, MalformedCursorError, DEFAULT_PAGE_LIMIT, appendMessage };
+export { getChannelMessagesPage, listRecentMessages, parseBeforeCursor, MalformedCursorError, DEFAULT_PAGE_LIMIT, appendMessage };
 export type { AppendMessageInput, AppendMessageOpts };
 
 export const messageGate = {
   getChannelMessagesPage,
+  listRecent: listRecentMessages,
   parseBeforeCursor,
   append: appendMessage
 };

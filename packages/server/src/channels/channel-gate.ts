@@ -18,6 +18,11 @@ import type {
 } from "./channel-validators.js";
 import {
   categoryExists,
+  getCategoryById,
+  listCategories,
+  createCategory,
+  updateCategory,
+  removeCategory,
   listChannels,
   getChannel,
   createChannel,
@@ -30,6 +35,11 @@ export { channelTypeSchema, createChannelSchema, updateChannelSchema, paramIdSch
 export type { CreateChannelBody, UpdateChannelBody, ChannelParams };
 export {
   categoryExists,
+  getCategoryById,
+  listCategories,
+  createCategory,
+  updateCategory,
+  removeCategory,
   listChannels,
   getChannel,
   createChannel,
@@ -39,6 +49,11 @@ export {
 
 export const channelGate = {
   categoryExists,
+  getCategory: getCategoryById,
+  listCategories,
+  createCategory,
+  updateCategory,
+  removeCategory,
   list: listChannels,
   get: getChannel,
   create: createChannel,

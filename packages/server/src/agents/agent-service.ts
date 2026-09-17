@@ -2,7 +2,14 @@ import { randomUUID } from "node:crypto";
 
 import { and, asc, eq, inArray, isNull, lt } from "drizzle-orm";
 
-import { getDb, dbScopeKey, withTransaction, runWithDb } from "../shared/config/database.js";
+import { getDb, dbScopeKey, withTransaction, runWithDb, isDatabaseConfigured } from "../shared/config/database.js";
+import {
+  localDeleteAgent,
+  localGetAgent,
+  localListAgents,
+  localSetAgentStatus,
+  localUpsertAgent,
+} from "./agent-local-store.js";
 import { skillsGate } from "../skills/skills-gate.js";
 import { forEachWorkspaceDb } from "../workspace/workspace-gate.js";
 import { markAgentWorking, markAgentIdle } from "../shared/core/agent-heartbeat.js";
@@ -56,8 +63,14 @@ function normalizePermissions(
   };
 }
 
+/** C3 local-first: file roster when no DATABASE_URL is configured. */
+function useLocalDb(dbOverride?: any): boolean {
+  return !dbOverride && !isDatabaseConfigured();
+}
+
 export class AgentRegistry {
   async list(filters: AgentRegistryFilters = {}, dbOverride?: any): Promise<AgentProfile[]> {
+    if (useLocalDb(dbOverride)) return localListAgents(filters as any) as Promise<AgentProfile[]>;
     if (dbOverride) {
       return this.loadRoster(filters, dbOverride);
     }
@@ -101,6 +114,7 @@ export class AgentRegistry {
   }
 
   async getById(id: string, dbOverride?: any): Promise<AgentProfile | null> {
+    if (useLocalDb(dbOverride)) return localGetAgent(id) as Promise<AgentProfile | null>;
     const db = dbOverride || getDb();
     const record = await db.query.agents.findFirst({
       where: eq(agents.id, id),
@@ -110,6 +124,26 @@ export class AgentRegistry {
   }
 
   async create(input: CreateAgentProfileInput, dbOverride?: any): Promise<AgentProfile> {
+    if (useLocalDb(dbOverride)) {
+      // Local mode: structural rules only — module rows live in PG until spec 05.
+      if (input.l3Subtype && input.authorityLevel !== 3) {
+        throw new Error("Only authority level 3 agents may define an l3Subtype.");
+      }
+      const created = await localUpsertAgent({
+        name: input.name,
+        title: input.title,
+        species: input.species,
+        avatar: input.avatar,
+        authorityLevel: input.authorityLevel,
+        modelModuleId: input.modelModuleId ?? null,
+        instructionModuleId: input.instructionModuleId,
+        memorySharingPolicy: input.memorySharingPolicy,
+        status: input.status ?? "offline",
+        isTemplate: input.isTemplate ?? false,
+      });
+      invalidateRosterCache();
+      return created;
+    }
     await this.ensureValidReferences(input, undefined, dbOverride);
 
     const now = new Date();
@@ -159,6 +193,22 @@ export class AgentRegistry {
   }
 
   async update(id: string, input: UpdateAgentProfileInput, dbOverride?: any): Promise<AgentProfile | null> {
+    if (useLocalDb(dbOverride)) {
+      const existing = await this.getById(id);
+      if (!existing) return null;
+      const updated = await localUpsertAgent({
+        id,
+        name: input.name ?? existing.name,
+        title: input.title ?? existing.title,
+        authorityLevel: input.authorityLevel ?? existing.authorityLevel,
+        status: input.status ?? existing.status,
+      });
+      if (input.toolkitModuleId !== undefined || input.permissions !== undefined) {
+        skillsGate.invalidateAgentCaches(id);
+      }
+      invalidateRosterCache();
+      return updated;
+    }
     const db = dbOverride || getDb();
     const existing = await this.getById(id, db);
     if (!existing) {
@@ -233,6 +283,11 @@ export class AgentRegistry {
   }
 
   async delete(id: string, dbOverride?: any): Promise<boolean> {
+    if (useLocalDb(dbOverride)) {
+      const removed = await localDeleteAgent(id);
+      invalidateRosterCache();
+      return removed;
+    }
     const db = dbOverride || getDb();
     const result = await db.delete(agents).where(eq(agents.id, id)).returning({ id: agents.id });
     invalidateRosterCache();
@@ -245,6 +300,14 @@ export class AgentRegistry {
     status: RuntimeStatus,
     opts: { broker?: EventBroker; db?: any; errorInfo?: { code: string; message: string } } = {}
   ): Promise<void> {
+    if (!opts.db && !isDatabaseConfigured()) {
+      // Local mode: file flip only (no runtime_states ledger until spec 05).
+      await localSetAgentStatus(agentId, status);
+      if (status === "working") markAgentWorking(agentId);
+      else markAgentIdle(agentId);
+      opts.broker?.emit("agent:status", { agentId, status } as never);
+      return;
+    }
     const write = async (tx: any) => {
       await tx.update(agents).set({ status }).where(eq(agents.id, agentId));
       await tx

@@ -26,6 +26,7 @@ vi.mock("../shared/config/database.js", () => ({
   }),
   runWithDb: <T>(db: unknown, fn: () => T): T => fn(),
   dbScopeKey: () => "global",
+  isDatabaseConfigured: () => true,
 }));
 
 import { ToolExecutor } from "./tool-executor.js";

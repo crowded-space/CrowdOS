@@ -1,6 +1,4 @@
-﻿import { eq } from "drizzle-orm";
-import { getDb } from "../../../shared/config/database.js";
-import { messages } from "../../../db/schema.js";
+﻿import { messageGate } from "../../../messages/message-gate.js";
 import { agentLockStore } from "../../../shared/core/agent-lock-store.js";
 import { wrapUntrusted } from "../../../shared/core/untrusted-wrapper.js";
 import type { IContextMiddleware, MutableContextPacket, ContextBuildContext, HistoryMessage } from "../context-types.js";
@@ -71,16 +69,12 @@ export class VisibilityMatrixMiddleware implements IContextMiddleware {
   readonly priority = 70;
 
   async process(packet: MutableContextPacket, ctx: ContextBuildContext): Promise<void> {
-    const db = getDb();
     const { agent, channelId } = ctx;
     const limit = 30;
 
+    // C3 local-first: messageGate branches to files when no DATABASE_URL.
     const rawMessages = await getOrCreateSharedHistory(packet, () =>
-      db.query.messages.findMany({
-        where: eq(messages.channelId, channelId),
-        orderBy: (table, { desc }) => [desc(table.timestamp)],
-        limit: SHARED_HISTORY_WINDOW,
-      }),
+      messageGate.listRecent(channelId, SHARED_HISTORY_WINDOW),
     );
 
     const isLockedIn = agentLockStore.isLockedIn(agent.id, channelId);

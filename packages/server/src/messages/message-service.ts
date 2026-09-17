@@ -1,10 +1,16 @@
 import { eq, and, sql } from "drizzle-orm";
-import { getDb, withTransaction, runWithDb } from "../shared/config/database.js";
+import { getDb, withTransaction, runWithDb, isDatabaseConfigured } from "../shared/config/database.js";
 import { messages } from "../db/schema.js";
 import { stripToolCalls, parseToolCalls } from "@crowdspace/shared";
 import { allocateSequence } from "../shared/core/sequence-number.js";
 import { allocateThreadSequence } from "../shared/core/thread-sequence.js";
 import { monotonicUlid } from "../shared/core/ulid.js";
+import { localAllocateSequence, localAppendMessage, localListRawMessages } from "./message-local-store.js";
+
+/** C3 local-first: file truth when no DATABASE_URL is configured. */
+function useLocalDb(dbOverride?: any, txOverride?: any): boolean {
+  return !dbOverride && !txOverride && !isDatabaseConfigured();
+}
 import type { StructuredToolCall, MessagePageCursor, ChannelMessagesPage, MessageAuthorType } from "./message-types.js";
 import type { EventBroker } from "../event-broker/event-broker-gate.js";
 
@@ -199,12 +205,29 @@ function mergeMessageRows(list: Array<typeof messages.$inferSelect>, channelId: 
   return mergedList;
 }
 
+/** Raw newest-first rows for context middlewares (DB or local file). */
+export async function listRecentMessages(channelId: string, limit: number, dbOverride?: any): Promise<any[]> {
+  if (useLocalDb(dbOverride)) return localListRawMessages(channelId, { limit });
+  const db = dbOverride || getDb();
+  return db.query.messages.findMany({
+    where: eq(messages.channelId, channelId),
+    orderBy: (table: any, { desc }: any) => [desc(table.timestamp)],
+    limit,
+  });
+}
+
 export async function getChannelMessagesPage(
   channelId: string,
   opts: { limit?: number; before?: { timestamp: Date; seq: number }; db?: any } = {}
 ): Promise<ChannelMessagesPage> {
-  const db = opts.db || getDb();
   const limit = Math.min(Math.max(Math.trunc(opts.limit ?? DEFAULT_PAGE_LIMIT), 1), MAX_PAGE_LIMIT);
+
+  if (useLocalDb(opts.db)) {
+    const rows = await localListRawMessages(channelId, { limit: limit + 1, before: opts.before });
+    return assemblePage(rows, limit, channelId);
+  }
+
+  const db = opts.db || getDb();
 
   const keysetFilter = opts.before
     ? and(
@@ -219,6 +242,14 @@ export async function getChannelMessagesPage(
     limit: limit + 1,
   });
 
+  return assemblePage(rows, limit, channelId);
+}
+
+function assemblePage(
+  rows: Array<typeof messages.$inferSelect>,
+  limit: number,
+  channelId: string,
+): ChannelMessagesPage {
   const hasMore = rows.length > limit;
   const pageRows = hasMore ? rows.slice(0, limit) : rows;
   if (pageRows.length === 0) {
@@ -268,6 +299,32 @@ export interface AppendMessageOpts {
 export async function appendMessage(input: AppendMessageInput, opts: AppendMessageOpts = {}): Promise<typeof messages.$inferSelect> {
   const msgId = input.id ?? monotonicUlid();
   const timestamp = new Date();
+
+  if (useLocalDb(opts.db, opts.tx)) {
+    const sequenceNumber = input.threadId
+      ? await localAllocateSequence(`thread:${input.threadId}`, 1)
+      : await localAllocateSequence(`ch:${input.channelId}`, 1);
+    const msg = await localAppendMessage({
+      id: msgId,
+      channelId: input.channelId,
+      threadId: input.threadId ?? null,
+      workspaceId: input.workspaceId ?? null,
+      authorId: input.authorId,
+      authorName: input.authorName,
+      authorLevel: String(input.authorLevel),
+      authorType: input.authorType,
+      content: input.content,
+      mentions: (input.mentions ?? []) as unknown[],
+      metadata: (input.metadata ?? null) as Record<string, unknown> | null,
+      toolCalls: (input.toolCalls ?? null) as unknown[] | null,
+      isInternalMonologue: input.isInternalMonologue ?? false,
+      sequenceNumber,
+      timestamp: timestamp.toISOString(),
+    });
+    opts.broker?.emit("message:new", msg as never, { channelId: input.channelId } as never);
+    return msg;
+  }
+
   const write = async (tx: any) => {
     const sequenceNumber = input.threadId
       ? await allocateThreadSequence(input.threadId, 1, tx)

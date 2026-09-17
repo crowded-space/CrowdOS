@@ -195,6 +195,12 @@ export interface IRuntime {
   execute(packet: ContextPacket, broker: EventBroker): Promise<RuntimeResult>
 }
 
+// D2 (CrowdOS §26): spec name is RuntimePacket. ContextPacket is the current
+// shape; the alias keeps both names compiling. Future §26 fields
+// (interpreter_output, visible_capabilities, state_updates, artifacts) land
+// with their features (Interpreter, capability filter, artifacts) — not here.
+export type RuntimePacket = ContextPacket;
+
 export interface IProviderAdapter {
   provider: string
   call(

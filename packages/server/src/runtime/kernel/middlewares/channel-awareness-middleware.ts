@@ -1,5 +1,5 @@
-import { eq } from "drizzle-orm";
-import { getDb } from "../../../shared/config/database.js";
+import { channelGate } from "../../../channels/channel-gate.js";
+import { messageGate } from "../../../messages/message-gate.js";
 import { agentLockStore } from "../../../shared/core/agent-lock-store.js";
 import { wrapUntrusted } from "../../../shared/core/untrusted-wrapper.js";
 import type { IContextMiddleware, MutableContextPacket, ContextBuildContext } from "../context-types.js";
@@ -17,17 +17,17 @@ export class ChannelAwarenessMiddleware implements IContextMiddleware {
 
   async process(packet: MutableContextPacket, ctx: ContextBuildContext): Promise<void> {
     const { agent, channelId } = ctx;
-    const db = getDb();
     const isLocked = agentLockStore.isLockedIn(agent.id, channelId);
 
     let channelName = channelId;
     let categoryName: string | null = null;
     try {
-      const ch = await db.query.channels.findFirst({ where: eq((await import("../../../db/schema.js")).channels.id, channelId) });
+      // C3 local-first: gates branch to files when no DATABASE_URL.
+      const ch = await channelGate.get(channelId);
       if (ch) {
         channelName = ch.name;
         if (ch.categoryId) {
-          const cat = await db.query.categories.findFirst({ where: eq((await import("../../../db/schema.js")).categories.id, ch.categoryId) });
+          const cat = await channelGate.getCategory(ch.categoryId).catch(() => null);
           if (cat) categoryName = cat.name;
         }
       }
@@ -41,14 +41,9 @@ export class ChannelAwarenessMiddleware implements IContextMiddleware {
     try {
       // PERF-2: reads the newest 30 of the shared per-assemble history window
       // (one fetch for both this middleware and VisibilityMatrixMiddleware).
-      const shared = await getOrCreateSharedHistory(packet, async () => {
-        const { messages } = await import("../../../db/schema.js");
-        return db.query.messages.findMany({
-          where: eq(messages.channelId, channelId),
-          orderBy: (table, { desc }) => [desc(table.timestamp)],
-          limit: SHARED_HISTORY_WINDOW,
-        });
-      });
+      const shared = await getOrCreateSharedHistory(packet, () =>
+        messageGate.listRecent(channelId, SHARED_HISTORY_WINDOW),
+      );
       const recent = shared.slice(0, 30);
       const distinct = new Map<string, { name: string; level: string; type: string }>();
       for (const m of recent) {

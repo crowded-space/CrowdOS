@@ -193,6 +193,7 @@ vi.mock("./shared/config/database.js", async (importOriginal) => {
   withTransaction: async <T>(fn: (tx: unknown) => Promise<T>) => fn(buildFakeDb()),
   runWithDb: <T>(db: unknown, fn: () => T): T => fn(),
   dbScopeKey: () => "global",
+  isDatabaseConfigured: () => true,
   __socketTestDb: {
     store,
     reset() {
@@ -212,8 +213,12 @@ vi.mock("./channels/channel-gate.js", async (importOriginal) => {
   }
   return {
   channelGate: {
-    get: async (id: string) => (channelOverride ? channelOverride(id) : null),
+    // C3 slice 2: production mount resolution now reads through this gate,
+    // so the fake reads through to the fake store (override still wins).
+    get: async (id: string) =>
+      channelOverride ? channelOverride(id) : (store.channels.find((c) => c.id === id) ?? null),
     categoryExists: async () => false,
+    getCategory: async () => null,
     list: async () => [],
     create: async () => ({}),
     update: async () => ({}),

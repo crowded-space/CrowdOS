@@ -101,8 +101,8 @@ export const envSchema = z.object({
   SOCKET_MSG_RATE_CAPACITY: numSchema(0.000001, 15, "Per-socket token-bucket capacity for throttled user-content socket events (float allowed)."),
   SOCKET_MSG_RATE_REFILL: numSchema(0.000001, 5, "Token-bucket refill rate in tokens per second for socket event throttling."),
   MAX_PARALLEL_AGENTS: intSchema(1, null, 4, "Deprecated: ignored — multi-mention is always serial per CrowdOS §10."),
-  DURABLE_EVENTS: boolSchema(true)
-    .describe("Durable event fan-out persistence; false skips durable_events writes (legacy ephemeral broker behavior)."),
+  DURABLE_EVENTS: boolSchema(false)
+    .describe("Deprecated (D6): durable_events retired, always off. Kept so old env files still parse."),
 
   PROVIDER_CONNECT_TIMEOUT_MS: numSchema(0, 10_000, "Max wait in ms for provider response headers; 0 disables the watchdog."),
   PROVIDER_IDLE_TIMEOUT_MS: numSchema(0, 120_000, "Max gap in ms between provider stream chunks (or full non-streaming body); 0 disables."),

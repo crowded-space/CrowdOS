@@ -1,10 +1,12 @@
 import type { FastifyInstance } from "fastify";
 import type { FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
-import { eq } from "drizzle-orm";
-import { randomUUID } from "node:crypto";
-import { getDb } from "../shared/config/database.js";
-import { categories, channels } from "../db/schema.js";
+import {
+  listCategories,
+  createCategory,
+  updateCategory,
+  removeCategory,
+} from "../channels/channel-gate.js";
 import { maybeSend304 } from "../shared/core/http-cache.js";
 import { globalBroker } from "../shared/sockets/register-socket-server.js";
 
@@ -34,7 +36,6 @@ function emitWorkspaceSync(): void {
 export async function categoryRoutes(app: FastifyInstance) {
   // GET /api/categories - List categories with nested channels, limit+cursor compat (capped 200)
   app.get("/api/categories", async (req: any, reply: any) => {
-    const db = (req as any).db || getDb();
     const limitRaw = req.query?.limit != null ? Number(req.query.limit) : 200;
     const limit = Math.min(200, Math.max(1, Number.isFinite(limitRaw) ? limitRaw : 200));
     const cursorRaw = req.query?.cursor ?? req.query?.offset;
@@ -43,16 +44,11 @@ export async function categoryRoutes(app: FastifyInstance) {
       const parsed = Number(cursorRaw);
       if (Number.isFinite(parsed) && parsed >= 0) offset = Math.floor(parsed);
     }
-    const list = await db.query.categories.findMany({
-      with: {
-        channels: {
-          orderBy: (table: any, { asc }: any) => [asc(table.position)],
-          limit: 100,
-        },
-      },
-      orderBy: (table: any, { asc }: any) => [asc(table.position)],
+    const list = await listCategories({
       limit,
       offset,
+      workspaceId: (req as any).workspaceId ?? null,
+      db: (req as any).db,
     });
     if (maybeSend304(req, reply, list)) return;
     return list;
@@ -63,41 +59,36 @@ export async function categoryRoutes(app: FastifyInstance) {
     "/api/categories",
     { schema: { body: createCategorySchema } },
     async (request, reply) => {
-        const db = (request as any).db || getDb();
-      const id = randomUUID();
-      const [res] = await db
-        .insert(categories)
-        .values({
-          id,
+      const res = await createCategory(
+        {
           name: request.body.name,
+          workspaceId: (request as any).workspaceId ?? null,
           ownedByAgentId: request.body.ownedByAgentId ?? null,
           embeddingProfileId: request.body.embeddingProfileId ?? null,
           createdBy: request.body.createdBy,
           position: request.body.position,
-        })
-        .returning();
+        },
+        (request as any).db,
+      );
       emitWorkspaceSync();
       return reply.status(201).send(res);
     }
   );
 
-  async function updateCategory(
+  async function updateCategoryHandler(
     request: FastifyRequest<{ Params: { id: string }; Body: z.infer<typeof updateCategorySchema> }>,
     reply: FastifyReply,
   ) {
-      const db = (request as any).db || getDb();
-    const updateData: Partial<typeof categories.$inferInsert> = {};
-
-    if (request.body.name !== undefined) updateData.name = request.body.name;
-    if (request.body.ownedByAgentId !== undefined) updateData.ownedByAgentId = request.body.ownedByAgentId;
-    if (request.body.embeddingProfileId !== undefined) updateData.embeddingProfileId = request.body.embeddingProfileId;
-    if (request.body.position !== undefined) updateData.position = request.body.position;
-
-    const [updated] = await db
-      .update(categories)
-      .set(updateData)
-      .where(eq(categories.id, request.params.id))
-      .returning();
+    const updated = await updateCategory(
+      request.params.id,
+      {
+        name: request.body.name,
+        ownedByAgentId: request.body.ownedByAgentId,
+        embeddingProfileId: request.body.embeddingProfileId,
+        position: request.body.position,
+      },
+      (request as any).db,
+    );
 
     if (!updated) {
       return reply.status(404).send({ error: "Not Found", message: "Category not found" });
@@ -110,39 +101,22 @@ export async function categoryRoutes(app: FastifyInstance) {
   app.put<{ Params: { id: string }; Body: z.infer<typeof updateCategorySchema> }>(
     "/api/categories/:id",
     { schema: { params: paramIdSchema, body: updateCategorySchema } },
-    updateCategory,
+    updateCategoryHandler,
   );
 
   app.patch<{ Params: { id: string }; Body: z.infer<typeof updateCategorySchema> }>(
     "/api/categories/:id",
     { schema: { params: paramIdSchema, body: updateCategorySchema } },
-    updateCategory,
+    updateCategoryHandler,
   );
 
-  // DELETE /api/categories/:id - Delete a category (transactional: channels + category atomically)
+  // DELETE /api/categories/:id - Delete a category (channels cascade with it)
   app.delete<{ Params: { id: string } }>(
     "/api/categories/:id",
     { schema: { params: paramIdSchema } },
     async (request, reply) => {
-        const db = (request as any).db || getDb();
-      const existing = await db.query.categories.findFirst({
-        where: eq(categories.id, request.params.id),
-      });
-
-      if (!existing) {
-        return reply.status(404).send({ error: "Not Found", message: "Category not found" });
-      }
-
-      const { withTransaction } = await import("../shared/config/database.js");
-      const result = await withTransaction(async (tx) => {
-        await tx.delete(channels).where(eq(channels.categoryId, request.params.id));
-        const deleted = await tx
-          .delete(categories)
-          .where(eq(categories.id, request.params.id))
-          .returning();
-        return deleted;
-      });
-      if (result.length === 0) {
+      const removed = await removeCategory(request.params.id, (request as any).db);
+      if (!removed) {
         return reply.status(404).send({ error: "Not Found", message: "Category not found" });
       }
       emitWorkspaceSync();

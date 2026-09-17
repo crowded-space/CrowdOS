@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { and, eq, sql } from "drizzle-orm";
-import { getDb } from "../shared/config/database.js";
+import { getDb, isDatabaseConfigured } from "../shared/config/database.js";
 import { runs, runsCompensation, type RunStatus, type RunCheckpoint, type CompensationInverseOp } from "../db/schema.js";
 import { transition } from "./run-state-machine.js";
 
@@ -41,6 +41,8 @@ export function isRunsEnabled(): boolean {
 
 export async function createRun(input: CreateRunInput): Promise<RunRow | null> {
   if (!isRunsEnabled()) return null;
+  // C3 local-first: no ledger without a database — the executor runs run-less.
+  if (!isDatabaseConfigured()) return null;
   const db = getDb();
   const [row] = await db
     .insert(runs)

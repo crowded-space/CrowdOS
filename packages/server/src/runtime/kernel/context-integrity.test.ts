@@ -83,6 +83,7 @@ describe("CTX-2 · reflection provenance stripping", () => {
         ensurePgVectorExtension: async () => {},
         closeDatabaseConnection: async () => {},
         withTransaction: async (fn: any) => fn(b2()),
+        dbScopeKey: () => "global",
         __memTestStoreRef: s2,
       };
     });

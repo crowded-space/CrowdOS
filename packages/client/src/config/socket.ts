@@ -49,6 +49,16 @@ export function emitChannelJoin(channelId: string) {
   try { socket.emit('channel:join' as any, { channelId }); } catch {}
 }
 
+export function emitChannelLeave(channelId: string) {
+  if (!channelId) return;
+  try { socket.emit('channel:leave' as any, { channelId }); } catch {}
+}
+
+export function emitWorkspaceLeave(workspaceId: string) {
+  if (!workspaceId) return;
+  try { socket.emit('workspace:leave' as any, { workspaceId }); } catch {}
+}
+
 export function cleanupSocketJoins() {
   for (const t of Object.values(pendingJoinTimers)) clearTimeout(t as any);
   for (const k of Object.keys(pendingJoinTimers)) delete pendingJoinTimers[k];

@@ -41,7 +41,7 @@ describe('CFG-1 · Config consolidation', () => {
     expect(config.SOCKET_MSG_RATE_CAPACITY).toBe(15);
     expect(config.SOCKET_MSG_RATE_REFILL).toBe(5);
     expect(config.MAX_PARALLEL_AGENTS).toBe(4);
-    expect(config.DURABLE_EVENTS).toBe(true);
+    expect(config.DURABLE_EVENTS).toBe(false);
     expect(config.PROVIDER_CONNECT_TIMEOUT_MS).toBe(10_000);
     expect(config.PROVIDER_IDLE_TIMEOUT_MS).toBe(120_000);
     expect(config.STREAM_BATCH_MS).toBe(50);

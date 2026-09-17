@@ -13,6 +13,7 @@ vi.mock("../config/database.js", async () => {
         };
       },
     }),
+    dbScopeKey: () => "global",
   };
 });
 

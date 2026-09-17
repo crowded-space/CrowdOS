@@ -92,8 +92,14 @@ export class ContextPipelineManager {
         modelConfig = cached;
       } else {
         // Modules owns model rows: resolve via gate (dynamic import avoids Context↔Modules↔Runtime cycle).
-        const { moduleGate } = await import("../../modules/module-gate.js");
-        const row = await moduleGate.model.get(ctx.agent.modelModuleId);
+        // C3 local-first: no module rows without a database — default config stands.
+        let row: any = null;
+        try {
+          const { moduleGate } = await import("../../modules/module-gate.js");
+          row = await moduleGate.model.get(ctx.agent.modelModuleId);
+        } catch {
+          row = null;
+        }
         if (row) {
           const envApiKey =
             row.provider === "google" ? (process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY) :

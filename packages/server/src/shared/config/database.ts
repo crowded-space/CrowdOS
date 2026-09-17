@@ -57,17 +57,6 @@ export function isDatabaseConfigured(): boolean {
   return Boolean(env.DATABASE_URL?.trim());
 }
 
-/** Null-safe handle for degraded-without-DB paths; null = local-only mode. */
-export function tryGetDb(): DbInstance | null {
-  try {
-    if (dbContext.getStore()) return dbContext.getStore()!;
-    if (!isDatabaseConfigured()) return null;
-    return (dbInstance ??= drizzle(getSqlClient(), { schema }));
-  } catch {
-    return null;
-  }
-}
-
 function parsePositiveIntEnv(raw: string | undefined, fallback: number): number {
   if (raw === undefined || raw === "") return fallback;
   const parsed = Number(raw);

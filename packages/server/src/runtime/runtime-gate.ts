@@ -20,6 +20,7 @@ import { agentCompleteTool, AGENT_COMPLETE, isLifecycleTool } from "./agent-cont
 import type { AgentCompleteInput } from "./agent-control-tools.js";
 import type {
   ContextPacket,
+  RuntimePacket,
   RuntimeResult,
   RuntimeEvent,
   RuntimePolicy,
@@ -89,6 +90,7 @@ export type {
   RoutingContext,
   AssembleOptions,
   ContextPacket,
+  RuntimePacket,
   RuntimeResult,
   RuntimeEvent,
   RuntimePolicy,

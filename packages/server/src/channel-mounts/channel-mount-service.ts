@@ -2,8 +2,10 @@ import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { eq } from "drizzle-orm";
-import { getDb } from "../shared/config/database.js";
+import { getDb, isDatabaseConfigured } from "../shared/config/database.js";
 import { channels, categories, workspaces } from "../db/schema.js";
+import { channelGate } from "../channels/channel-gate.js";
+import { getWorkspaceRecord } from "../workspace/workspace-gate.js";
 import { TtlCache } from "../shared/core/ttl-cache.js";
 import type { MountInfo } from "./channel-mount-types.js";
 
@@ -84,6 +86,18 @@ export async function validateMountPath(absPath: string): Promise<{ valid: boole
 }
 
 export async function resolveWorkspaceMount(workspaceId: string): Promise<MountInfo> {
+  // C3 local-first: registry record is truth when no DATABASE_URL.
+  if (!isDatabaseConfigured()) {
+    const record = await getWorkspaceRecord(workspaceId).catch(() => null);
+    if (!record) return { workspaceId: null, mountedPath: null, source: "none", effectivePath: null };
+    if (record.rootPath) {
+      const v = await validateMountPath(record.rootPath);
+      if (v.valid) {
+        return { workspaceId: record.id, mountedPath: v.resolved!, source: "workspace", effectivePath: v.resolved! };
+      }
+    }
+    return { workspaceId: record.id, mountedPath: null, source: "none", effectivePath: record.rootPath ?? null };
+  }
   const db = getDb();
   const ws = await db.query.workspaces.findFirst({ where: eq(workspaces.id, workspaceId) });
   if (!ws) return { workspaceId: null, mountedPath: null, source: "none", effectivePath: null };
@@ -129,6 +143,25 @@ export async function resolveWorkspaceMount(workspaceId: string): Promise<MountI
 }
 
 export async function attachWorkspaceMount(workspaceId: string, folderPath: string | null): Promise<{ ok: true } | { ok: false; error: string }> {
+  // C3 local-first: registry rootPath is truth when no DATABASE_URL.
+  if (!isDatabaseConfigured()) {
+    const { saveWorkspaceRecord } = await import("../workspace/workspace-gate.js");
+    const record = await getWorkspaceRecord(workspaceId).catch(() => null);
+    if (!record) return { ok: false, error: "Workspace not found" };
+    if (folderPath === null || folderPath.trim() === "") {
+      const defaultSandboxRoot = process.env.WORKSPACE_DIR?.trim()
+        ? path.resolve(process.env.WORKSPACE_DIR.trim())
+        : path.resolve(path.join(process.cwd(), "sandbox"));
+      record.rootPath = path.join(defaultSandboxRoot, record.id).replace(/\\/g, "/");
+      await saveWorkspaceRecord(record);
+      return { ok: true };
+    }
+    const v = await validateMountPath(folderPath);
+    if (!v.valid) return { ok: false, error: v.error! };
+    record.rootPath = v.resolved!.replace(/\\/g, "/");
+    await saveWorkspaceRecord(record);
+    return { ok: true };
+  }
   const db = getDb();
   const ws = await db.query.workspaces.findFirst({ where: eq(workspaces.id, workspaceId) });
   if (!ws) return { ok: false, error: "Workspace not found" };
@@ -161,13 +194,13 @@ export async function attachWorkspaceMount(workspaceId: string, folderPath: stri
 }
 
 export async function resolveChannelMount(channelId: string): Promise<MountInfo> {
-  const db = getDb();
-  const channel = await db.query.channels.findFirst({ where: eq(channels.id, channelId) });
+  // C3 local-first: channelGate branches to files when no DATABASE_URL.
+  const channel = await channelGate.get(channelId).catch(() => null);
   if (!channel) return { workspaceId: null, mountedPath: null, source: "none", effectivePath: null };
 
   // Start category + workspace lookups early so they run alongside the channel fs check.
   const catPromise = channel.categoryId
-    ? db.query.categories.findFirst({ where: eq(categories.id, channel.categoryId) })
+    ? channelGate.getCategory(channel.categoryId).catch(() => null)
     : Promise.resolve(null);
   const wsPromise: Promise<MountInfo | null> = channel.workspaceId
     ? resolveWorkspaceMount(channel.workspaceId)
@@ -219,8 +252,8 @@ export async function resolveChannelMount(channelId: string): Promise<MountInfo>
 }
 
 export async function resolveCategoryMount(categoryId: string): Promise<MountInfo> {
-  const db = getDb();
-  const cat = await db.query.categories.findFirst({ where: eq(categories.id, categoryId) });
+  // C3 local-first: channelGate branches to files when no DATABASE_URL.
+  const cat = await channelGate.getCategory(categoryId).catch(() => null);
   if (!cat) return { workspaceId: null, mountedPath: null, source: "none", effectivePath: null };
   if (cat.folderPath) {
     const v = await validateMountPath(cat.folderPath);
@@ -249,30 +282,28 @@ export async function resolveCategoryMount(categoryId: string): Promise<MountInf
 }
 
 export async function attachChannelMount(channelId: string, folderPath: string | null): Promise<{ ok: true } | { ok: false; error: string }> {
-  const db = getDb();
-  const channel = await db.query.channels.findFirst({ where: eq(channels.id, channelId) });
+  const channel = await channelGate.get(channelId).catch(() => null);
   if (!channel) return { ok: false, error: "Channel not found" };
   if (folderPath === null || folderPath.trim() === "") {
-    await db.update(channels).set({ folderPath: null }).where(eq(channels.id, channelId));
+    await channelGate.update(channelId, { folderPath: null } as any).catch(() => null);
     return { ok: true };
   }
   const v = await validateMountPath(folderPath);
   if (!v.valid) return { ok: false, error: v.error! };
-  await db.update(channels).set({ folderPath: v.resolved! }).where(eq(channels.id, channelId));
+  await channelGate.update(channelId, { folderPath: v.resolved! } as any).catch(() => null);
   return { ok: true };
 }
 
 export async function attachCategoryMount(categoryId: string, folderPath: string | null): Promise<{ ok: true } | { ok: false; error: string }> {
-  const db = getDb();
-  const cat = await db.query.categories.findFirst({ where: eq(categories.id, categoryId) });
+  const cat = await channelGate.getCategory(categoryId).catch(() => null);
   if (!cat) return { ok: false, error: "Category not found" };
   if (folderPath === null || folderPath.trim() === "") {
-    await db.update(categories).set({ folderPath: null }).where(eq(categories.id, categoryId));
+    await channelGate.updateCategory(categoryId, { folderPath: null }).catch(() => null);
     return { ok: true };
   }
   const v = await validateMountPath(folderPath);
   if (!v.valid) return { ok: false, error: v.error! };
-  await db.update(categories).set({ folderPath: v.resolved! }).where(eq(categories.id, categoryId));
+  await channelGate.updateCategory(categoryId, { folderPath: v.resolved! }).catch(() => null);
   return { ok: true };
 }
 

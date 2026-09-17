@@ -21,7 +21,14 @@ export class ToolSchemaMiddleware implements IContextMiddleware {
       return;
     }
 
-    const allowedToolIds = await skillsGate.getResolvedToolsForAgent(agent.id);
+    // C3 local-first: skill rows need PG — fall back to universals alone.
+    // (Matches the defense-in-depth intent below: universals always land.)
+    let allowedToolIds: string[] = [];
+    try {
+      allowedToolIds = await skillsGate.getResolvedToolsForAgent(agent.id);
+    } catch {
+      allowedToolIds = [];
+    }
     const compiledTools: any[] = [];
 
     for (const toolId of allowedToolIds) {

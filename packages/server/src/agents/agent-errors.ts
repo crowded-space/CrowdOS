@@ -1,6 +1,3 @@
-import { and, eq, isNull } from "drizzle-orm";
-import { getDb } from "../shared/config/database.js";
-import { agents } from "../db/schema.js";
 import { agentRegistry } from "./agent-service.js";
 import { messageGate } from "../messages/message-gate.js";
 import type { EventBroker } from "../event-broker/event-broker-gate.js";
@@ -38,7 +35,6 @@ export class EscalationChain {
     errorType: AgentErrorType,
     errorMessage: string
   ): Promise<void> {
-    const db = getDb();
     console.log(`[EscalationChain] Escalating error from @${agent.name} (L${agent.authorityLevel}): ${errorMessage}`);
 
     // Emit real-time escalation:created event to the projection layer
@@ -83,10 +79,8 @@ export class EscalationChain {
     }
 
     if (targetLevel !== null) {
-      // Find active coordinators at targetLevel
-      const allAgents = await db.query.agents.findMany({
-        where: and(eq(agents.isTemplate, false), isNull(agents.archivedAt)),
-      });
+      // Find active coordinators at targetLevel (registry branches to files locally).
+      const allAgents = await agentRegistry.list({ isTemplate: false });
       const targetAgent = allAgents.find(a => a.authorityLevel === targetLevel && a.status !== "offline" && a.status !== "paused");
 
       if (targetAgent) {

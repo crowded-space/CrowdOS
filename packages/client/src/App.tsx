@@ -127,7 +127,9 @@ export default function App() {
     return (
       <ToastProvider>
         <div className="w-full h-dvh bg-[#060608] text-zinc-100 flex items-center justify-center p-4 overflow-y-auto">
-          <WorkspacePortal />
+          <ErrorBoundary fallback={<div className="p-6 text-sm text-zinc-400">Portal failed to load</div>}>
+            <WorkspacePortal />
+          </ErrorBoundary>
         </div>
       </ToastProvider>
     );

@@ -9,6 +9,7 @@ vi.mock("../shared/config/database.js", () => ({
   closeDatabaseConnection: async () => {},
   runWithDb: <T>(db: unknown, fn: () => T): T => fn(),
   dbScopeKey: () => "global",
+  isDatabaseConfigured: () => true,
 }));
 
 import { Column, Param, SQL, StringChunk } from "drizzle-orm";

@@ -1,8 +1,15 @@
 import { eq, sql } from "drizzle-orm";
-import { getDb } from "../config/database.js";
+import { getDb, isDatabaseConfigured } from "../config/database.js";
 import { threadSequences, messages } from "../../db/schema.js";
+import { localAllocateSequence } from "../../messages/message-local-store.js";
 
 export async function allocateThreadSequence(threadId: string, count = 1, txOverride?: any): Promise<number> {
+  // C3 local-first: file counter when no DATABASE_URL.
+  if (!txOverride && !isDatabaseConfigured()) {
+    return count === 1
+      ? localAllocateSequence(`thread:${threadId}`, 1)
+      : localAllocateSequence(`thread:${threadId}`, count, true);
+  }
   const dbOrTx = txOverride ?? getDb();
   // Ensure row exists
   const existing = await dbOrTx.query.threadSequences.findFirst({ where: eq(threadSequences.threadId, threadId) });

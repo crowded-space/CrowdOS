@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { socket, emitChannelJoin } from '../src/config/socket';
+import { socket, emitChannelJoin, emitChannelLeave, emitWorkspaceLeave } from '../src/config/socket';
 import { stripToolCalls } from '@crowdspace/shared';
 import {
   encodeBeforeParam,
@@ -1936,17 +1936,17 @@ const initialSelectedMode: ComposerMode = (storedIsPinned && storedSelectedMode)
 
       let createdDto: any = null;
       try {
+        const trimmedDbUrl = (dbUrl ?? "").trim();
         const res = await fetch(`${BACKEND_URL}/api/workspaces`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           // ponytail: creation must surface, never spin forever (server-side
           // stalls previously left the portal on "Provisioning" with no error).
           signal: AbortSignal.timeout(120_000),
-          body: JSON.stringify({
-            name,
-            icon: icon || '💼',
-            databaseUrl: dbUrl || 'postgresql://localhost:5432/crowdos',
-          }),
+          // D1/C3 local-first: one honest policy — DB-optional. Empty = local.
+          body: JSON.stringify(trimmedDbUrl
+            ? { name, icon: icon || '💼', databaseUrl: trimmedDbUrl }
+            : { name, icon: icon || '💼' }),
         });
 
         if (!res.ok) {
@@ -2149,6 +2149,11 @@ const initialSelectedMode: ComposerMode = (storedIsPinned && storedSelectedMode)
     },
 
     enterWorkspace: async (id) => {
+      // D1 switch teardown: leave previously observed rooms before slicing.
+      const prevWs = get().activeWorkspaceId;
+      const prevCh = get().activeChannelId;
+      if (prevCh) emitChannelLeave(prevCh);
+      if (prevWs && prevWs !== id) emitWorkspaceLeave(prevWs);
       setActiveWorkspaceId(id);
       get().clearTenantSlices();
       const currentWS = get().workspaces.find(ws => ws.id === id);
@@ -2182,6 +2187,10 @@ const initialSelectedMode: ComposerMode = (storedIsPinned && storedSelectedMode)
     },
 
     leaveWorkspace: () => {
+      const prevWs = get().activeWorkspaceId;
+      const prevCh = get().activeChannelId;
+      if (prevCh) emitChannelLeave(prevCh);
+      if (prevWs) emitWorkspaceLeave(prevWs);
       setActiveWorkspaceId(null);
       get().clearTenantSlices();
       if (typeof localStorage !== 'undefined') {
@@ -2201,6 +2210,9 @@ const initialSelectedMode: ComposerMode = (storedIsPinned && storedSelectedMode)
     },
 
     setActiveChannel: async (id) => {
+      // D1: leave the previously observed channel room before joining the next.
+      const prevActive = get().activeChannelId;
+      if (prevActive && prevActive !== id) emitChannelLeave(prevActive);
       // Clear notifications across both categories and top-level channels
       const updatedWorkspaces = get().workspaces.map(ws => {
         if (ws.id === get().activeWorkspaceId) {

@@ -29,7 +29,7 @@ const ICONS = [
 ];
 
 export default function WorkspacePortal() {
-  const { createWorkspace, workspaces, enterWorkspace, fetchWorkspaces, isCreatingWorkspace } = useCrowdOSStore();
+  const { createWorkspace, workspaces, enterWorkspace, fetchWorkspaces, isCreatingWorkspace, workspaceError } = useCrowdOSStore() as any;
   const [isLaunching, setIsLaunching] = useState(false);
 
   useEffect(() => {
@@ -80,12 +80,13 @@ export default function WorkspacePortal() {
     }
   };
 
-  const handleCreate = async () => {
-    if (!workspaceName.trim() || testStatus !== 'success' || isLaunching || isCreatingWorkspace) return;
+  const handleCreate = async (withDb: boolean) => {
+    if (!workspaceName.trim() || isLaunching || isCreatingWorkspace) return;
+    if (withDb && testStatus !== 'success') return;
     setIsLaunching(true);
-    pushLog('Applying schema migrations & presets...');
+    pushLog(withDb ? 'Applying schema migrations & presets...' : 'Creating local workspace (no database — RAG degraded)...');
     try {
-      await createWorkspace(workspaceName, dbUrl, selectedIcon);
+      await createWorkspace(workspaceName, withDb ? dbUrl : undefined, selectedIcon);
       pushLog('Workspace launched successfully.', 'ok');
     } catch (err: any) {
       pushLog(`Error: ${err.message || String(err)}`, 'err');
@@ -94,7 +95,8 @@ export default function WorkspacePortal() {
   };
 
   const canTest = dbUrl.trim().length > 0 && testStatus !== 'testing';
-  const canCreate = workspaceName.trim().length > 0 && testStatus === 'success';
+  const canCreateDb = workspaceName.trim().length > 0 && testStatus === 'success';
+  const canCreateLocal = workspaceName.trim().length > 0;
 
   return (
     <div
@@ -118,7 +120,7 @@ export default function WorkspacePortal() {
               INTELLIGENCE . COORDINATION . IMPACT
             </p>
             <p className="text-xs text-zinc-500 mt-2 max-w-xs leading-normal">
-              Connect your PostgreSQL database to bootstrap your workspace.
+              Name your workspace to start locally. A PostgreSQL database is optional — it only enables semantic memory / RAG.
             </p>
           </div>
         </div>
@@ -215,9 +217,8 @@ export default function WorkspacePortal() {
           )}
         </form>
 
-        {/* ── Step 2: Name + Icon (visible only after successful test) ── */}
-        {testStatus === 'success' && (
-          <div className="w-full space-y-4 text-xs border-t border-brand-border/50 pt-4">
+        {/* ── Step 2: Name + Icon (DB test optional — local workspaces need no DB) ── */}
+        <div className="w-full space-y-4 text-xs border-t border-brand-border/50 pt-4">
 
             {/* Workspace name */}
             <div className="space-y-1.5 text-left">
@@ -257,13 +258,19 @@ export default function WorkspacePortal() {
               </div>
             </div>
 
-            {/* Create button */}
+            {workspaceError && (
+              <div role="alert" className="w-full rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-[12px] text-rose-200">
+                {String(workspaceError)}
+              </div>
+            )}
+
+            {/* Create buttons: DB-backed (tested) or local (no DB, RAG degraded) */}
             <button
               type="button"
-              onClick={handleCreate}
-              disabled={!canCreate || isLaunching || isCreatingWorkspace}
+              onClick={() => handleCreate(true)}
+              disabled={!canCreateDb || isLaunching || isCreatingWorkspace}
               className={`w-full py-2.5 min-h-[44px] rounded-lg text-sm font-semibold flex items-center justify-center gap-1.5 transition select-none tracking-tight leading-none active:scale-[0.99] ${
-                canCreate && !isLaunching && !isCreatingWorkspace
+                canCreateDb && !isLaunching && !isCreatingWorkspace
                   ? 'bg-indigo-500 text-white hover:bg-indigo-600 shadow-[0_4px_12px_rgba(99,102,241,0.3)]'
                   : 'bg-brand-sidebar text-zinc-600 border border-brand-border-muted/45 cursor-not-allowed'
               }`}
@@ -276,12 +283,24 @@ export default function WorkspacePortal() {
               ) : (
                 <>
                   <Play size={13} />
-                  <span>Launch Workspace</span>
+                  <span>Launch Workspace with Database</span>
                 </>
               )}
             </button>
-          </div>
-        )}
+            <button
+              type="button"
+              onClick={() => handleCreate(false)}
+              disabled={!canCreateLocal || isLaunching || isCreatingWorkspace}
+              className={`w-full py-2.5 min-h-[44px] rounded-lg text-sm font-semibold flex items-center justify-center gap-1.5 transition select-none tracking-tight leading-none active:scale-[0.99] ${
+                canCreateLocal && !isLaunching && !isCreatingWorkspace
+                  ? 'bg-zinc-800 text-zinc-100 hover:bg-zinc-700 border border-zinc-700'
+                  : 'bg-brand-sidebar text-zinc-600 border border-brand-border-muted/45 cursor-not-allowed'
+              }`}
+            >
+              <Play size={13} />
+              <span>Create Local Workspace (no database)</span>
+            </button>
+        </div>
 
         {/* ── Existing workspaces ── */}
         {workspaces.length > 0 && (

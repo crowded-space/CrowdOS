@@ -1,8 +1,9 @@
 import { sql } from "drizzle-orm";
 import type { SQL } from "drizzle-orm";
 
-import { getDb } from "../config/database.js";
+import { getDb, isDatabaseConfigured } from "../config/database.js";
 import { messages } from "../../db/schema.js";
+import { localAllocateSequence } from "../../messages/message-local-store.js";
 
 /** Anything that can run raw SQL: the pool-backed db or a transaction client. */
 export interface SequenceSqlClient {
@@ -20,6 +21,8 @@ export interface SequenceSqlClient {
  * burned sequences.
  */
 export async function allocateSequence(channelId: string, count: number = 1, client?: SequenceSqlClient): Promise<number> {
+  // C3 local-first: file counter when no DATABASE_URL (bump-first, gaps OK, never dups).
+  if (!client && !isDatabaseConfigured()) return localAllocateSequence(`ch:${channelId}`, count);
   const db = client ?? getDb();
   const rows = (await db.execute(sql`
     insert into "channel_sequences" ("channel_id", "last_seq")

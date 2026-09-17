@@ -16,9 +16,9 @@ import { createSocketRateLimiter } from "./rate-limiter.js";
 import { runtimeGate } from "../../runtime/runtime-gate.js";
 import { composerModeToRuntime } from "../../runtime/types.js";
 import { IndexBuilder } from "../core/index-builder.js";
-import { getDb } from "../config/database.js";
+import { getDb, isDatabaseConfigured } from "../config/database.js";
 import { startHeartbeatSystem } from "../core/agent-heartbeat.js";
-import { agents, channels, categories, workspaces, runtimeOverrides, durableEvents } from "../../db/schema.js";
+import { agents, channels, categories, workspaces, runtimeOverrides } from "../../db/schema.js";
 import { desc, gt, and, isNull, lt, sql } from "drizzle-orm";
 import type {
   SocketClientToServerEvents,
@@ -34,6 +34,16 @@ const mentionParser = new MentionParser();
 const agentRegistry = new AgentRegistry();
 // Agent execution is routed through runtimeGate
 export let globalBroker: EventBroker | null = null;
+
+/**
+ * CrowdOS §8 + §14: Librarian/Owl is never the default conversational agent.
+ * It is heartbeat-oriented (10-min reindex) and only answers explicit mentions.
+ */
+function isLibrarianAgent(agent: { id: string; name: string }): boolean {
+  if (agent.id === "agent-librarian") return true;
+  const n = agent.name?.toLowerCase();
+  return n === "owl" || n === "librarian";
+}
 
 /**
  * CrowdOS §10: multi-mention executes serially — B sees A's output via the
@@ -137,6 +147,40 @@ async function triggerSystemWarning(broker: EventBroker, channelId: string, cont
 async function emitRuntimeSnapshot(target: any): Promise<void> {
   const t0 = performance.now();
   try {
+    // C3 local-first: registry + file snapshot when no DATABASE_URL.
+    if (!isDatabaseConfigured()) {
+      const { listWorkspaceRecords } = await import("../../workspace/workspace-gate.js");
+      const { localListAgents } = await import("../../agents/agent-local-store.js");
+      const records = await listWorkspaceRecords().catch(() => []);
+      const roster = await localListAgents({}).catch(() => []);
+      const memUsedMb = Math.round(process.memoryUsage().heapUsed / 1024 / 1024);
+      target.emit("runtime:snapshot", {
+        workspaces: records.map((w: any) => ({
+          id: w.id, name: w.name, ownerId: "system", status: "ACTIVE",
+          rootPath: w.rootPath, permissions: {}, constraints: {},
+          metadata: {}, createdAt: w.createdAt, updatedAt: w.updatedAt,
+        })),
+        agents: roster.map((ag: any) => ({
+          id: ag.id, name: ag.name, title: ag.title, species: ag.species || "AI Assistant",
+          avatar: ag.avatar || "🤖", authorityLevel: ag.authorityLevel,
+          status: ag.status || "idle", instructionModuleId: ag.instructionModuleId,
+          modelModuleId: ag.modelModuleId, toolkitModuleId: ag.toolkitModuleId,
+          isOmniscient: ag.isOmniscient || false,
+          createdAt: ag.createdAt, updatedAt: ag.updatedAt,
+        })),
+        swarms: [],
+        escalations: [],
+        sandboxes: records.map((w: any) => ({
+          sandboxId: `sb-${w.id}`, workspaceId: w.id, status: "idle" as const,
+          activeProcesses: [], memoryUsedMb: memUsedMb, cpuUsagePercent: 0,
+          lastUpdated: new Date().toISOString(),
+        })),
+        overrides: [],
+        runtimeHealth: { status: "healthy" as const, timestamp: new Date().toISOString() },
+      });
+      try { logMetric({ stage: 'snapshot.emit', durationMs: Math.round(performance.now() - t0) }); } catch {}
+      return;
+    }
     const db = getDb();
     // Column projection: snapshot maps a fixed field set — never SELECT * the
     // full rows (agents/workspaces carry wide jsonb + secret-adjacent columns).
@@ -273,10 +317,6 @@ export function registerSocketServer(httpServer: HttpServer, broker: EventBroker
   const messageLimiter = createSocketRateLimiter();
   _socketsInternals.limiter = messageLimiter;
 
-  // Catch-up replay throttle: at most one replay per socket per second —
-  // channel:join is client-driven and otherwise replayable without bound.
-  const lastReplayAt = new Map<string, number>();
-
   // SEC-2 handshake trust boundary: identity is derived server-side from the
   // credential in socket.handshake.auth (or Authorization/x-api-key header).
   // Rejection here means the socket never reaches any connection handler.
@@ -297,10 +337,8 @@ export function registerSocketServer(httpServer: HttpServer, broker: EventBroker
   });
 
   // Room-scoped broadcast (P0-6): never io.emit globally for channel/workspace events.
-  // Durable dual-write (HM3): non-ephemeral events are persisted to durable_events
-  // (fire-and-forget — persistence failure must never block or break live delivery).
-  const EPHEMERAL_EVENTS = new Set(["message:stream"]);
-  const DURABLE_EVENTS_ENABLED = process.env.DURABLE_EVENTS !== "false";
+  // D6: no durable_events dual-write. The per-message commit + sequence counter
+  // (§29) is the event stream; catch-up is message refetch, not event replay.
 
   broker.onAny((event) => {
     const channelId = (event as any).channelId || (event.payload as any)?.channelId;
@@ -314,18 +352,6 @@ export function registerSocketServer(httpServer: HttpServer, broker: EventBroker
       type: event.type,
       payload: event.payload,
     };
-
-    if (DURABLE_EVENTS_ENABLED && !EPHEMERAL_EVENTS.has(event.type)) {
-      void getDb().insert(durableEvents).values({
-        eventId: event.eventId,
-        type: event.type,
-        channelId: channelId ?? null,
-        agentId: (event.payload as any)?.agentId ?? null,
-        payload: event.payload as Record<string, unknown>,
-      }).catch((err) => {
-        console.error("[EventBroker] Failed to persist durable event:", err?.message || err);
-      });
-    }
 
     if (channelId) {
       io.to(`channel:${channelId}`).emit(event.type, envelope as never);
@@ -385,21 +411,6 @@ export function registerSocketServer(httpServer: HttpServer, broker: EventBroker
     snapshotInterval.unref?.();
   }
 
-  // Durable event retention: drop entries older than 24h, checked hourly.
-  // Bounded batch (ctid, 1000/tick) — never one unbounded DELETE; backlog
-  // drains over subsequent ticks.
-  if (!isBullMqMode) {
-    const retentionInterval = setInterval(async () => {
-      try {
-        const cutoff = new Date(Date.now() - 24 * 60 * 60 * 1000);
-        await getDb().execute(sql`DELETE FROM durable_events WHERE ctid IN (SELECT ctid FROM durable_events WHERE created_at < ${cutoff} LIMIT 1000)`);
-      } catch (err: any) {
-        console.error("[EventBroker] Durable event retention cleanup failed:", err?.message || err);
-      }
-    }, 60 * 60 * 1000);
-    retentionInterval.unref?.();
-  }
-
   // Agent heartbeat toucher + zombie orphan sweeper (P0-4)
   // QUE-2: local timers skipped when bullmq repeatables cover them.
   if (!isBullMqMode) {
@@ -432,6 +443,9 @@ export function registerSocketServer(httpServer: HttpServer, broker: EventBroker
     };
     const canJoinWorkspaceRoom = async (wid: string): Promise<boolean> => {
       try {
+        // C3 local-first: registry first (works without DATABASE_URL), DB second.
+        const { getWorkspaceRecord } = await import("../../workspace/workspace-gate.js");
+        if (await getWorkspaceRecord(wid).catch(() => null)) return true;
         const ws = await getDb().query.workspaces.findFirst({ where: eq(workspaces.id, wid) });
         return Boolean(ws);
       } catch {
@@ -466,39 +480,8 @@ export function registerSocketServer(httpServer: HttpServer, broker: EventBroker
         return;
       }
       socket.join(`channel:${cid}`);
-
-      // Catch-up replay (HM3): deliver recent durable events the client may have
-      // missed while disconnected. Scoped to this socket only; ephemeral streams
-      // were never persisted so they are naturally excluded. Bounded: default 20,
-      // client-overridable via ?limit (clamped to 20), at most once per second.
-      if (DURABLE_EVENTS_ENABLED) {
-        const now = Date.now();
-        if (now - (lastReplayAt.get(socket.id) ?? 0) < 1000) return;
-        lastReplayAt.set(socket.id, now);
-        const rawLimit = typeof data === "object" && data !== null ? (data as any).limit : undefined;
-        const parsed = typeof rawLimit === "number" && Number.isFinite(rawLimit) ? Math.floor(rawLimit) : 20;
-        const replayLimit = Math.min(20, Math.max(1, parsed));
-        try {
-          const recent = await getDb().query.durableEvents.findMany({
-            where: and(eq(durableEvents.channelId, cid)),
-            orderBy: [desc(durableEvents.seq)],
-            limit: replayLimit,
-          });
-          for (const row of recent.reverse()) {
-            // EVT-0: replayed rows carry their persisted seq + correlation fields
-            const envelope: EventEnvelope = {
-              eventId: row.eventId,
-              seq: row.seq,
-              timestamp: row.createdAt,
-              type: row.type as BrokerEventType,
-              payload: row.payload as never,
-            };
-            socket.emit(row.type as any, envelope as any);
-          }
-        } catch (err: any) {
-          console.error("[Socket] Failed to replay durable events on channel:join:", err?.message || err);
-        }
-      }
+      // D6: no server replay. Catch-up is message refetch
+      // (GET /api/channels/:id/messages on setActiveChannel).
     });
     socket.on("workspace:join" as any, async (data: any) => {
       const wid = typeof data === "string" ? data : data?.workspaceId;
@@ -510,6 +493,19 @@ export function registerSocketServer(httpServer: HttpServer, broker: EventBroker
       }
       socket.join(`workspace:${wid}`);
       socket.data.workspaceId = wid;
+    });
+    // D1 switch teardown: client leaves rooms it no longer observes so
+    // cross-workspace events stop arriving after enter/switch.
+    socket.on("channel:leave" as any, (data: any) => {
+      const cid = typeof data === "string" ? data : data?.channelId;
+      if (!cid || typeof cid !== "string") return;
+      try { socket.leave(`channel:${cid}`); } catch {}
+    });
+    socket.on("workspace:leave" as any, (data: any) => {
+      const wid = typeof data === "string" ? data : data?.workspaceId;
+      if (!wid || typeof wid !== "string") return;
+      try { socket.leave(`workspace:${wid}`); } catch {}
+      if (socket.data.workspaceId === wid) socket.data.workspaceId = undefined;
     });
 
     // Immediately emit snapshot on connection (scoped to socket only)
@@ -544,7 +540,6 @@ export function registerSocketServer(httpServer: HttpServer, broker: EventBroker
         return;
       }
 
-      const db = getDb();
       const { channelId, content } = payload as any;
       const rawMode = (payload as any).mode ?? (payload as any).runtimeMode;
       const explicitRuntime = composerModeToRuntime(rawMode);
@@ -632,6 +627,32 @@ export function registerSocketServer(httpServer: HttpServer, broker: EventBroker
 
         const isQueueModeBullMq = queueGate.mode() === "bullmq" && process.env.NODE_ENV !== "test";
 
+        // Default-agent resolution (§8 hierarchy, Librarian never default).
+        // C3 local-first: gates branch to files when no DATABASE_URL.
+        const resolveDefaultTargets = async (): Promise<typeof allAgents> => {
+          const targetAgents: typeof allAgents = [];
+          const channel = await channelGate.get(channelId).catch(() => null);
+          if (channel?.categoryId) {
+            const category = await channelGate.getCategory(channel.categoryId).catch(() => null);
+            if (category?.ownedByAgentId) {
+              const ownerAgent = allAgents.find(a => a.id === category.ownedByAgentId);
+              if (ownerAgent && !isLibrarianAgent(ownerAgent) && ownerAgent.status !== "offline" && ownerAgent.status !== "paused") {
+                targetAgents.push(ownerAgent);
+              }
+            }
+          }
+          if (targetAgents.length === 0) {
+            const l0Agents = allAgents.filter(a => !isLibrarianAgent(a) && a.authorityLevel === 0 && a.status !== "offline" && a.status !== "paused");
+            if (l0Agents.length > 0) targetAgents.push(...l0Agents);
+          }
+          if (targetAgents.length === 0) {
+            const defaultAgent = allAgents.find(a => !isLibrarianAgent(a) && a.name === "default-assistant" && a.status !== "offline" && a.status !== "paused")
+              || allAgents.find(a => !isLibrarianAgent(a) && (a.status === "idle" || a.status === "working"));
+            if (defaultAgent) targetAgents.push(defaultAgent);
+          }
+          return targetAgents;
+        };
+
         if (isQueueModeBullMq) {
           const agentsToEnqueue: typeof allAgents = [];
           if (resolvedMentions.length > 0) {
@@ -649,31 +670,7 @@ export function registerSocketServer(httpServer: HttpServer, broker: EventBroker
               }
             }
           } else {
-            const channel = await db.query.channels.findFirst({
-              where: eq(channels.id, channelId),
-            });
-            let targetAgents: typeof allAgents = [];
-            if (channel?.categoryId) {
-              const category = await db.query.categories.findFirst({
-                where: eq(categories.id, channel.categoryId),
-              });
-              if (category?.ownedByAgentId) {
-                const ownerAgent = allAgents.find(a => a.id === category.ownedByAgentId);
-                if (ownerAgent && ownerAgent.status !== "offline" && ownerAgent.status !== "paused") {
-                  targetAgents.push(ownerAgent);
-                }
-              }
-            }
-            if (targetAgents.length === 0) {
-              const l0Agents = allAgents.filter(a => a.authorityLevel === 0 && a.status !== "offline" && a.status !== "paused");
-              if (l0Agents.length > 0) targetAgents = l0Agents;
-            }
-            if (targetAgents.length === 0) {
-              const defaultAgent = allAgents.find(a => a.name === "default-assistant" && a.status !== "offline" && a.status !== "paused")
-                || allAgents.find(a => a.status === "idle" || a.status === "working");
-              if (defaultAgent) targetAgents = [defaultAgent];
-            }
-            for (const agent of targetAgents) agentsToEnqueue.push(agent);
+            for (const agent of await resolveDefaultTargets()) agentsToEnqueue.push(agent);
           }
 
           // Pre-filter paused/offline, then serial enqueue per §10.
@@ -744,44 +741,12 @@ export function registerSocketServer(httpServer: HttpServer, broker: EventBroker
               }
             }
           } else {
-            const channel = await db.query.channels.findFirst({
-              where: eq(channels.id, channelId),
-            });
-
-            let targetAgents: typeof allAgents = [];
-
-            if (channel?.categoryId) {
-              const category = await db.query.categories.findFirst({
-                where: eq(categories.id, channel.categoryId),
-              });
-              if (category?.ownedByAgentId) {
-                const ownerAgent = allAgents.find(a => a.id === category.ownedByAgentId);
-                if (ownerAgent && ownerAgent.status !== "offline" && ownerAgent.status !== "paused") {
-                  targetAgents.push(ownerAgent);
-                }
-              }
-            }
-
-            if (targetAgents.length === 0) {
-              const l0Agents = allAgents.filter(a => a.authorityLevel === 0 && a.status !== "offline" && a.status !== "paused");
-              if (l0Agents.length > 0) {
-                targetAgents = l0Agents;
-              }
-            }
-
-            if (targetAgents.length === 0) {
-              const defaultAgent = allAgents.find(a => a.name === "default-assistant" && a.status !== "offline" && a.status !== "paused")
-                || allAgents.find(a => a.status === "idle" || a.status === "working");
-              if (defaultAgent) {
-                targetAgents = [defaultAgent];
-              }
-            }
-
-            for (const agent of targetAgents) {
+            const autoChannel = await channelGate.get(channelId).catch(() => null);
+            for (const agent of await resolveDefaultTargets()) {
               batch.push(() =>
                 dispatchAgent(
                   agent,
-                  `[Socket] Auto-triggering agent @${agent.name} for unmentioned message in #${channel?.name || channelId}...`,
+                  `[Socket] Auto-triggering agent @${agent.name} for unmentioned message in #${autoChannel?.name || channelId}...`,
                 ),
               );
             }
@@ -1043,7 +1008,6 @@ export function registerSocketServer(httpServer: HttpServer, broker: EventBroker
         if (room !== socket.id) socket.leave(room);
       }
       messageLimiter.release(socket.id);
-      lastReplayAt.delete(socket.id);
       console.log(`[Socket] disconnected ${identity.userId} (${socket.id}); rooms released, in-flight runs left untouched`);
     });
   });
