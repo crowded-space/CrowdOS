@@ -17,7 +17,8 @@ export class ChannelAwarenessMiddleware implements IContextMiddleware {
 
   async process(packet: MutableContextPacket, ctx: ContextBuildContext): Promise<void> {
     const { agent, channelId } = ctx;
-    const isLocked = agentLockStore.isLockedIn(agent.id, channelId);
+    // §12 durability: file-backed, workspace-scoped lock state (awaited).
+    const isLocked = await agentLockStore.isLockedIn(agent.id, channelId);
 
     let channelName = channelId;
     let categoryName: string | null = null;

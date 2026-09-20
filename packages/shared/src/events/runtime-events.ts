@@ -16,23 +16,6 @@ export interface AgentThinkingEventPayload {
   channelId: string;
 }
 
-export interface AgentSpawnedEventPayload {
-  agentId: string;
-  name: string;
-  species: string;
-  level: number;
-  status: string;
-  channelId: string;
-  workspaceId?: string | null;
-  timestamp: string;
-  batchNum?: number;
-  pairs?: string[];
-}
-
-export interface AgentDespawnedEventPayload {
-  agentId: string;
-}
-
 export interface AgentPausedEventPayload {
   agentId: string;
   reason: string;
@@ -178,8 +161,6 @@ export interface BrokerEventMap {
   "message:new": ChannelMessagePayload & { metadata?: Record<string, unknown>; toolCalls?: unknown[] };
   "message:stream": MessageStreamEventPayload;
   "agent:thinking": AgentThinkingEventPayload;
-  "agent:spawned": AgentSpawnedEventPayload;
-  "agent:despawned": AgentDespawnedEventPayload;
   "agent:paused": AgentPausedEventPayload;
   "agent:resumed": { agentId: string };
   "strike:initiated": StrikeInitiatedEventPayload;
@@ -242,8 +223,6 @@ export interface SocketClientToServerEvents {
 }
 
 export const RuntimeEvents = {
-  AGENT_SPAWNED: "agent:spawned",
-  AGENT_DESPAWNED: "agent:despawned",
   AGENT_PAUSED: "agent:paused",
   AGENT_RESUMED: "agent:resumed",
   AGENT_LIFECYCLE: "agent:lifecycle",

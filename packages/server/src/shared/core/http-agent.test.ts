@@ -6,6 +6,7 @@ import {
   DEFAULT_KEEP_ALIVE_TIMEOUT_MS,
   DEFAULT_PIPELINING,
   _setUndiciDispatcherForTesting,
+  _resetUndiciDispatcherForTesting,
   getProviderDispatcher,
   getProviderKeepAliveConfig,
   getProviderKeepAliveStatus,
@@ -20,7 +21,7 @@ const ENV_KEYS = [
 
 afterEach(() => {
   for (const key of ENV_KEYS) delete process.env[key];
-  _setUndiciDispatcherForTesting(null);
+  _resetUndiciDispatcherForTesting();
 });
 
 describe("PERF-9 · provider keep-alive config", () => {
@@ -55,8 +56,8 @@ describe("PERF-9 · provider keep-alive config", () => {
 });
 
 describe("PERF-9 · dispatcher resolution", () => {
-  it("returns undefined gracefully when undici is not resolvable (no throw)", async () => {
-    _setUndiciDispatcherForTesting(null);
+  it("returns undefined gracefully when undici is forced unavailable (no throw)", async () => {
+    _setUndiciDispatcherForTesting(undefined);
     await expect(getProviderDispatcher()).resolves.toBeUndefined();
   });
 
@@ -67,7 +68,7 @@ describe("PERF-9 · dispatcher resolution", () => {
   });
 
   it("status honestly reports fallback while undici is unavailable", async () => {
-    _setUndiciDispatcherForTesting(null);
+    _setUndiciDispatcherForTesting(undefined);
     const status = await getProviderKeepAliveStatus();
     expect(status.undiciDispatcherActive).toBe(false);
     expect(status.globalFetchPooledByDefault).toBe(true);
@@ -78,5 +79,14 @@ describe("PERF-9 · dispatcher resolution", () => {
     _setUndiciDispatcherForTesting({});
     const status = await getProviderKeepAliveStatus();
     expect(status.undiciDispatcherActive).toBe(true);
+  });
+
+  it("lazy probe resolves the real undici Agent in this workspace", async () => {
+    // No override: this workspace has undici hoisted (electron transitively),
+    // so the probe must find a constructor and return an Agent instance.
+    _resetUndiciDispatcherForTesting();
+    const dispatcher = await getProviderDispatcher();
+    expect(dispatcher).toBeDefined();
+    expect(typeof dispatcher).toBe("object");
   });
 });

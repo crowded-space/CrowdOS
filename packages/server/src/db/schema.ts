@@ -212,6 +212,9 @@ export const tools = pgTable("tools", {
 
 export const agents = pgTable("agents", {
   id: text("id").primaryKey(),
+  // CrowdOS §1/30 isolation: owning workspace; null = legacy global row
+  // (visible everywhere until backfilled). New rows always carry workspaceId.
+  workspaceId: text("workspace_id").references(() => workspaces.id, { onDelete: "cascade" }),
   name: text("name").notNull(),
   title: text("title").notNull(),
   species: text("species"),
@@ -235,7 +238,12 @@ export const agents = pgTable("agents", {
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 }, (table) => ({
-  agentNameIndex: uniqueIndex("agents_name_idx").on(table.name),
+  // Isolation: per-workspace name uniqueness (same name = separate instance
+  // per workspace, CrowdOS §1). Legacy global unique kept as non-unique index
+  // for lookup; PG enforces the composite. Null workspaceId rows (legacy)
+  // are distinct per Postgres NULL semantics — migration backfills default.
+  agentWorkspaceIdx: index("agents_workspace_idx").on(table.workspaceId),
+  agentWorkspaceNameIdx: uniqueIndex("agents_workspace_name_idx").on(table.workspaceId, table.name),
 }));
 
 export const agentTools = pgTable("agent_tools", {
@@ -484,35 +492,8 @@ export const workspaces = pgTable("workspaces", {
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
-export const workspaceNodes = pgTable("workspace_nodes", {
-  id: text("id").primaryKey(),
-  workspaceId: text("workspace_id").notNull().references(() => workspaces.id, { onDelete: "cascade" }),
-  path: text("path").notNull(),
-  name: text("name").notNull(),
-  type: workspaceNodeTypeEnum("type").notNull(),
-  mimeType: text("mime_type"),
-  size: bigint("size", { mode: "number" }).notNull().default(0),
-  checksum: text("checksum"),
-  createdBy: text("created_by").notNull(),
-  updatedBy: text("updated_by").notNull(),
-  metadata: jsonb("metadata").$type<Record<string, unknown>>().notNull().default(jsonbObjectDefault),
-  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
-}, (table) => ({
-  pathIndex: uniqueIndex("workspace_nodes_ws_path_idx").on(table.workspaceId, table.path),
-}));
-
-export const workspaceEvents = pgTable("workspace_events", {
-  id: text("id").primaryKey(),
-  workspaceId: text("workspace_id").notNull().references(() => workspaces.id, { onDelete: "cascade" }),
-  type: text("type").notNull(),
-  agentId: text("agent_id"),
-  path: text("path"),
-  payload: jsonb("payload").$type<Record<string, unknown>>().notNull().default(jsonbObjectDefault),
-  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-}, (table) => ({
-  workspaceIdx: index("workspace_events_workspace_idx").on(table.workspaceId),
-}));
+// REMOVED (0019): workspace_nodes + workspace_events dropped — CrowdOS §16
+// NO VFS: LocalVFS is truth, no DB mirror. See 0019_drop_workspace_vfs.sql.
 
 export const workspaceAgents = pgTable("workspace_agents", {
   id: text("id").primaryKey(),
@@ -822,24 +803,8 @@ export const memoryUpdateLogRelations = relations(memoryUpdateLog, ({ one }) => 
 // â”€â”€â”€ Workspace Sandbox Relations â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 export const workspacesRelations = relations(workspaces, ({ many }) => ({
-  nodes: many(workspaceNodes),
-  events: many(workspaceEvents),
   agentSessions: many(workspaceAgents),
   artifacts: many(artifacts),
-}));
-
-export const workspaceNodesRelations = relations(workspaceNodes, ({ one }) => ({
-  workspace: one(workspaces, {
-    fields: [workspaceNodes.workspaceId],
-    references: [workspaces.id],
-  }),
-}));
-
-export const workspaceEventsRelations = relations(workspaceEvents, ({ one }) => ({
-  workspace: one(workspaces, {
-    fields: [workspaceEvents.workspaceId],
-    references: [workspaces.id],
-  }),
 }));
 
 export const workspaceAgentsRelations = relations(workspaceAgents, ({ one }) => ({
@@ -1051,12 +1016,26 @@ export const threadSequences = pgTable("thread_sequences", {
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
+// §30 isolation: settings are scoped to a (channel, workspace) PAIR, not to a
+// bare channel id. Two workspaces that each own a channel called "general"
+// (separate rows, distinct ids in the normal case, but historically shared ids
+// across workspace DBs) must keep independent pins and safety policy.
+// The composite PK is what enforces it; migration 0020 backfills existing rows
+// from the owning channel's workspace_id, falling back to 'default'.
 export const channelSettings = pgTable("channel_settings", {
-  channelId: text("channel_id").primaryKey().references(() => channels.id, { onDelete: "cascade" }),
+  channelId: text("channel_id").notNull().references(() => channels.id, { onDelete: "cascade" }),
+  workspaceId: text("workspace_id").notNull().default("default").references(() => workspaces.id, { onDelete: "cascade" }),
   fsPolicy: jsonb("fs_policy").notNull().default(sql`'{"requireApprovalFor":["delete","execute"],"autoAllowPaths":[],"blockPaths":[]}'::jsonb`),
   safetySettings: jsonb("safety_settings").notNull().default(sql`'{"defaultApprovalScope":"session","allowInheritCategoryMount":true}'::jsonb`),
+  // §6-8 per-channel composer state: pinned runtime, pinned/active agent, channel default agent.
+  pinnedRuntime: text("pinned_runtime"),
+  activeAgentId: text("active_agent_id"),
+  defaultAgentId: text("default_agent_id"),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
-});
+}, (table) => ({
+  pk: primaryKey({ columns: [table.channelId, table.workspaceId] }),
+  workspaceIdx: index("channel_settings_workspace_idx").on(table.workspaceId),
+}));
 
 export const workspaceSafetySettings = pgTable("workspace_safety_settings", {
   workspaceId: text("workspace_id").primaryKey().references(() => workspaces.id, { onDelete: "cascade" }),

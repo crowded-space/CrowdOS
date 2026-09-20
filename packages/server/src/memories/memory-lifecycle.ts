@@ -1,10 +1,55 @@
 import { randomUUID } from "node:crypto";
 import { and, count as sqlCount, eq, inArray, isNotNull, lte } from "drizzle-orm";
-import { getDb, runWithDb } from "../shared/config/database.js";
+import { getDb, runWithDb, dbScopeKey, isDatabaseConfigured, dbForWorkspace } from "../shared/config/database.js";
 import { forEachWorkspaceDb } from "../workspace/workspace-gate.js";
 import { agentMemoryNotes, memoryUpdateLog } from "../db/schema.js";
 import { numEnv } from "./memory-env.js";
 import { memorySessionDiscards } from "./memory-session-discards.js";
+
+/**
+ * Record-only workspace context (CrowdOS §17): callers that hold a workspace
+ * id thread it through the trailing `opts` parameter. When present, the
+ * memory handle resolves from the workspace record (`dbForWorkspace`) and a
+ * NO_DATABASE/unreachable workspace degrades to the local mirror. When
+ * absent, the legacy env-gated behaviour is preserved (a set env URL may
+ * still back context-free callers; the supported config leaves it unset).
+ */
+export interface MemoryWorkspaceOpts {
+  workspaceId?: string | null;
+}
+
+/**
+ * Resolve the effective memory DB handle. Returns null when the operation
+ * must degrade to the local mirror (no workspace DB, no configured env DB,
+ * or a handle-resolution failure).
+ *
+ * Precedence: explicit workspace id → ALS-bound tenant handle (the sweep
+ * fan-out binds one per workspace via runWithDb) → env-gated legacy handle.
+ * @internal shared across the memories domain modules.
+ */
+export async function resolveMemoryDb(opts?: MemoryWorkspaceOpts): Promise<ReturnType<typeof getDb> | null> {
+  if (opts?.workspaceId) {
+    try {
+      return await dbForWorkspace(opts.workspaceId);
+    } catch {
+      return null;
+    }
+  }
+  // ALS-bound handle (workspace sweep scope) always wins over the env gate.
+  if (dbScopeKey() !== "global") {
+    try {
+      return getDb();
+    } catch {
+      return null;
+    }
+  }
+  if (!isDatabaseConfigured()) return null;
+  try {
+    return getDb();
+  } catch {
+    return null;
+  }
+}
 
 export type MemoryUpdateAction =
   | "create"
@@ -106,8 +151,10 @@ function activeNotesWhere(agentId: string) {
 export async function enforceNoteCap(
   agentId: string,
   cap: number = getNoteCap(),
+  opts?: MemoryWorkspaceOpts,
 ): Promise<{ archived: number }> {
-  const db = getDb();
+  const db = await resolveMemoryDb(opts);
+  if (!db) return { archived: 0 };
   const [countRow] = await db
     .select({ value: sqlCount() })
     .from(agentMemoryNotes)
@@ -208,8 +255,10 @@ export async function softSuppressNote(
   noteId: string,
   reason: string,
   suppressUntil: Date,
+  opts?: MemoryWorkspaceOpts,
 ): Promise<boolean> {
-  const db = getDb();
+  const db = await resolveMemoryDb(opts);
+  if (!db) return false;
   const existing = await db.query.agentMemoryNotes.findFirst({
     where: and(eq(agentMemoryNotes.id, noteId), eq(agentMemoryNotes.agentId, resolvedAgentId)),
   });
@@ -243,11 +292,12 @@ export async function discardNoteFromContext(
   channelId: string,
   noteId: string,
   reason: string,
+  opts?: MemoryWorkspaceOpts,
 ): Promise<{ ok: true; inVault: boolean }> {
   const ttlMs = numEnv("MEM_DISCARD_TTL_MS", 30 * 60 * 1000);
   let inVault = false;
   try {
-    inVault = await softSuppressNote(resolvedAgentId, noteId, `discard_memory_from_context: ${reason}`, new Date(Date.now() + ttlMs));
+    inVault = await softSuppressNote(resolvedAgentId, noteId, `discard_memory_from_context: ${reason}`, new Date(Date.now() + ttlMs), opts);
   } catch (err) {
     console.error("[MemoryLifecycle] Soft-suppress on discard failed:", (err as any)?.message || err);
   }

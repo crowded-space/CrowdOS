@@ -29,6 +29,9 @@ const ICONS = [
 ];
 
 export default function WorkspacePortal() {
+  // The store is consumed untyped here (see the `as any`), so the destructured
+  // members would otherwise be implicit `any`. `workspaces` is annotated at its
+  // use site below rather than widening the whole destructure.
   const { createWorkspace, workspaces, enterWorkspace, fetchWorkspaces, isCreatingWorkspace, workspaceError } = useCrowdOSStore() as any;
   const [isLaunching, setIsLaunching] = useState(false);
 
@@ -309,7 +312,7 @@ export default function WorkspacePortal() {
               Or Choose Active Local Session ({workspaces.length})
             </h3>
             <div className="space-y-1.5 max-h-32 overflow-y-auto scrollbar-thin pr-1">
-              {workspaces.map(ws => (
+              {(workspaces as Array<{ id: string; name: string; icon: string }>).map((ws) => (
                 <button
                   key={ws.id}
                   onClick={() => enterWorkspace(ws.id)}

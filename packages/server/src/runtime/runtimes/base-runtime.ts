@@ -22,6 +22,7 @@ export abstract class BaseRuntime implements IRuntime {
   protected writeReflectionNoteAsync(note: {
     agentId: string
     channelId: string
+    workspaceId?: string | null
     importanceScore?: number
     hook: string
     brief: string
@@ -43,7 +44,7 @@ export abstract class BaseRuntime implements IRuntime {
           observed: note.observed,
           interpreted: note.interpreted,
           futureRelevance: note.futureRelevance,
-        })
+        }, { workspaceId: note.workspaceId })
       } catch (err) {
         console.error(`[${this.constructor.name}] Failed to auto-write monologue reflection note:`, err)
       }

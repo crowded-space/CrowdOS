@@ -28,6 +28,11 @@ describe('CodingRuntime with Pi-Core Integration', () => {
   });
 
   it('should execute coding tasks, parse tool calls, and invoke guarded file tools', async () => {
+    // Needs a seeded dev DB (record or env URL); local-first boots skip.
+    if (!process.env.DATABASE_URL) {
+      console.warn('Skipping CodingRuntime DB integration test: no DATABASE_URL.');
+      return;
+    }
     const db = getDb();
     const existingChannel = await db.query.channels.findFirst();
     const existingAgent = await db.query.agents.findFirst();

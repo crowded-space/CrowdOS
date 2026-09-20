@@ -34,29 +34,40 @@ const grantsQuerySchema = z.object({
 
 export async function safetyRoutes(app: FastifyInstance) {
   // Channel safety
+  // §30: channel_settings is keyed by (channel_id, workspace_id), so every
+  // read and write carries the workspace scope resolved by the tenant hook.
   app.get<{ Params: { id: string } }>("/api/channels/:id/safety", async (request, reply) => {
     const db = getDb();
-    const row = await db.query.channelSettings.findFirst({ where: eq(channelSettings.channelId, request.params.id) });
-    if (!row) return { channelId: request.params.id, fsPolicy: { requireApprovalFor: ["delete","execute"], autoAllowPaths: [], blockPaths: [] }, safetySettings: { defaultApprovalScope: "session", allowInheritCategoryMount: true } };
+    const workspaceId = (request as any).workspaceId ?? "default";
+    const row = await db.query.channelSettings.findFirst({
+      where: and(eq(channelSettings.channelId, request.params.id), eq(channelSettings.workspaceId, workspaceId)),
+    });
+    if (!row) return { channelId: request.params.id, workspaceId, fsPolicy: { requireApprovalFor: ["delete","execute"], autoAllowPaths: [], blockPaths: [] }, safetySettings: { defaultApprovalScope: "session", allowInheritCategoryMount: true } };
     return row;
   });
 
   app.put<{ Params: { id: string }; Body: z.infer<typeof channelSafetySchema> }>("/api/channels/:id/safety", { schema: { body: channelSafetySchema } }, async (request, reply) => {
     const db = getDb();
-    const existing = await db.query.channelSettings.findFirst({ where: eq(channelSettings.channelId, request.params.id) });
-    const payload: any = { channelId: request.params.id, updatedAt: new Date() };
+    const workspaceId = (request as any).workspaceId ?? "default";
+    const scopeWhere = and(
+      eq(channelSettings.channelId, request.params.id),
+      eq(channelSettings.workspaceId, workspaceId),
+    );
+    const existing = await db.query.channelSettings.findFirst({ where: scopeWhere });
+    const payload: any = { channelId: request.params.id, workspaceId, updatedAt: new Date() };
     if (request.body.fsPolicy) payload.fsPolicy = request.body.fsPolicy;
     if (request.body.safetySettings) payload.safetySettings = request.body.safetySettings;
     if (!existing) {
       const [inserted] = await db.insert(channelSettings).values({
         channelId: request.params.id,
+        workspaceId,
         fsPolicy: payload.fsPolicy ?? { requireApprovalFor: ["delete","execute"], autoAllowPaths: [], blockPaths: [] },
         safetySettings: payload.safetySettings ?? { defaultApprovalScope: "session", allowInheritCategoryMount: true },
         updatedAt: new Date(),
       }).returning();
       return inserted;
     }
-    const [updated] = await db.update(channelSettings).set(payload).where(eq(channelSettings.channelId, request.params.id)).returning();
+    const [updated] = await db.update(channelSettings).set(payload).where(scopeWhere).returning();
     return updated;
   });
 

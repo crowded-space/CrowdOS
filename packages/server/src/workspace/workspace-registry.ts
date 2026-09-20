@@ -4,7 +4,26 @@
 
 import { promises as fs } from "node:fs";
 import { dirname, join, resolve } from "node:path";
+import { TtlCache } from "../shared/core/ttl-cache.js";
 import { parseWorkspaceDatabaseUrl } from "./workspace-database.js";
+
+// ponytail: preference lookups ride the hot path (every tier decision) —
+// 60s cache, invalidated on save/remove. Stale preference ≤60s is harmless
+// (worst case one tier flip delay); file stays truth on every mutation.
+const recordCache = new TtlCache<WorkspaceRecord | null>(60_000, 200);
+
+/** Dual-boot storage preference. Absent = "default". */
+export type StoragePreference = "default" | "local";
+
+export type DbSyncState = "paired" | "conflict" | "importing" | "pushing";
+
+/** DB pairing/sync state. Absent = never paired. */
+export interface DbSyncInfo {
+  /** Workspace id as known by the paired DB. */
+  dbWorkspaceId: string | null;
+  state: DbSyncState;
+  updatedAt: string;
+}
 
 export interface WorkspaceRecord {
   id: string;
@@ -13,6 +32,8 @@ export interface WorkspaceRecord {
   databaseUrl: string;
   rootPath: string;
   screenLockPinHash: string | null;
+  storagePreference?: StoragePreference;
+  dbSync?: DbSyncInfo | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -28,6 +49,8 @@ export interface WorkspaceDescriptor {
     database: string;
     port: number | null;
   };
+  storagePreference: StoragePreference;
+  dbSync: DbSyncInfo | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -59,6 +82,7 @@ export function resolveRegistryFilePath(): string {
 
 export function setRegistryFilePathForTests(filePath: string | null): void {
   cachedRegistryPath = filePath ? resolve(filePath) : null;
+  recordCache.clear();
 }
 
 export function sanitizeWorkspaceRecord(record: WorkspaceRecord): WorkspaceDescriptor {
@@ -79,6 +103,8 @@ export function sanitizeWorkspaceRecord(record: WorkspaceRecord): WorkspaceDescr
     icon: record.icon,
     screenLockEnabled: typeof record.screenLockPinHash === "string" && record.screenLockPinHash.length > 0,
     database: dbDesc,
+    storagePreference: record.storagePreference === "local" ? "local" : "default",
+    dbSync: record.dbSync ?? null,
     createdAt: record.createdAt,
     updatedAt: record.updatedAt,
   };
@@ -115,14 +141,34 @@ export async function listWorkspaces(): Promise<WorkspaceDescriptor[]> {
 }
 
 export async function getWorkspaceRecord(id: string): Promise<WorkspaceRecord | null> {
+  const cached = recordCache.get(id);
+  if (cached !== undefined) return cached;
   const records = await readAllRaw();
-  const match = records.find((w) => w.id === id);
-  return match || null;
+  const match = records.find((w) => w.id === id) || null;
+  recordCache.set(id, match);
+  return match;
 }
 
 export async function getWorkspaceDescriptor(id: string): Promise<WorkspaceDescriptor | null> {
   const record = await getWorkspaceRecord(id);
   return record ? sanitizeWorkspaceRecord(record) : null;
+}
+
+/**
+ * Build a dual-boot TierContext for a workspace (registry preference +
+ * record URL, record-cached ≤60s). Unknown workspaces get the global default.
+ */
+export async function tierContextFor(
+  workspaceId?: string | null,
+): Promise<{ workspaceId: string | null; databaseUrl?: string | null; storagePreference?: string | null }> {
+  if (!workspaceId) return { workspaceId: null };
+  const rec = await getWorkspaceRecord(workspaceId).catch(() => null);
+  if (!rec) return { workspaceId };
+  return {
+    workspaceId,
+    databaseUrl: rec.databaseUrl?.trim() || null,
+    storagePreference: rec.storagePreference === "local" ? "local" : "default",
+  };
 }
 
 export async function saveWorkspaceRecord(record: WorkspaceRecord): Promise<WorkspaceDescriptor> {
@@ -135,6 +181,7 @@ export async function saveWorkspaceRecord(record: WorkspaceRecord): Promise<Work
       records.push(record);
     }
     await writeAllRaw(records);
+    recordCache.delete(record.id);
     return sanitizeWorkspaceRecord(record);
   });
 }
@@ -146,6 +193,7 @@ export async function removeWorkspaceRecord(id: string): Promise<boolean> {
     const filtered = records.filter((w) => w.id !== id);
     if (filtered.length === initialLen) return false;
     await writeAllRaw(filtered);
+    recordCache.delete(id);
     return true;
   });
 }

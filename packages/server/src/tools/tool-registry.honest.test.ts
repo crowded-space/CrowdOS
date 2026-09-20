@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach, afterAll } from "vitest";
 import { ToolExecutor } from "./tool-executor.js";
 import { toolRegistry, activeSchedules } from "./tool-registry.js";
-import { EventBroker } from "../event-broker/event-broker-gate.js";
+import { EventBroker, setSharedBroker, resetSharedBrokerForTests } from "../event-broker/event-broker-gate.js";
 import * as databaseMod from "../shared/config/database.js";
 import * as seqMod from "../shared/core/sequence-number.js";
 import * as ulidMod from "../shared/core/ulid.js";
@@ -242,10 +242,15 @@ describe("TOOL-1 · Honest tools — system_scheduler", () => {
     process.env.QUEUE_MODE = "inline";
     vi.restoreAllMocks();
     setupHonestSpies();
+    // The scheduler emit path resolves a shared broker (warn-and-skip when
+    // none is registered). Production registers one via the socket server;
+    // here the test must register its own so emits reach the prototype spy.
+    setSharedBroker(new EventBroker());
   });
 
   afterEach(() => {
     vi.restoreAllMocks();
+    resetSharedBrokerForTests();
     activeSchedules.forEach((rec) => {
       if (rec.timer) clearTimeout(rec.timer);
       if ((rec as unknown as { interval?: NodeJS.Timeout }).interval) clearInterval((rec as unknown as { interval?: NodeJS.Timeout }).interval!);

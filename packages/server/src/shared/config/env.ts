@@ -1,7 +1,55 @@
+import { existsSync, readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { config as loadDotenv } from "dotenv";
 import { z } from "zod";
 
-loadDotenv({ quiet: true });
+// dotenv loads exactly one file: <cwd>/.env. Record which (if any) it was so
+// boot can name its source — the classic trap is editing root .env while the
+// server (CWD=packages/server) reads packages/server/.env, or vice versa.
+const dotenvResult = loadDotenv({ quiet: true });
+const loadedDotenvPath: string | null =
+  dotenvResult && typeof dotenvResult === "object" && (dotenvResult as { parsed?: unknown }).parsed
+    ? resolve(process.cwd(), ".env")
+    : null;
+
+/** Presence-only check (never reads values — secrets stay out of logs). */
+function dotenvDefinesDbUrl(filePath: string): boolean {
+  try {
+    if (!existsSync(filePath)) return false;
+    return /^\s*DATABASE_URL\s*=/m.test(readFileSync(filePath, "utf8"));
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Warn when a sibling .env defines DATABASE_URL but the loaded file does not
+ * (or vice versa). Runtime DB credentials come ONLY from workspace.json;
+ * the env URL is CLI-only — a second copy in the wrong file is dead config
+ * that misleads operators into thinking the server uses it.
+ */
+export function dotenvDbUrlMismatchWarning(): string | null {
+  const cwd = process.cwd();
+  const candidates = [
+    resolve(cwd, ".env"),
+    resolve(cwd, "..", ".env"),
+    resolve(cwd, "..", "..", ".env"),
+  ].filter((p, i, arr) => arr.indexOf(p) === i && existsSync(p));
+  if (candidates.length < 2) return null;
+  const states = candidates.map((p) => ({ path: p, defines: dotenvDefinesDbUrl(p) }));
+  const first = states[0].defines;
+  if (states.every((s) => s.defines === first)) return null;
+  const withUrl = states.filter((s) => s.defines).map((s) => s.path);
+  return (
+    `[config] DATABASE_URL is defined in ${withUrl.join(", ")} but not in the loaded dotenv source ` +
+    `(${loadedDotenvPath ?? "none — environment only"}). Runtime ignores env DB URLs (record-only; see workspace.json); ` +
+    `delete the dead copies to avoid confusion.`
+  );
+}
+
+export function dotenvSourcePath(): string | null {
+  return loadedDotenvPath;
+}
 
 const ENV_TRUE = "true";
 const ENV_FALSE = "false";
@@ -106,7 +154,7 @@ export const envSchema = z.object({
 
   PROVIDER_CONNECT_TIMEOUT_MS: numSchema(0, 10_000, "Max wait in ms for provider response headers; 0 disables the watchdog."),
   PROVIDER_IDLE_TIMEOUT_MS: numSchema(0, 120_000, "Max gap in ms between provider stream chunks (or full non-streaming body); 0 disables."),
-  PROVIDER_KEEP_ALIVE_TIMEOUT_MS: intSchema(1, 600_000, 10_000, "Undici Agent keep-alive socket timeout in ms (applies only if undici becomes resolvable)."),
+  PROVIDER_KEEP_ALIVE_TIMEOUT_MS: intSchema(1, 600_000, 10_000, "Undici Agent keep-alive socket timeout in ms (attached as fetch dispatcher when undici resolves; global fetch pooling applies otherwise)."),
   PROVIDER_KEEP_ALIVE_MAX_TIMEOUT_MS: intSchema(1, 3_600_000, 60_000, "Undici Agent max keep-alive timeout cap in ms."),
   PROVIDER_PIPELINING: intSchema(1, 4, 4, "Undici Agent pipelining factor per origin (1..4)."),
   PROVIDER_MAX_CONNECTIONS: intSchema(1, 256, 8, "Undici Agent connections per origin cap."),
@@ -359,16 +407,18 @@ export function initConfig(options: InitConfigOptions = {}): EffectiveConfigResu
   const logOption = options.log ?? true;
   if (logOption !== false) {
     const emit = typeof logOption === "function" ? logOption : (line: string) => console.log(line);
+    const warn = typeof logOption === "function" ? logOption : (line: string) => console.warn(line);
+    emit(`[config] dotenv source: ${loadedDotenvPath ?? "(none — environment only)"} (runtime DB credentials come from workspace.json, never .env)`);
+    const mismatch = dotenvDbUrlMismatchWarning();
+    if (mismatch) warn(`[config][warn] ${mismatch}`);
     emit("[config] effective configuration (secrets redacted):");
     for (const line of formatConfigReport(redactedConfigReport(result.config)).split("\n")) {
       emit(line);
     }
     if (result.issues.unknownProjectVars.length > 0) {
-      const warn = typeof logOption === "function" ? logOption : (line: string) => console.warn(line);
       warn(`[config][warn] CONFIG_STRICT=false: unknown project variables ignored: ${result.issues.unknownProjectVars.join(", ")}`);
     }
     for (const c of result.issues.coerced) {
-      const warn = typeof logOption === "function" ? logOption : (line: string) => console.warn(line);
       warn(`[config][warn] coerced ${c.var}: ${JSON.stringify(c.from)} -> ${c.to}`);
     }
   }

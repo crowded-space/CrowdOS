@@ -49,6 +49,26 @@ export async function localAllocateSequence(key: string, count = 1, start = fals
   return start ? next - count + 1 : next;
 }
 
+/**
+ * Raise a counter to at least `floor` (never lowers it). §17 migration path:
+ * when the local log for a channel is empty but the PG replica already holds
+ * history, the local counter must not restart at 1 — a reissued seq would make
+ * the replica leg collide and silently drop the row. Returns the effective
+ * value after flooring.
+ */
+export async function localFloorSequence(key: string, floor: number): Promise<number> {
+  if (!Number.isFinite(floor) || floor <= 0) {
+    return localAllocateSequence(key, 0);
+  }
+  let effective = floor;
+  await mutateJsonObject<number>(SEQUENCES_FILE, (obj) => {
+    const current = typeof obj[key] === "number" ? (obj[key] as number) : 0;
+    effective = Math.max(current, floor);
+    obj[key] = effective;
+  });
+  return effective;
+}
+
 export async function localAppendMessage(row: LocalMessageRow): Promise<any> {
   await appendJsonl(row.channelId, row as unknown as Record<string, unknown>);
   return revive(row);

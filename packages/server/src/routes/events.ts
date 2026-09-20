@@ -1,5 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
+import { eventsGate } from "../events/events-gate.js";
 
 const recentEventsQuerySchema = z.object({
   channelId: z.string().min(1),
@@ -8,9 +9,18 @@ const recentEventsQuerySchema = z.object({
 });
 
 /**
- * D6: durable_events retired. Catch-up is message refetch
- * (GET /api/channels/:id/messages). This endpoint stays as a no-op
- * contract so old clients don't crash: always empty, lastSeq echoed.
+ * §29 local event replay (HM3/UX-5).
+ * GET /api/events/recent?channelId=...&afterSeq=N&limit=100
+ *
+ * Serves the append-only local event log (events/<channelId>.jsonl) ordered
+ * ascending by seq, so a client can resume with afterSeq = last seen seq.
+ * `afterSeq` is exclusive; `lastSeq` is the highest seq returned, or the
+ * current head when nothing is after the cursor (an empty/absent log is
+ * honestly `events: []` + `lastSeq: 0`).
+ *
+ * Ephemeral events (`message:stream`) are never in this log — see the Events
+ * domain spec for the classification and for what replay does and does not
+ * guarantee.
  */
 export async function eventRoutes(app: FastifyInstance) {
   app.get(
@@ -21,12 +31,24 @@ export async function eventRoutes(app: FastifyInstance) {
       },
     },
     async (request) => {
-      const { channelId, afterSeq } = request.query as {
+      const { channelId, afterSeq, limit } = request.query as {
         channelId: string;
         afterSeq?: number;
         limit?: number;
       };
-      return { channelId, events: [], lastSeq: afterSeq ?? 0, deprecated: true };
+      const { events, lastSeq } = await eventsGate.listRecent(channelId, { afterSeq, limit });
+      return {
+        channelId,
+        events: events.map((row) => ({
+          seq: row.seq,
+          eventId: row.eventId,
+          type: row.type,
+          agentId: row.agentId ?? undefined,
+          payload: row.payload,
+          createdAt: row.createdAt,
+        })),
+        lastSeq,
+      };
     }
   );
 }

@@ -39,6 +39,19 @@ export function resolveApiUrl(url: string): string {
 
 let currentWorkspaceId: string | null = null;
 let currentPin: string | null = null;
+// SEC-1 (§19): the mounted REST gate is default-deny for NON-loopback callers.
+// The embedded desktop backend is reached over loopback and needs no key, so this
+// stays opt-in and defaults to null — setting a key must never be required to run
+// the local app. It exists so a browser client on another host can authenticate.
+let currentApiKey: string | null = null;
+
+export function setActiveApiKey(key: string | null) {
+  currentApiKey = key && key.trim() ? key.trim() : null;
+}
+
+export function getActiveApiKey(): string | null {
+  return currentApiKey;
+}
 
 export function setActiveWorkspaceId(id: string | null) {
   currentWorkspaceId = id;
@@ -66,6 +79,11 @@ function buildHeaders(initHeaders?: HeadersInit, hasBody = false): Headers {
   }
   if (currentPin && !headers.has('x-pin')) {
     headers.set('x-pin', currentPin);
+  }
+  // Only sent when a key is actually configured; the loopback desktop flow
+  // never sets one and keeps working without a credential.
+  if (currentApiKey && !headers.has('x-api-key')) {
+    headers.set('x-api-key', currentApiKey);
   }
   return headers;
 }
@@ -115,9 +133,23 @@ export interface WorkspaceDescriptorDto {
     database: string;
     port: number | null;
   };
+  storagePreference?: 'default' | 'local';
+  dbSync?: { dbWorkspaceId: string | null; state: 'paired' | 'conflict' | 'importing' | 'pushing'; updatedAt: string } | null;
   metadata?: Record<string, unknown>;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface DbSyncStatusDto {
+  workspaceId: string;
+  storagePreference: 'default' | 'local';
+  tier: 'dual' | 'local';
+  dbConfigured: boolean;
+  dbReachable: boolean;
+  dbSync: { dbWorkspaceId: string | null; state: string; updatedAt: string } | null;
+  backlog: number;
+  backlogNotice: boolean;
+  suggestion?: string;
 }
 
 export interface ScreenLockStatusDto {
@@ -157,7 +189,7 @@ export const apiClient = {
 
   async updateWorkspace(
     id: string,
-    patch: { name?: string; icon?: string; databaseUrl?: string | null; rootPath?: string }
+    patch: { name?: string; icon?: string; databaseUrl?: string | null; rootPath?: string; storagePreference?: 'default' | 'local' }
   ): Promise<WorkspaceDescriptorDto> {
     return fetchJsonOrThrow<WorkspaceDescriptorDto>(
       `${BACKEND_URL}/api/workspaces/${encodeURIComponent(id)}`,
@@ -193,6 +225,29 @@ export const apiClient = {
         body: JSON.stringify({ databaseUrl }),
       },
       'Failed to test database connection'
+    );
+  },
+
+  async getDbSync(id: string): Promise<DbSyncStatusDto> {
+    return fetchJsonOrThrow<DbSyncStatusDto>(
+      `${BACKEND_URL}/api/workspaces/${encodeURIComponent(id)}/db-sync`,
+      { method: 'GET' },
+      'Failed to fetch sync status'
+    );
+  },
+
+  async postDbSync(
+    id: string,
+    body: { action: 'resolve' | 'sync-now' | 'rebuild-rag'; choice?: 'flush-local' | 'flush-db' | 'change-db' }
+  ): Promise<any> {
+    return fetchJsonOrThrow<any>(
+      `${BACKEND_URL}/api/workspaces/${encodeURIComponent(id)}/db-sync`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      },
+      'Sync action failed'
     );
   },
 

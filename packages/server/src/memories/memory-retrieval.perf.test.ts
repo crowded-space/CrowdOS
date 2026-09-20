@@ -4,6 +4,9 @@ vi.mock("../shared/config/database.js", async () => {
   const { buildMemTestDb, memTestStore } = await import("./memory-test-db.js");
   return {
     getDb: () => buildMemTestDb(),
+    // Record-only threading: workspace-scoped memory ops resolve a per-workspace
+    // handle; the fake serves the same in-memory store.
+    dbForWorkspace: async () => buildMemTestDb(),
     getSqlClient: () => {
       throw new Error("getSqlClient is not available under the memory test fake");
     },
@@ -11,6 +14,8 @@ vi.mock("../shared/config/database.js", async () => {
     closeDatabaseConnection: async () => {},
     runWithDb: <T>(db: unknown, fn: () => T): T => fn(),
     dbScopeKey: () => "global",
+    isDatabaseConfigured: () => true,
+    isConnectionError: () => false,
     __memTestStoreRef: memTestStore,
   };
 });

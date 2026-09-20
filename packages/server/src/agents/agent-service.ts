@@ -1,8 +1,9 @@
 import { randomUUID } from "node:crypto";
 
-import { and, asc, eq, inArray, isNull, lt } from "drizzle-orm";
+import { and, asc, eq, inArray, isNull, lt, or } from "drizzle-orm";
 
-import { getDb, dbScopeKey, withTransaction, runWithDb, isDatabaseConfigured } from "../shared/config/database.js";
+import { getDb, dbScopeKey, withTransaction, runWithDb, dualWrite, resolveTier, isConnectionError } from "../shared/config/database.js";
+import { tierContextFor } from "../workspace/workspace-gate.js";
 import {
   localDeleteAgent,
   localGetAgent,
@@ -38,6 +39,7 @@ const DEFAULT_PERMISSIONS: AgentAuthorityPermissions = {
 function mapAgentProfile(row: typeof agents.$inferSelect): AgentProfile {
   return {
     ...row,
+    workspaceId: (row as unknown as { workspaceId?: string | null }).workspaceId ?? null,
     authorityLevel: row.authorityLevel as AuthorityLevel,
     species: row.species ?? undefined,
     avatar: row.avatar ?? undefined,
@@ -63,19 +65,40 @@ function normalizePermissions(
   };
 }
 
-/** C3 local-first: file roster when no DATABASE_URL is configured. */
-function useLocalDb(dbOverride?: any): boolean {
-  return !dbOverride && !isDatabaseConfigured();
+/**
+ * Dual-boot reads: explicit handle pins PG exactly; otherwise union both
+ * tiers (local wins on id collision) so legacy PG rows and local rows coexist.
+ * Thunk form — getDb() itself throws synchronously without a database.
+ */
+async function pgCatchNull<T>(fn: () => Promise<T>): Promise<T | null> {
+  try {
+    return await fn();
+  } catch {
+    return null;
+  }
+}
+
+function mergeRoster(pgRows: AgentProfile[], localRows: AgentProfile[]): AgentProfile[] {
+  const byId = new Map<string, AgentProfile>();
+  for (const r of pgRows) byId.set(r.id, r);
+  for (const r of localRows) byId.set(r.id, r);
+  return [...byId.values()].sort((a, b) => a.authorityLevel - b.authorityLevel || (a.name < b.name ? -1 : 1));
 }
 
 export class AgentRegistry {
   async list(filters: AgentRegistryFilters = {}, dbOverride?: any): Promise<AgentProfile[]> {
-    if (useLocalDb(dbOverride)) return localListAgents(filters as any) as Promise<AgentProfile[]>;
     if (dbOverride) {
       return this.loadRoster(filters, dbOverride);
     }
     // ponytail: scope key by tenant handle — an unscoped key serves A's roster to B.
-    return getCachedRoster(`${dbScopeKey()}:roster:${JSON.stringify(filters)}`, () => this.loadRoster(filters));
+    // Union loader is cached like the old PG-only loader (same invalidation points).
+    return getCachedRoster(`${dbScopeKey()}:roster:${JSON.stringify(filters)}`, async () => {
+      const [pgRows, localRows] = await Promise.all([
+        pgCatchNull(() => this.loadRoster(filters)).then((rows) => rows ?? []),
+        localListAgents(filters as any).catch(() => [] as AgentProfile[]),
+      ]);
+      return mergeRoster(pgRows, localRows);
+    });
   }
 
   private async loadRoster(filters: AgentRegistryFilters, dbOverride?: any): Promise<AgentProfile[]> {
@@ -83,6 +106,13 @@ export class AgentRegistry {
     const whereClauses = [];
 
     whereClauses.push(isNull(agents.archivedAt));
+    // Isolation: scoped rows only in their workspace. Undefined = all rows
+    // (legacy callers); set value = scoped + legacy-global rows.
+    if (filters.workspaceId !== undefined && filters.workspaceId !== null) {
+      whereClauses.push(or(eq(agents.workspaceId, filters.workspaceId), isNull(agents.workspaceId)));
+    } else if (filters.workspaceId === null) {
+      whereClauses.push(isNull(agents.workspaceId));
+    }
 
     if (filters.authorityLevel !== undefined) {
       whereClauses.push(eq(agents.authorityLevel, filters.authorityLevel));
@@ -114,44 +144,28 @@ export class AgentRegistry {
   }
 
   async getById(id: string, dbOverride?: any): Promise<AgentProfile | null> {
-    if (useLocalDb(dbOverride)) return localGetAgent(id) as Promise<AgentProfile | null>;
-    const db = dbOverride || getDb();
-    const record = await db.query.agents.findFirst({
-      where: eq(agents.id, id),
-    });
-
-    return record ? mapAgentProfile(record) : null;
+    if (dbOverride) {
+      const record = await dbOverride.query.agents.findFirst({
+        where: eq(agents.id, id),
+      });
+      return record ? mapAgentProfile(record) : null;
+    }
+    return (
+      ((await localGetAgent(id).catch(() => null)) as AgentProfile | null) ??
+      (await pgCatchNull(() =>
+        getDb().query.agents.findFirst({
+          where: eq(agents.id, id),
+        }),
+      ).then((record) => (record ? mapAgentProfile(record) : null)))
+    );
   }
 
   async create(input: CreateAgentProfileInput, dbOverride?: any): Promise<AgentProfile> {
-    if (useLocalDb(dbOverride)) {
-      // Local mode: structural rules only — module rows live in PG until spec 05.
-      if (input.l3Subtype && input.authorityLevel !== 3) {
-        throw new Error("Only authority level 3 agents may define an l3Subtype.");
-      }
-      const created = await localUpsertAgent({
-        name: input.name,
-        title: input.title,
-        species: input.species,
-        avatar: input.avatar,
-        authorityLevel: input.authorityLevel,
-        modelModuleId: input.modelModuleId ?? null,
-        instructionModuleId: input.instructionModuleId,
-        memorySharingPolicy: input.memorySharingPolicy,
-        status: input.status ?? "offline",
-        isTemplate: input.isTemplate ?? false,
-      });
-      invalidateRosterCache();
-      return created;
-    }
-    await this.ensureValidReferences(input, undefined, dbOverride);
-
     const now = new Date();
     const agentId = randomUUID();
-    const db = dbOverride || getDb();
-
-    await db.insert(agents).values({
+    const row = {
       id: agentId,
+      workspaceId: input.workspaceId ?? null,
       name: input.name,
       title: input.title,
       species: input.species ?? null,
@@ -172,50 +186,84 @@ export class AgentRegistry {
       isTemplate: input.isTemplate ?? false,
       createdAt: now,
       updatedAt: now,
-    });
+    };
 
-    await db.insert(runtimeStates).values({
-      sessionId: `session-${agentId}`,
-      agentId,
-      status: input.status === "offline" ? "offline" : "idle",
-      lastHeartbeat: now,
-      createdAt: now,
-    });
+    const localCreate = () =>
+      localUpsertAgent({
+        id: agentId,
+        workspaceId: input.workspaceId ?? null,
+        name: input.name,
+        title: input.title,
+        species: input.species,
+        avatar: input.avatar,
+        authorityLevel: input.authorityLevel,
+        modelModuleId: input.modelModuleId ?? null,
+        instructionModuleId: input.instructionModuleId,
+        memorySharingPolicy: input.memorySharingPolicy,
+        status: input.status ?? "offline",
+        isTemplate: input.isTemplate ?? false,
+      });
 
-    const created = await this.getById(agentId, db);
-    if (!created) {
-      throw new Error("Failed to create agent profile.");
+    // Explicit handle pins PG exactly (tests/seeds/replay) with full validation.
+    if (dbOverride) {
+      await this.ensureValidReferences(input, undefined, dbOverride);
+      await dbOverride.insert(agents).values(row);
+      await dbOverride.insert(runtimeStates).values({
+        sessionId: `session-${agentId}`,
+        agentId,
+        status: input.status === "offline" ? "offline" : "idle",
+        lastHeartbeat: now,
+        createdAt: now,
+      });
+      const created = await this.getById(agentId, dbOverride);
+      if (!created) throw new Error("Failed to create agent profile.");
+      invalidateRosterCache();
+      return created;
     }
 
+    // Dual-boot: structural rules always; module rows validated only when PG
+    // is actually written (they live in PG until spec 05).
+    if (input.l3Subtype && input.authorityLevel !== 3) {
+      throw new Error("Only authority level 3 agents may define an l3Subtype.");
+    }
+    const ctx = await tierContextFor(null);
+    if (resolveTier(ctx).tier === "dual") {
+      // Best-effort PG validation — skips itself when the database is gone.
+      await this.ensureValidReferences(input, undefined).catch((err) => {
+        if (!isConnectionError(err)) throw err;
+      });
+    }
+    const created = await dualWrite({
+      ctx,
+      entity: "agent",
+      op: "upsert",
+      id: agentId,
+      row: { ...row, createdAt: now.toISOString(), updatedAt: now.toISOString() },
+      pgWrite: async () => {
+        const db = getDb();
+        await db.insert(agents).values(row);
+        await db.insert(runtimeStates).values({
+          sessionId: `session-${agentId}`,
+          agentId,
+          status: input.status === "offline" ? "offline" : "idle",
+          lastHeartbeat: now,
+          createdAt: now,
+        });
+      },
+      localWrite: localCreate,
+    });
     invalidateRosterCache();
-
-    return created;
+    return created as AgentProfile;
   }
 
   async update(id: string, input: UpdateAgentProfileInput, dbOverride?: any): Promise<AgentProfile | null> {
-    if (useLocalDb(dbOverride)) {
-      const existing = await this.getById(id);
-      if (!existing) return null;
-      const updated = await localUpsertAgent({
-        id,
-        name: input.name ?? existing.name,
-        title: input.title ?? existing.title,
-        authorityLevel: input.authorityLevel ?? existing.authorityLevel,
-        status: input.status ?? existing.status,
-      });
-      if (input.toolkitModuleId !== undefined || input.permissions !== undefined) {
-        skillsGate.invalidateAgentCaches(id);
-      }
-      invalidateRosterCache();
-      return updated;
-    }
-    const db = dbOverride || getDb();
-    const existing = await this.getById(id, db);
+    const existing = await this.getById(id, dbOverride);
     if (!existing) {
       return null;
     }
 
     const merged: CreateAgentProfileInput = {
+      workspaceId: input.workspaceId ?? existing.workspaceId ?? null,
       name: input.name ?? existing.name,
       title: input.title ?? existing.title,
       species: input.species === null ? undefined : (input.species ?? existing.species),
@@ -238,60 +286,114 @@ export class AgentRegistry {
       isTemplate: input.isTemplate ?? existing.isTemplate,
     };
 
-    await this.ensureValidReferences(merged, id, db);
+    const pgSet = {
+      workspaceId: merged.workspaceId ?? null,
+      name: merged.name,
+      title: merged.title,
+      species: merged.species ?? null,
+      avatar: merged.avatar ?? null,
+      authorityLevel: merged.authorityLevel,
+      l3Subtype: merged.l3Subtype ?? null,
+      modelModuleId: merged.modelModuleId,
+      instructionModuleId: merged.instructionModuleId,
+      toolkitModuleId: merged.toolkitModuleId ?? null,
+      constraintsModuleId: merged.constraintsModuleId ?? null,
+      capabilitiesModuleId: merged.capabilitiesModuleId ?? null,
+      memorySharingPolicy: merged.memorySharingPolicy,
+      isOmniscient: merged.isOmniscient ?? false,
+      fallbackAgentId: merged.fallbackAgentId ?? null,
+      categoryPermissions: merged.categoryPermissions ?? [],
+      permissions: merged.permissions ? normalizePermissions(merged.permissions) : existing.permissions,
+      status: merged.status ?? existing.status,
+      isTemplate: merged.isTemplate ?? false,
+      updatedAt: new Date(),
+    };
 
-    await db
-      .update(agents)
-      .set({
+    const localApply = () =>
+      localUpsertAgent({
+        id,
+        workspaceId: merged.workspaceId ?? null,
         name: merged.name,
         title: merged.title,
-        species: merged.species ?? null,
-        avatar: merged.avatar ?? null,
         authorityLevel: merged.authorityLevel,
-        l3Subtype: merged.l3Subtype ?? null,
-        modelModuleId: merged.modelModuleId,
-        instructionModuleId: merged.instructionModuleId,
-        toolkitModuleId: merged.toolkitModuleId ?? null,
-        constraintsModuleId: merged.constraintsModuleId ?? null,
-        capabilitiesModuleId: merged.capabilitiesModuleId ?? null,
-        memorySharingPolicy: merged.memorySharingPolicy,
-        isOmniscient: merged.isOmniscient ?? false,
-        fallbackAgentId: merged.fallbackAgentId ?? null,
-        categoryPermissions: merged.categoryPermissions ?? [],
-        permissions: merged.permissions ? normalizePermissions(merged.permissions) : existing.permissions,
         status: merged.status ?? existing.status,
-        isTemplate: merged.isTemplate ?? false,
-        updatedAt: new Date(),
-      })
-      .where(eq(agents.id, id));
+      });
+
+    // Explicit handle pins PG exactly (tests/seeds/replay) with full validation.
+    if (dbOverride) {
+      await this.ensureValidReferences(merged, id, dbOverride);
+      await dbOverride.update(agents).set(pgSet).where(eq(agents.id, id));
+      if (input.toolkitModuleId !== undefined || input.permissions !== undefined) {
+        skillsGate.invalidateAgentCaches(id);
+      }
+      await dbOverride
+        .update(runtimeStates)
+        .set({
+          status: merged.status === "offline" ? "offline" : "idle",
+          lastHeartbeat: new Date(),
+        })
+        .where(eq(runtimeStates.agentId, id));
+      invalidateRosterCache();
+      return this.getById(id, dbOverride);
+    }
+
+    // Dual-boot: validate against PG only when it will actually be written.
+    const ctx = await tierContextFor(null);
+    if (resolveTier(ctx).tier === "dual") {
+      await this.ensureValidReferences(merged, id).catch((err) => {
+        if (!isConnectionError(err)) throw err;
+      });
+    }
+    await dualWrite({
+      ctx,
+      entity: "agent",
+      op: "upsert",
+      id,
+      row: { ...existing, ...merged, updatedAt: new Date().toISOString() },
+      pgWrite: async () => {
+        const db = getDb();
+        await db.update(agents).set(pgSet).where(eq(agents.id, id));
+        await db
+          .update(runtimeStates)
+          .set({
+            status: merged.status === "offline" ? "offline" : "idle",
+            lastHeartbeat: new Date(),
+          })
+          .where(eq(runtimeStates.agentId, id));
+      },
+      localWrite: localApply,
+    });
 
     if (input.toolkitModuleId !== undefined || input.permissions !== undefined) {
       skillsGate.invalidateAgentCaches(id);
     }
-
-    await db
-      .update(runtimeStates)
-      .set({
-        status: merged.status === "offline" ? "offline" : "idle",
-        lastHeartbeat: new Date(),
-      })
-      .where(eq(runtimeStates.agentId, id));
-
     invalidateRosterCache();
-
     return this.getById(id);
   }
 
   async delete(id: string, dbOverride?: any): Promise<boolean> {
-    if (useLocalDb(dbOverride)) {
-      const removed = await localDeleteAgent(id);
+    if (dbOverride) {
+      const result = await dbOverride.delete(agents).where(eq(agents.id, id)).returning({ id: agents.id });
       invalidateRosterCache();
-      return removed;
+      return result.length > 0;
     }
-    const db = dbOverride || getDb();
-    const result = await db.delete(agents).where(eq(agents.id, id)).returning({ id: agents.id });
+    const existing = await this.getById(id);
+    if (!existing) return false;
+    const ctx = await tierContextFor(null);
+    const removed = await dualWrite({
+      ctx,
+      entity: "agent",
+      op: "delete",
+      id,
+      row: null,
+      pgWrite: async () => {
+        const db = getDb();
+        await db.delete(agents).where(eq(agents.id, id));
+      },
+      localWrite: () => localDeleteAgent(id),
+    });
     invalidateRosterCache();
-    return result.length > 0;
+    return removed;
   }
 
   /** Sole owner write for `agents.status` + `runtime_states`: atomic flip + heartbeat + `agent:status`. */
@@ -300,29 +402,49 @@ export class AgentRegistry {
     status: RuntimeStatus,
     opts: { broker?: EventBroker; db?: any; errorInfo?: { code: string; message: string } } = {}
   ): Promise<void> {
-    if (!opts.db && !isDatabaseConfigured()) {
-      // Local mode: file flip only (no runtime_states ledger until spec 05).
-      await localSetAgentStatus(agentId, status);
-      if (status === "working") markAgentWorking(agentId);
-      else markAgentIdle(agentId);
-      opts.broker?.emit("agent:status", { agentId, status } as never);
-      return;
+    // Explicit handle pins PG exactly (tests/seeds).
+    if (opts.db) {
+      const write = async (tx: any) => {
+        await tx.update(agents).set({ status }).where(eq(agents.id, agentId));
+        await tx
+          .update(runtimeStates)
+          .set({
+            status,
+            lastHeartbeat: new Date(),
+            ...(opts.errorInfo
+              ? { errorInfo: { ...opts.errorInfo, timestamp: new Date().toISOString() } }
+              : {}),
+          })
+          .where(eq(runtimeStates.agentId, agentId));
+      };
+      await runWithDb(opts.db, () => withTransaction(write));
+    } else {
+      // Dual-boot: PG flip + local file flip (no runtime_states ledger locally).
+      const ctx = await tierContextFor(null);
+      await dualWrite({
+        ctx,
+        entity: "agent",
+        op: "upsert",
+        id: agentId,
+        // Status-only row: replay re-flips PG status (presence, not content).
+        row: { status, updatedAt: new Date().toISOString() } as Record<string, unknown>,
+        pgWrite: () =>
+          withTransaction(async (tx: any) => {
+            await tx.update(agents).set({ status }).where(eq(agents.id, agentId));
+            await tx
+              .update(runtimeStates)
+              .set({
+                status,
+                lastHeartbeat: new Date(),
+                ...(opts.errorInfo
+                  ? { errorInfo: { ...opts.errorInfo, timestamp: new Date().toISOString() } }
+                  : {}),
+              })
+              .where(eq(runtimeStates.agentId, agentId));
+          }),
+        localWrite: () => localSetAgentStatus(agentId, status),
+      });
     }
-    const write = async (tx: any) => {
-      await tx.update(agents).set({ status }).where(eq(agents.id, agentId));
-      await tx
-        .update(runtimeStates)
-        .set({
-          status,
-          lastHeartbeat: new Date(),
-          ...(opts.errorInfo
-            ? { errorInfo: { ...opts.errorInfo, timestamp: new Date().toISOString() } }
-            : {}),
-        })
-        .where(eq(runtimeStates.agentId, agentId));
-    };
-    if (opts.db) await runWithDb(opts.db, () => withTransaction(write));
-    else await withTransaction(write);
 
     if (status === "working") markAgentWorking(agentId);
     else markAgentIdle(agentId);

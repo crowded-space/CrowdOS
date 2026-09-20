@@ -1,4 +1,7 @@
 ﻿import { createServer } from "node:http";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -74,13 +77,17 @@ async function setup(
   // The database/channelGate fakes are registered globally in src/test-setup.ts
   // (test-file-level vi.mock does not reach transitive importers under vitest
   // v4). Reset their state for this scenario.
-  const [databaseModule, gateModule, brokerModule, authModule, socketModule] = await Promise.all([
+  const [databaseModule, gateModule, brokerModule, authModule, socketModule, localFileModule] = await Promise.all([
     import("../config/database.js"),
     import("../../channels/channel-gate.js"),
     import("../../event-broker/event-broker-gate.js"),
     import("../auth/api-key-service.js"),
     import("./register-socket-server.js"),
+    import("../core/local-file.js"),
   ]);
+  // Dual-write mirrors file rows even in fake-DB tests — isolate per setup.
+  const localDir = mkdtempSync(join(tmpdir(), "crowdos-sock-"));
+  (localFileModule as typeof import("../core/local-file.js")).setLocalStoreDirForTests(localDir);
   const { registerSocketServer, _socketsInternals } = socketModule as typeof import("./register-socket-server.js");
 
   const socketTestDb = (databaseModule as any).__socketTestDb as {
@@ -118,6 +125,8 @@ async function setup(
       });
       await new Promise<void>((resolve) => httpServer.close(() => resolve()));
       socketTestGate.setOverride(null);
+      (localFileModule as typeof import("../core/local-file.js")).setLocalStoreDirForTests(null);
+      rmSync(localDir, { recursive: true, force: true });
     },
   };
 
@@ -158,19 +167,66 @@ async function waitFor<T>(probe: () => T | undefined | false | null, timeoutMs =
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
+/**
+ * §30 room-key helper. Rooms are workspace-namespaced:
+ *   workspace room -> ws:<workspaceId>
+ *   channel room   -> ws:<workspaceId>:channel:<channelId>
+ * Mirrored here (not imported) so the test asserts the wire format itself
+ * rather than agreeing with the implementation by construction.
+ */
+const roomOf = (workspaceId: string, channelId: string) => `ws:${workspaceId}:channel:${channelId}`;
+const workspaceRoomOf = (workspaceId: string) => `ws:${workspaceId}`;
+
 async function seedKey(harness: Harness, label = "sec2-test") {
   const { key, record } = await harness.apiKeyService.createApiKey({ label, role: "operator" });
   return { key, record };
 }
 
+/**
+ * Seed a workspace row so the §30 `workspace:join` admission check passes.
+ * The fake DB's workspaces.findFirst ignores the where clause and returns the
+ * first row, so a single seeded row admits every declared workspace id.
+ */
+function seedWorkspace(harness: Harness, id: string): void {
+  if (!harness.store.workspaces.some((w) => w.id === id)) {
+    harness.store.workspaces.push({ id, name: id, ownerId: "system", rootPath: "/tmp/" + id });
+  }
+}
+
 describe("SEC-2 · socket trust & room isolation", () => {
   // Generous timeout: the first test in this file pays the one-time cost of
   // importing the full runtime module graph (runtimeGate → kernels/runtimes).
-  it("rejects unauthenticated handshake in strict mode", { timeout: 20_000 }, async () => {
+  it("accepts keyless handshake from loopback peers with server-minted identity", { timeout: 20_000 }, async () => {
     const harness = await setup();
     const connect = connectOf(harness);
-    const { error } = await connect();
-    expect(error?.message).toContain("Unauthorized");
+    harness.setChannelOverride(async (id: string) => (id === "chA" ? { id: "chA", name: "general" } : null));
+    // No auth at all (browser/vite flow) from 127.0.0.1 — accepted via loopback trust.
+    const { client, error } = await connect();
+    expect(error).toBeUndefined();
+
+    client.emit("user:message", {
+      channelId: "chA",
+      content: "hello from loopback",
+      authorId: "victim-admin",
+      authorName: "Spoofed Name",
+    });
+
+    const stored = await waitFor(() => harness.store.messages.find((m) => m.channelId === "chA"));
+    // Server-minted identity wins over spoofed claims at the id level.
+    expect(stored.authorId).toBe("local-user");
+    expect(stored.authorId).not.toBe("victim-admin");
+  });
+
+  it("resolveSocketIdentity stays credential-strict as a pure function", async () => {
+    const { isLoopbackPeer, resolveSocketIdentity } = await import("./socket-auth.js");
+    await expect(resolveSocketIdentity({ auth: {}, headers: {} })).resolves.toBeNull();
+    await expect(resolveSocketIdentity({ auth: { key: "  " }, headers: {} })).resolves.toBeNull();
+    expect(isLoopbackPeer("127.0.0.1")).toBe(true);
+    expect(isLoopbackPeer("::1")).toBe(true);
+    expect(isLoopbackPeer("::ffff:127.0.0.1")).toBe(true);
+    expect(isLoopbackPeer("192.168.1.5")).toBe(false);
+    expect(isLoopbackPeer(undefined)).toBe(false);
+    expect(isLoopbackPeer("")).toBe(false);
   });
 
   it("accepts handshake carrying a valid seeded API key", async () => {
@@ -224,7 +280,7 @@ describe("SEC-2 · socket trust & room isolation", () => {
     outsider.client.onAny((type, envelope) => receivedByOutsider.push({ type, envelope }));
 
     member.client.emit("channel:join", { channelId: "chA" });
-    await waitFor(() => harness.io.sockets.adapter.rooms.has("channel:chA"));
+    await waitFor(() => harness.io.sockets.adapter.rooms.has(roomOf("default", "chA")));
 
     const event = harness.broker.emit(
       "message:new",
@@ -233,9 +289,12 @@ describe("SEC-2 · socket trust & room isolation", () => {
     );
 
     await waitFor(() => receivedByMember.find((e) => e.type === "message:new" && e.envelope.eventId === event.eventId));
-    expect(receivedByMember[0].envelope.type).toBe("message:new");
+    // runtime:snapshot is a global lifecycle broadcast (also emitted on every
+    // connect) — not a channel leak. Isolation applies to channel events.
+    const memberChannelEvents = receivedByMember.filter((e) => e.type !== "runtime:snapshot");
+    expect(memberChannelEvents[0].envelope.type).toBe("message:new");
     await sleep(300);
-    expect(receivedByOutsider).toHaveLength(0);
+    expect(receivedByOutsider.filter((e) => e.type !== "runtime:snapshot")).toHaveLength(0);
   });
 
   it("denies joining a nonexistent channel and delivers nothing to it", async () => {
@@ -254,7 +313,7 @@ describe("SEC-2 · socket trust & room isolation", () => {
 
     session.client.emit("channel:join", { channelId: "chGhost" });
     await waitFor(() => errors.find((e) => e.code === "channel_not_found"));
-    expect(harness.io.sockets.adapter.rooms.has("channel:chGhost")).toBe(false);
+    expect(harness.io.sockets.adapter.rooms.has(roomOf("default", "chGhost"))).toBe(false);
 
     harness.broker.emit(
       "message:new",
@@ -264,6 +323,113 @@ describe("SEC-2 · socket trust & room isolation", () => {
     await sleep(300);
     expect(received.find((e) => e.type === "message:new")).toBeUndefined();
   });
+
+  it("§30: channel rooms are namespaced by the channel's workspace", async () => {
+    const harness = await setup();
+    const connect = connectOf(harness);
+    // The channel row carries its owning workspace, so the room key is derived
+    // from server truth, not from anything the client sent.
+    harness.setChannelOverride(async (id: string) =>
+      id === "ch-a" ? { id: "ch-a", name: "a", workspaceId: "ws-a" } : null);
+
+    const { key } = await seedKey(harness, "ws-a-key");
+    const session = await connect({ auth: { key } });
+    expect(session.error).toBeUndefined();
+
+    session.client.emit("channel:join", { channelId: "ch-a" });
+    await waitFor(() => harness.io.sockets.adapter.rooms.has(roomOf("ws-a", "ch-a")));
+    // The bare, un-namespaced room the old scheme used must not exist.
+    expect(harness.io.sockets.adapter.rooms.has("channel:ch-a")).toBe(false);
+  });
+
+  it("§30: a socket receives its own workspace's channel events", async () => {
+    const harness = await setup();
+    const connect = connectOf(harness);
+    harness.setChannelOverride(async (id: string) =>
+      id === "ch-own" ? { id: "ch-own", name: "own", workspaceId: "ws-own" } : null);
+
+    const { key } = await seedKey(harness, "own-ws-key");
+    const session = await connect({ auth: { key } });
+    expect(session.error).toBeUndefined();
+
+    const received: any[] = [];
+    session.client.onAny((type, envelope) => received.push({ type, envelope }));
+
+    session.client.emit("channel:join", { channelId: "ch-own" });
+    await waitFor(() => harness.io.sockets.adapter.rooms.has(roomOf("ws-own", "ch-own")));
+
+    const event = harness.broker.emit(
+      "message:new",
+      { id: "msg-own", channelId: "ch-own", workspaceId: "ws-own", content: "mine" } as never,
+      { channelId: "ch-own" },
+    );
+
+    await waitFor(() => received.find((e) => e.type === "message:new" && e.envelope.eventId === event.eventId));
+  });
+
+  it("§30: the same channel id in workspace B does not reach workspace A", async () => {
+    const harness = await setup();
+    const connect = connectOf(harness);
+    // Two workspaces, one shared channel id — the exact collision the bare
+    // `channel:<id>` scheme could not distinguish. The gate resolves the id to
+    // workspace A, which is where A's socket joins.
+    harness.setChannelOverride(async (id: string) =>
+      id === "ch-shared" ? { id: "ch-shared", name: "general", workspaceId: "ws-a" } : null);
+
+    const { key: keyA } = await seedKey(harness, "ws-a-key");
+    const sessionA = await connect({ auth: { key: keyA } });
+    expect(sessionA.error).toBeUndefined();
+
+    const receivedByA: any[] = [];
+    sessionA.client.onAny((type, envelope) => receivedByA.push({ type, envelope }));
+
+    sessionA.client.emit("channel:join", { channelId: "ch-shared" });
+    await waitFor(() => harness.io.sockets.adapter.rooms.has(roomOf("ws-a", "ch-shared")));
+
+    // An event stamped for workspace B on the same channel id.
+    const foreign = harness.broker.emit(
+      "message:new",
+      { id: "msg-b", channelId: "ch-shared", workspaceId: "ws-b", content: "for B" } as never,
+      { channelId: "ch-shared" },
+    );
+    // Its own workspace's event.
+    const own = harness.broker.emit(
+      "message:new",
+      { id: "msg-a", channelId: "ch-shared", workspaceId: "ws-a", content: "for A" } as never,
+      { channelId: "ch-shared" },
+    );
+
+    await waitFor(() => receivedByA.find((e) => e.type === "message:new" && e.envelope.eventId === own.eventId));
+    await sleep(300);
+    expect(receivedByA.find((e) => e.type === "message:new" && e.envelope.eventId === foreign.eventId)).toBeUndefined();
+  });
+
+  it("§30: channel:join denies a channel owned by another workspace", async () => {
+    const harness = await setup();
+    const connect = connectOf(harness);
+    harness.setChannelOverride(async (id: string) =>
+      id === "ch-b" ? { id: "ch-b", name: "b-only", workspaceId: "ws-b" } : null);
+
+    // Identity starts in the unscoped "default" placeholder, which is not a
+    // real workspace; declare a real one so the boundary is enforceable.
+    const { key } = await seedKey(harness, "ws-a-key");
+    seedWorkspace(harness, "ws-a");
+    const session = await connect({ auth: { key } });
+    expect(session.error).toBeUndefined();
+
+    const errors: any[] = [];
+    session.client.on("error" as any, (payload: any) => errors.push(payload));
+
+    session.client.emit("workspace:join", { workspaceId: "ws-a" });
+    await waitFor(() => harness.io.sockets.adapter.rooms.has(workspaceRoomOf("ws-a")));
+    session.client.emit("channel:join", { channelId: "ch-b" });
+
+    await waitFor(() => errors.find((e) => e.code === "channel_forbidden"));
+    // No room was created for the forbidden join, in either scope.
+    expect(harness.io.sockets.adapter.rooms.has(roomOf("ws-b", "ch-b"))).toBe(false);
+    expect(harness.io.sockets.adapter.rooms.has(roomOf("ws-a", "ch-b"))).toBe(false);
+  });
+
 
   it("throttles bursts beyond the token bucket with rate_limited envelopes", async () => {
     const harness = await setup({
@@ -303,7 +469,7 @@ describe("SEC-2 · socket trust & room isolation", () => {
 
     session.client.disconnect();
     await waitFor(() => harness.io.sockets.sockets.size === 0);
-    await waitFor(() => !harness.io.sockets.adapter.rooms.has("channel:chA"));
+    await waitFor(() => !harness.io.sockets.adapter.rooms.has(roomOf("default", "chA")));
     await waitFor(() => harness.socketsInternals.limiter!.size === 0);
   });
 });
@@ -687,6 +853,9 @@ describe("CrowdOS §10 · serial multi-mention dispatch", () => {
         ),
       );
       await waitFor(() => harness.socketsInternals.activeRuns().length === 0);
+      // Serial dispatch (§10): siblings start only after predecessors settle —
+      // wait for all three dispatches, not just an empty run registry.
+      await waitFor(() => delayed.calls.length === 3);
 
       expect(delayed.calls.sort()).toEqual(["agent-alpha", "agent-beta", "agent-gamma"]);
 

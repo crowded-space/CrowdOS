@@ -1,5 +1,6 @@
 ﻿import { skillService } from "./skill-service.js";
 import type { SkillDefinition, SkillPromptLayer, CreateSkillInput, UpdateSkillInput } from "./skill-types.js";
+import { listSummaries as listMarkdownSummaries, getSkill as getMarkdownSkill, composeSkills } from "./markdown-skill-store.js";
 import {
   createSkillSchema,
   updateSkillSchema,
@@ -25,6 +26,19 @@ export {
   skillParamsSchema,
 };
 
+// §20 Markdown skills are the local-first half of the Skills system. They are
+// re-exported through this gate (the domain’s only import surface) so callers
+// get DB skills and Markdown skills from one place.
+export {
+  loadSkills,
+  loadEnabledSkills,
+  composeSkills,
+} from "./markdown-skill-store.js";
+export { listSummaries as listMarkdownSummaries, getSkill as getMarkdownSkill } from "./markdown-skill-store.js";
+export type { MarkdownSkill, SkillSummary, SkillCategory, SkillParseResult, SkillLoadReport } from "./markdown-skill-types.js";
+export { SKILL_CATEGORIES } from "./markdown-skill-types.js";
+export { parseMarkdownSkill } from "./markdown-skill-parser.js";
+
 export const skillsGate = {
   list: (filters?: { category?: string; limit?: number }) => skillService.list(filters),
   getById: (id: string) => skillService.getById(id),
@@ -36,4 +50,8 @@ export const skillsGate = {
   removeSkill: (agentId: string, skillId: string) => skillService.removeSkill(agentId, skillId),
   getResolvedToolsForAgent: (agentId: string) => skillService.getResolvedToolsForAgent(agentId),
   invalidateAgentCaches: (agentId?: string) => skillService.invalidateAgentCaches(agentId),
+  // §20 Markdown skills: discovery-first, lazily expanded (§17: Markdown on disk).
+  listMarkdownSummaries,
+  getMarkdownSkill,
+  composeMarkdownSkills: composeSkills,
 };

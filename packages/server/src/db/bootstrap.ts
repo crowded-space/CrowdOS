@@ -24,8 +24,11 @@ async function applyMigrations(): Promise<void> {
   }
 }
 
-// Legacy hand-rolled DDL, kept for one release behind LEGACY_BOOTSTRAP=true.
+// DEPRECATED: legacy hand-rolled DDL behind LEGACY_BOOTSTRAP=true.
+// Drizzle migrations are truth (0019 drops the NO-VFS residue). Legacy path
+// is frozen and will be removed; it no longer creates workspace_nodes/events.
 async function ensureSchema(): Promise<void> {
+  console.warn("[db] LEGACY_BOOTSTRAP=true is deprecated and will be removed — use drizzle migrations (npm run db:push without the flag).");
   const sql = getSqlClient();
 
   await sql`create extension if not exists vector`;
@@ -76,30 +79,6 @@ async function ensureSchema(): Promise<void> {
       metadata jsonb default '{}'::jsonb not null,
       created_at timestamp with time zone default now() not null,
       updated_at timestamp with time zone default now() not null
-    )`,
-    `create table if not exists workspace_nodes (
-      id text primary key,
-      workspace_id text not null references workspaces(id) on delete cascade,
-      path text not null,
-      name text not null,
-      type workspace_node_type not null,
-      mime_type text,
-      size bigint default 0 not null,
-      checksum text,
-      created_by text not null,
-      updated_by text not null,
-      metadata jsonb default '{}'::jsonb not null,
-      created_at timestamp with time zone default now() not null,
-      updated_at timestamp with time zone default now() not null
-    )`,
-    `create table if not exists workspace_events (
-      id text primary key,
-      workspace_id text not null references workspaces(id) on delete cascade,
-      type text not null,
-      agent_id text,
-      path text,
-      payload jsonb default '{}'::jsonb not null,
-      created_at timestamp with time zone default now() not null
     )`,
     `create table if not exists workspace_agents (
       id text primary key,
@@ -467,13 +446,16 @@ async function ensureSchema(): Promise<void> {
   }
 
   const postTableStatements = [
+    // 0018 parity for legacy DBs (frozen path): workspace scoping column.
+    "alter table agents add column if not exists workspace_id text",
+    "do $$ begin alter table agents add constraint agents_workspace_id_workspaces_id_fk foreign key (workspace_id) references workspaces(id) on delete cascade; exception when duplicate_object then null; end $$;",
+    "create index if not exists agents_workspace_idx on agents(workspace_id)",
+    "create unique index if not exists agents_workspace_name_idx on agents(workspace_id, name)",
     "do $$ begin alter table agents add constraint agents_fallback_agent_id_fk foreign key (fallback_agent_id) references agents(id) on delete set null; exception when duplicate_object then null; end $$;",
     "do $$ begin alter table agent_tools add constraint agent_tools_agent_id_agents_id_fk foreign key (agent_id) references agents(id) on delete cascade; exception when duplicate_object then null; end $$;",
     "do $$ begin alter table agent_tools add constraint agent_tools_tool_id_tools_id_fk foreign key (tool_id) references tools(id) on delete cascade; exception when duplicate_object then null; end $$;",
-    "create unique index if not exists agents_name_idx on agents(name)",
     "create unique index if not exists messages_channel_sequence_idx on messages(channel_id, sequence_number)",
     "create unique index if not exists tools_name_idx on tools(name)",
-    "create unique index if not exists workspace_nodes_ws_path_idx on workspace_nodes(workspace_id, path)",
     "do $$ begin alter table workspace_agents add constraint workspace_agents_agent_id_agents_id_fk foreign key (agent_id) references agents(id) on delete cascade; exception when duplicate_object then null; end $$;",
     // Perf P2 indexes (also in Drizzle schema)
     "create index if not exists messages_channel_ts_seq_idx on messages(channel_id, timestamp desc, sequence_number desc)",

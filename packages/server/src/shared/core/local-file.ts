@@ -2,12 +2,14 @@
 // Shared, gate-exempt file helpers behind the domain local stores.
 // Layout mirrors workspace-registry.ts path resolution:
 //   <registryDir>/localstore/*.json + messages/<channelId>.jsonl
+//                                    + events/<channelId>.jsonl (§29 log)
 // where registryDir = dirname(workspaces.json).
 // ponytail: single-process mutex via per-file promise chains (same shape
 // as workspace-registry withLock). Multi-process writers (api+worker) need
 // PG; local mode is inline single-process (desktop default).
 
-import { promises as fs } from "node:fs";
+import { promises as fs, mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 
 let testDirOverride: string | null = null;
@@ -25,10 +27,19 @@ function resolveRegistryFilePath(): string {
   return resolve(process.cwd(), "sandbox", "workspaces.json");
 }
 
+let vitestFallbackDir: string | null = null;
+
 export function resolveLocalStoreDir(): string {
   if (testDirOverride) return testDirOverride;
   const outright = process.env.CROWDOS_LOCALSTORE_DIR?.trim();
   if (outright) return resolve(outright);
+  // Test hygiene: unit tests must never read/write the developer's real
+  // localstore (dual-write mirrors + union reads would leak across suites).
+  // Explicit per-test dirs (setLocalStoreDirForTests) still win.
+  if (process.env.VITEST && !vitestFallbackDir) {
+    vitestFallbackDir = mkdtempSync(join(tmpdir(), "crowdos-test-store-"));
+  }
+  if (vitestFallbackDir) return vitestFallbackDir;
   return join(dirname(resolveRegistryFilePath()), "localstore");
 }
 
@@ -39,6 +50,11 @@ function withFileLock<T>(key: string, fn: () => Promise<T>): Promise<T> {
   const next = prev.then(fn, fn);
   chains.set(key, next.then(() => undefined, () => undefined));
   return next;
+}
+
+/** Public mutex for file-level read-modify-write outside the JSON helpers. */
+export function withStoreLock<T>(key: string, fn: () => Promise<T>): Promise<T> {
+  return withFileLock(key, fn);
 }
 
 async function readText(path: string): Promise<string | null> {
@@ -103,20 +119,61 @@ export async function mutateJsonObject<V>(
   });
 }
 
-/** Append one JSON line to messages/<channelId>.jsonl (locked). */
-export async function appendJsonl(channelId: string, row: Record<string, unknown>): Promise<void> {
-  const safe = channelId.replace(/[^A-Za-z0-9_-]/g, "_");
-  await withFileLock(`jsonl:${safe}`, async () => {
-    const dir = join(resolveLocalStoreDir(), "messages");
+/** Channel-id → file-name stem. Shared by every per-channel JSONL log. */
+function safeChannelFileId(channelId: string): string {
+  return channelId.replace(/[^A-Za-z0-9_-]/g, "_");
+}
+
+/**
+ * Append one JSON line to <dirName>/<channelId>.jsonl (locked per file).
+ *
+ * `repairTornTail` (opt-in, used by the §29 event log): if the file's last byte
+ * is not a newline, the previous append died mid-write. Without a separator the
+ * next line would be glued onto the fragment and BOTH records would be lost to
+ * the reader. Writing the missing newline first keeps one line per record — the
+ * torn line is skipped by the reader, and everything appended after it survives.
+ */
+async function appendJsonlLine(
+  dirName: string,
+  channelId: string,
+  row: Record<string, unknown>,
+  opts: { repairTornTail?: boolean } = {},
+): Promise<void> {
+  const safe = safeChannelFileId(channelId);
+  await withFileLock(`jsonl:${dirName}:${safe}`, async () => {
+    const dir = join(resolveLocalStoreDir(), dirName);
     await fs.mkdir(dir, { recursive: true });
-    await fs.appendFile(join(dir, `${safe}.jsonl`), JSON.stringify(row) + "\n", "utf8");
+    const file = join(dir, `${safe}.jsonl`);
+    if (opts.repairTornTail) await terminateTornTail(file);
+    await fs.appendFile(file, JSON.stringify(row) + "\n", "utf8");
   });
 }
 
+/** Append a closing newline when the file ends mid-line. No-op when clean. */
+async function terminateTornTail(file: string): Promise<void> {
+  let handle: Awaited<ReturnType<typeof fs.open>> | null = null;
+  try {
+    handle = await fs.open(file, "r+");
+    const { size } = await handle.stat();
+    if (size === 0) return;
+    const lastByte = Buffer.alloc(1);
+    await handle.read(lastByte, 0, 1, size - 1);
+    if (lastByte[0] !== 0x0a) await handle.write("\n", size);
+  } catch (err: any) {
+    if (err?.code === "ENOENT") return; // nothing to repair yet
+    throw err;
+  } finally {
+    await handle?.close().catch(() => {});
+  }
+}
+
 /** Read all JSON lines for a channel; missing file reads as []. */
-export async function readJsonl(channelId: string): Promise<Array<Record<string, unknown>>> {
-  const safe = channelId.replace(/[^A-Za-z0-9_-]/g, "_");
-  const raw = await readText(join(resolveLocalStoreDir(), "messages", `${safe}.jsonl`));
+async function readJsonlLines(
+  dirName: string,
+  channelId: string,
+): Promise<Array<Record<string, unknown>>> {
+  const safe = safeChannelFileId(channelId);
+  const raw = await readText(join(resolveLocalStoreDir(), dirName, `${safe}.jsonl`));
   if (!raw) return [];
   const rows: Array<Record<string, unknown>> = [];
   for (const line of raw.split("\n")) {
@@ -130,4 +187,29 @@ export async function readJsonl(channelId: string): Promise<Array<Record<string,
     }
   }
   return rows;
+}
+
+/** Append one JSON line to messages/<channelId>.jsonl (locked). */
+export async function appendJsonl(channelId: string, row: Record<string, unknown>): Promise<void> {
+  return appendJsonlLine("messages", channelId, row);
+}
+
+/** Read all JSON lines for a channel; missing file reads as []. */
+export async function readJsonl(channelId: string): Promise<Array<Record<string, unknown>>> {
+  return readJsonlLines("messages", channelId);
+}
+
+/**
+ * §29 local event log: append one JSON line to events/<channelId>.jsonl.
+ * Same append-only + torn-tail-tolerant rules as the message log; the mutex is
+ * per file (`jsonl:events:<id>`), so event and message appends never block each
+ * other for the same channel.
+ */
+export async function appendEventJsonl(channelId: string, row: Record<string, unknown>): Promise<void> {
+  return appendJsonlLine("events", channelId, row, { repairTornTail: true });
+}
+
+/** Read all event-log lines for a channel; missing file reads as []. */
+export async function readEventJsonl(channelId: string): Promise<Array<Record<string, unknown>>> {
+  return readJsonlLines("events", channelId);
 }

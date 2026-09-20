@@ -1,21 +1,30 @@
 import type { IncomingHttpHeaders } from "node:http";
 
 import { authGate } from "../auth/auth-gate.js";
+import { isLoopbackPeer } from "../core/loopback.js";
 import type { ApiKeyRole } from "../../db/schema.js";
 
 /**
- * SEC-2 socket trust — strict-only: identity is resolved exclusively from the
- * handshake credential, never from client-declared userId/workspaceId claims.
+ * SEC-2 socket trust — key-first: identity is resolved from the handshake
+ * credential, never from client-declared userId/workspaceId claims.
+ * Keyless handshakes are accepted only from loopback peers (same-machine
+ * single user — the same trust boundary as every REST route); the middleware
+ * mints that identity server-side, it never honors client claims for it.
  */
 
 export interface SocketIdentity {
-  mode: "apikey";
+  mode: "apikey" | "loopback";
   userId: string;
   workspaceId: string;
   keyId?: string;
   label?: string | null;
   role?: ApiKeyRole;
 }
+
+// §19 trust boundary: the predicate is shared with the REST auth gate so both
+// transports provably agree on "same machine". Re-exported here because this
+// module is the historical import site for socket callers and its tests.
+export { isLoopbackPeer } from "../core/loopback.js";
 
 export function extractHandshakeKey(
   auth: Record<string, unknown> | undefined,

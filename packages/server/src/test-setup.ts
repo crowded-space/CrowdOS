@@ -194,6 +194,15 @@ vi.mock("./shared/config/database.js", async (importOriginal) => {
   runWithDb: <T>(db: unknown, fn: () => T): T => fn(),
   dbScopeKey: () => "global",
   isDatabaseConfigured: () => true,
+  isConnectionError: () => false,
+  noteDbFailure: () => {},
+  noteDbSuccess: () => {},
+  resolveTier: () => ({ tier: "dual", url: "mock" }),
+  withStoreFallback: async (_ctx: unknown, dbOp: () => Promise<unknown>) => dbOp(),
+  dualWrite: async ({ pgWrite, localWrite }: { pgWrite: () => Promise<unknown>; localWrite: () => Promise<unknown> }) => {
+    await pgWrite();
+    return localWrite();
+  },
   __socketTestDb: {
     store,
     reset() {
@@ -223,6 +232,9 @@ vi.mock("./channels/channel-gate.js", async (importOriginal) => {
     create: async () => ({}),
     update: async () => ({}),
     remove: async () => ({}),
+    // §6-8 pins: unset in socket tests (Auto + hierarchy defaults).
+    getSettings: async () => null,
+    updateSettings: async () => ({ settings: null }),
   },
   __socketTestChannelGate: {
     setOverride(fn: ((id: string) => Promise<unknown>) | null) {

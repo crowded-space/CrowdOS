@@ -34,6 +34,17 @@ export interface LocalChannelRow {
 
 const CATEGORIES_FILE = "categories.json";
 const CHANNELS_FILE = "channels.json";
+const CHANNEL_SETTINGS_FILE = "channel-settings.json";
+
+export interface LocalChannelSettingsRow {
+  channelId: string;
+  /** §30 scope: the settings PK is (channelId, workspaceId), not channelId alone. */
+  workspaceId: string;
+  pinnedRuntime: string | null;
+  activeAgentId: string | null;
+  defaultAgentId: string | null;
+  updatedAt: string;
+}
 
 function reviveCategory(row: LocalCategoryRow): any {
   return { ...row, createdAt: new Date(row.createdAt) };
@@ -65,6 +76,7 @@ export async function localGetCategory(id: string): Promise<any | null> {
 }
 
 export async function localCreateCategory(input: {
+  id?: string;
   name: string;
   workspaceId?: string | null;
   ownedByAgentId?: string | null;
@@ -74,7 +86,7 @@ export async function localCreateCategory(input: {
 }): Promise<any> {
   const now = new Date().toISOString();
   const row: LocalCategoryRow = {
-    id: randomUUID(),
+    id: input.id ?? randomUUID(),
     name: input.name,
     workspaceId: input.workspaceId ?? "default",
     folderPath: null,
@@ -146,6 +158,7 @@ export async function localCategoryExists(categoryId: string): Promise<boolean> 
 }
 
 export async function localCreateChannel(input: {
+  id?: string;
   name: string;
   type: string;
   createdBy: string;
@@ -168,7 +181,7 @@ export async function localCreateChannel(input: {
 
   const now = new Date().toISOString();
   const row: LocalChannelRow = {
-    id: randomUUID(),
+    id: input.id ?? randomUUID(),
     categoryId: input.categoryId ?? null,
     workspaceId: input.workspaceId ?? "default",
     folderPath: null,
@@ -224,6 +237,63 @@ export async function localDeleteChannel(id: string): Promise<{ deleted?: true; 
   }
   await mutateJsonArray<LocalChannelRow>(CHANNELS_FILE, (all) => all.filter((r) => r.id !== id));
   return { deleted: true };
+}
+
+// ─── Channel settings (§6-8 pins: runtime, active agent, default agent) ──
+// §30: rows are keyed by the (channelId, workspaceId) PAIR. Two workspaces that
+// each own a channel with the same id keep independent rows here, mirroring the
+// composite PK on the PG table (migration 0020).
+
+/** Unscoped placeholder used across this codebase ("?? default"). */
+const DEFAULT_WORKSPACE_SCOPE = "default";
+
+function settingsScope(workspaceId?: string | null): string {
+  return workspaceId && workspaceId.trim() ? workspaceId : DEFAULT_WORKSPACE_SCOPE;
+}
+
+export async function localGetChannelSettings(
+  channelId: string,
+  workspaceId?: string | null,
+): Promise<LocalChannelSettingsRow | null> {
+  const scope = settingsScope(workspaceId);
+  const rows = await readJsonArray<LocalChannelSettingsRow>(CHANNEL_SETTINGS_FILE);
+  return (
+    rows.find((r) => r.channelId === channelId && settingsScope(r.workspaceId) === scope) ?? null
+  );
+}
+
+export async function localUpsertChannelSettings(
+  channelId: string,
+  patch: { pinnedRuntime?: string | null; activeAgentId?: string | null; defaultAgentId?: string | null },
+  workspaceId?: string | null,
+): Promise<LocalChannelSettingsRow> {
+  const now = new Date().toISOString();
+  const scope = settingsScope(workspaceId);
+  let result: LocalChannelSettingsRow | null = null;
+  await mutateJsonArray<LocalChannelSettingsRow>(CHANNEL_SETTINGS_FILE, (rows) => {
+    const idx = rows.findIndex(
+      (r) => r.channelId === channelId && settingsScope(r.workspaceId) === scope,
+    );
+    if (idx === -1) {
+      result = {
+        channelId,
+        workspaceId: scope,
+        pinnedRuntime: patch.pinnedRuntime ?? null,
+        activeAgentId: patch.activeAgentId ?? null,
+        defaultAgentId: patch.defaultAgentId ?? null,
+        updatedAt: now,
+      };
+      rows.push(result);
+      return;
+    }
+    const next = { ...rows[idx], workspaceId: scope, updatedAt: now };
+    if (patch.pinnedRuntime !== undefined) next.pinnedRuntime = patch.pinnedRuntime;
+    if (patch.activeAgentId !== undefined) next.activeAgentId = patch.activeAgentId;
+    if (patch.defaultAgentId !== undefined) next.defaultAgentId = patch.defaultAgentId;
+    rows[idx] = next;
+    result = next;
+  });
+  return result!;
 }
 
 /** Categories with nested channels (routes/categories.ts list shape parity). */

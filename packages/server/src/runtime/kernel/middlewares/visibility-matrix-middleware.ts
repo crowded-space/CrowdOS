@@ -77,7 +77,11 @@ export class VisibilityMatrixMiddleware implements IContextMiddleware {
       messageGate.listRecent(channelId, SHARED_HISTORY_WINDOW),
     );
 
-    const isLockedIn = agentLockStore.isLockedIn(agent.id, channelId);
+    // §12 durability: the lock store is file-backed and workspace-scoped, so
+    // this is awaited. The middleware stays in the parallel lane (priority 70
+    // <= PARALLEL_LANE_MAX_PRIORITY) — awaiting a local file read is I/O only,
+    // it does not change ordering relative to other stages.
+    const isLockedIn = await agentLockStore.isLockedIn(agent.id, channelId);
 
     // Lock-aware filtering: when locked_in, only self + human messages that mention self are visible
     let filtered: typeof rawMessages;

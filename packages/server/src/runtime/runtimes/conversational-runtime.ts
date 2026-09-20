@@ -49,6 +49,7 @@ export class ConversationalRuntime extends BaseRuntime {
         this.writeReflectionNoteAsync({
           agentId: packet.agentId,
           channelId: packet.channelId,
+          workspaceId: packet.workspaceId,
           importanceScore: 0.6,
           hook,
           brief: cleanBrief,

@@ -16,10 +16,12 @@ import { runWithDb, closeDatabaseConnection } from "./shared/config/database.js"
 import { closeAllWorkspaceDatabases, listWorkspaceRecords, getWorkspaceDb, getWorkspacePinHash, getWorkspaceRecord } from "./workspace/workspace-gate.js";
 import { LocalVFS } from "./vfs/vfs-gate.js";
 import { pinGate, isWorkspaceManagementPath } from "./shared/auth/pin-gate.js";
+import { authGate } from "./shared/auth/auth-gate.js";
 import { startBudgetReconciler } from "./shared/core/token-tracker.js";
 import { runsGate } from "./runs/runs-gate.js";
 import { startApprovalSweeper } from "./approvals/approval-sweeper.js";
 import { queueGate } from "./queue/queue-gate.js";
+import { eventsGate } from "./events/events-gate.js";
 
 export interface BuildServerOptions {
   host?: string;
@@ -234,7 +236,7 @@ export async function buildServer(opts?: BuildServerOptions): Promise<BuiltServe
         done(
           Object.assign(
             new Error(`Workspace database resolution timed out for workspace ${trimmedWsId}.`),
-            { statusCode: 503, code: "WORKSPACE_DB_OFFLINE" },
+            { statusCode: 503, code: "WORKSPACE_DB_OFFLINE", suggestion: "The workspace database is unreachable; the app keeps serving local files where possible. Check the database connection or switch the workspace to Local-first storage." },
           ),
         ),
       );
@@ -251,6 +253,7 @@ export async function buildServer(opts?: BuildServerOptions): Promise<BuiltServe
           Object.assign(new Error(message), {
             statusCode: 503,
             code: "WORKSPACE_DB_OFFLINE",
+            suggestion: "The workspace database is unreachable; the app keeps serving local files where possible. Check the database connection or switch the workspace to Local-first storage.",
           }),
         );
       });
@@ -293,11 +296,34 @@ export async function buildServer(opts?: BuildServerOptions): Promise<BuiltServe
     );
   });
 
+  // Dual-boot honesty: PG-only surfaces degrade with explicit codes in local
+  // tier instead of raw 500s. Registered after the tenant hook so workspaceId
+  // is already resolved for per-workspace preference checks.
+  try {
+    const { registerLocalModeGuard } = await import("./shared/core/local-mode-guard.js");
+    await registerLocalModeGuard(app);
+  } catch {}
+
   // Local screenlock PIN — explicit opt-in (global LOCAL_PIN env and/or per-
   // workspace screenlock PIN). When nothing is configured the gate is disabled
   // and all requests pass; there is no insecure default PIN.
   pinGate.setWorkspacePinResolver((wsId) => getWorkspacePinHash(wsId));
   app.addHook("onRequest", pinGate.requirePin);
+
+  // ── SEC-1 auth gate, MOUNTED (CrowdOS §19) ─────────────────────────────
+  // requireAuth is a strict default-deny API-key check, but it was previously
+  // registered on nothing, so every route was effectively unauthenticated while
+  // the code advertised a gate. A default-deny gate that is never mounted is a
+  // liability, not a control. It is registered globally here, after the tenant
+  // and PIN hooks so request.workspaceId is resolved before identity is set.
+  //
+  // Trust model (§19 is a single-user local app): a keyless request from a
+  // LOOPBACK peer is trusted, exactly as the socket handshake already trusts a
+  // keyless loopback connection (shared/sockets/socket-auth.ts). The embedded
+  // desktop backend listens on loopback only, so it keeps working keylessly;
+  // every non-loopback caller must present a valid key. Exemptions below are the
+  // pre-key portal/discovery surface the client needs to enumerate workspaces.
+  app.addHook("onRequest", authGate.requireAuthMounted);
 
   // Rate limiting (per-IP, pin-independent)
   await registerRateLimit(app);
@@ -307,6 +333,15 @@ export async function buildServer(opts?: BuildServerOptions): Promise<BuiltServe
 
   const eventBroker = new EventBroker();
   setSharedBroker(eventBroker);
+  // ── §29 local event log (single append hook) ───────────────────────────
+  // One `onAny` subscriber owns persistence for the whole process, exactly as
+  // the retired durable_events dual-write did: producers emit, the log decides
+  // what is durable. Registered here (the factory every boot path uses —
+  // index.ts dev, desktop embedded backend, tests) so no call site appends by
+  // hand. Classification (ephemeral `message:stream`, channelId required) and
+  // the append itself are owned by the Events domain; this line only wires it.
+  // Fire-and-forget: local log lag must never block or fail live delivery.
+  eventBroker.onAny((event) => eventsGate.recordDetached(event));
   initRuntime();
   // QUE-2: when QUEUE_MODE=bullmq, local maintenance timers are replaced by
   // BullMQ repeatable jobs (runs/maintenance). API skips timers and never
@@ -321,6 +356,16 @@ export async function buildServer(opts?: BuildServerOptions): Promise<BuiltServe
     } catch {}
     try {
       startApprovalSweeper(eventBroker);
+    } catch {}
+    // Dual-boot: drain the local→PG outbox while any database is reachable.
+    // Replay ops are idempotent by construction, so a worker-side drain (when
+    // one exists) can safely overlap. Success doubles as a health proof.
+    try {
+      const { drainOutbox } = await import("./shared/core/workspace-sync.js");
+      const outboxTimer = setInterval(() => {
+        void drainOutbox(null).catch((err) => app.log.warn({ err }, "Notice: outbox drain tick failed"));
+      }, 30_000);
+      outboxTimer.unref?.();
     } catch {}
   } else if (isBullMqApi) {
     // Single owner = worker: API never runs local sweep timers in bullmq

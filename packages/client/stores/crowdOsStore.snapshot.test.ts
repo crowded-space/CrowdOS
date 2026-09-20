@@ -1,7 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 // Harness socket: capture server-push handlers so tests can emit snapshots.
-const handlers: Record<string, (raw: any) => void> = {};
+// vi.hoisted so the registry exists before the hoisted vi.mock factory runs.
+const handlers = vi.hoisted(() => ({} as Record<string, (raw: any) => void>));
 vi.mock("../src/config/socket", () => ({
   socket: {
     on: (ev: string, fn: (raw: any) => void) => {
@@ -21,7 +22,9 @@ const tenantAgent = { id: "agent-owl", name: "Owl" };
 const foreignAgent = { id: "agent-x", name: "audit_spark" };
 
 function emitSnapshot(payload: Record<string, unknown>) {
-  handlers["runtime:snapshot"]({ payload });
+  // Real socket emissions are enveloped ({eventId, seq, type, payload});
+  // unwrapEnvelope only unwraps objects carrying an envelope marker.
+  handlers["runtime:snapshot"]({ eventId: "evt-test", seq: null, type: "runtime:snapshot", payload });
 }
 
 describe("runtime:snapshot roster scoping", () => {

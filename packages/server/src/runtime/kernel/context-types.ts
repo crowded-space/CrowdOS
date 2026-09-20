@@ -20,6 +20,12 @@ export interface MutableContextPacket {
   taskFileContext?: string;
   memoryPreviewBlock?: string;
   tools: LLMToolDefinition[];
+  /**
+   * CrowdOS §26 visible_capabilities: discovery-first capability summaries
+   * (id + domain + one line, never schemas). Populated by ToolSchemaMiddleware
+   * and lifted onto the assembled ContextPacket/RuntimePacket.
+   */
+  visibleCapabilities?: import("../../capabilities/capabilities-gate.js").VisibleCapability[];
   history: HistoryMessage[];
   userPrompt: string;
   policies: RuntimePolicy;

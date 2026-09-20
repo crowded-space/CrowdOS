@@ -788,7 +788,7 @@ export class ToolRegistry {
         try {
           const { readMemoryNote } = await import("../memories/memories-gate.js");
           const agentId = args.agent_id || ctx?.agentId || "agent-raven";
-          const result = await readMemoryNote(agentId, args.note_id, { updateAccess: true });
+          const result = await readMemoryNote(agentId, args.note_id, { updateAccess: true }, { workspaceId: ctx?.workspaceId });
 
           if (!result.ok) {
             return { success: false, output: "", error: result.error.message };
@@ -856,7 +856,8 @@ export class ToolRegistry {
             agentId,
             ctx?.channelId ?? "",
             args.note_id,
-            args.reason ?? "not specified"
+            args.reason ?? "not specified",
+            { workspaceId: ctx?.workspaceId }
           );
           return {
             success: true,
@@ -896,11 +897,14 @@ export class ToolRegistry {
           if (!agentId || !channelId) {
             return { success: false, output: "", error: "agentId and channelId required (via context or channel_id)." };
           }
-          const already = agentLockStore.isLockedIn(agentId, channelId);
+          const already = await agentLockStore.isLockedIn(agentId, channelId);
           if (already) {
             return { success: true, output: `🔒 Already locked in — channel ${channelId} is in isolated SELF-only view. Use lock_out to restore.` };
           }
-          agentLockStore.lockIn(agentId, channelId);
+          // Durable + workspace-scoped (§12/§30): the lock lands in the
+          // owning workspace's locks/<workspaceId>.json, so it survives a
+          // restart and applies in the bullmq worker process too.
+          await agentLockStore.lockIn(agentId, channelId);
           return { success: true, output: `🔒 Locked in: channel ${channelId} is now isolated to your own messages + direct human inputs that mention you. Other agents' chatter hidden. Call lock_out to restore full roster visibility.` };
         } catch (err: any) {
           return { success: false, output: "", error: err.message || String(err) };
@@ -933,11 +937,11 @@ export class ToolRegistry {
           if (!agentId || !channelId) {
             return { success: false, output: "", error: "agentId and channelId required (via context or channel_id)." };
           }
-          const wasLocked = agentLockStore.isLockedIn(agentId, channelId);
+          const wasLocked = await agentLockStore.isLockedIn(agentId, channelId);
           if (!wasLocked) {
             return { success: true, output: `🔓 Already in open context — channel ${channelId} shows full roster. No lock to release.` };
           }
-          agentLockStore.lockOut(agentId, channelId);
+          await agentLockStore.lockOut(agentId, channelId);
           return { success: true, output: `🔓 Locked out: channel ${channelId} restored to full multi-agent roster visibility (history tags: [From @...]).` };
         } catch (err: any) {
           return { success: false, output: "", error: err.message || String(err) };
@@ -995,7 +999,7 @@ export class ToolRegistry {
             observed: args.observed ?? "",
             interpreted: args.interpreted ?? "",
             futureRelevance: args.future_relevance ?? "",
-          });
+          }, { workspaceId: ctx?.workspaceId });
 
           if (!result.ok) {
             return { success: false, output: "", error: result.error.message };
@@ -1009,6 +1013,206 @@ export class ToolRegistry {
           return { success: false, output: "", error: err.message || String(err) };
         }
       }
+    });
+
+    // 16. Tooling: open_detail — §21 lazy capability expansion.
+    //
+    // The agent is told about capabilities as one-line summaries
+    // (visible_capabilities on the packet). This tool turns ONE of them into the
+    // full argument schemas on demand, which is what keeps the context economy
+    // from paying for every tool up front.
+    //
+    // Scope: expansion is agent-scoped through the capability service, so an
+    // agent cannot expand a capability it was never offered. The returned
+    // schemas describe tools the agent is ALREADY authorized for — expansion
+    // discloses shape, never grants access (authorization still happens in
+    // ToolExecutor on every call).
+    this.register({
+      id: "open_detail",
+      name: "open_detail",
+      displayName: "Open Capability Detail",
+      description:
+        "Expand one capability into the full schemas of the tools that realize it. " +
+        "Use this when a capability listed in your context looks relevant and you need " +
+        "its exact arguments before calling it. Pass capability_id (e.g. \"sandbox.exec\"). " +
+        "Call with no capability_id to list the capabilities available to you.",
+      category: "context",
+      sourceType: "native",
+      parameters: {
+        type: "object",
+        properties: {
+          capability_id: {
+            type: "string",
+            description: "Capability id to expand, e.g. \"sandbox.exec\" or \"memory.find\". Omit to list available capabilities.",
+          },
+        },
+        required: [],
+      },
+      dangerLevel: "safe",
+      handler: async (args, ctx) => {
+        try {
+          const { capabilitiesGate } = await import("../capabilities/capabilities-gate.js");
+          const agentId = ctx?.agentId;
+          if (!agentId) {
+            return { success: false, output: "", error: "open_detail requires an agent context." };
+          }
+          const capabilityId = typeof args?.capability_id === "string" ? args.capability_id.trim() : "";
+          const toolId = typeof args?.tool_id === "string" ? args.tool_id.trim() : "";
+
+          // Escape hatch: expand a SINGLE tool by id. Without this, a tool that no
+          // capability descriptor names would become unreachable once the packet
+          // defers non-reflex tools — the deferral would hide it with no way back.
+          if (!capabilityId && toolId) {
+            const t = toolRegistry.get(toolId);
+            if (!t) {
+              return { success: false, output: "", error: `No tool with id "${toolId}".` };
+            }
+            const { skillsGate: skills } = await import("../skills/skills-gate.js");
+            let authorized: string[] = [];
+            try {
+              authorized = await skills.getResolvedToolsForAgent(agentId);
+            } catch {
+              authorized = [];
+            }
+            if (!authorized.includes(toolId)) {
+              return { success: false, output: "", error: `Tool "${toolId}" is not authorized for you.` };
+            }
+            const schema = { name: t.name, description: t.description, inputSchema: t.parameters as unknown as Record<string, unknown> };
+            let addedSingle = 0;
+            try {
+              const { recordToolExpansion } = await import("../shared/core/tool-expansion-registry.js");
+              addedSingle = recordToolExpansion(ctx?.runId ?? null, `tool:${toolId}`, [schema]);
+            } catch {}
+            return {
+              success: true,
+              output: JSON.stringify({ tool: t.name, schema, callable_now: true, newly_added: addedSingle > 0 }, null, 2),
+            };
+          }
+
+          if (!capabilityId) {
+            const visible = await capabilitiesGate.visibleFor(agentId);
+            if (visible.length === 0) {
+              return { success: true, output: "No capabilities are available to you in this context." };
+            }
+            const byDomain = new Map<string, string[]>();
+            for (const c of visible) {
+              const list = byDomain.get(c.domain) ?? [];
+              list.push(`${c.id} \u2014 ${c.summary}`);
+              byDomain.set(c.domain, list);
+            }
+            const lines: string[] = ["Available capabilities (expand one with open_detail):"];
+            for (const [domain, entries] of byDomain) {
+              lines.push(`\n[${domain}]`);
+              for (const e of entries) lines.push(`- ${e}`);
+            }
+            return { success: true, output: lines.join("\n") };
+          }
+
+          const expanded = await capabilitiesGate.expand(agentId, capabilityId);
+          if (!expanded) {
+            return {
+              success: false,
+              output: "",
+              error: `Capability \"${capabilityId}\" is not available to you. Call open_detail with no capability_id to list what is.`,
+            };
+          }
+          // §21 lazy expansion: register the disclosed schemas for this RUN so
+          // the next model call can actually invoke them. Discovery + disclosure
+          // alone would still leave the tools uncallable, because native function
+          // calling only accepts schemas present in the request. This does NOT
+          // grant access — ToolExecutor re-authorizes every call.
+          let newlyCallable = 0;
+          try {
+            const { recordToolExpansion } = await import("../shared/core/tool-expansion-registry.js");
+            newlyCallable = recordToolExpansion(ctx?.runId ?? null, expanded.id, expanded.toolSchemas);
+          } catch {
+            // Registry unavailable: still return the schemas so the agent can
+            // reason about them, even though they are not yet callable.
+          }
+          return {
+            success: true,
+            output: JSON.stringify(
+              {
+                capability: expanded.id,
+                domain: expanded.domain,
+                summary: expanded.summary,
+                tools: expanded.toolSchemas,
+                callable_now: newlyCallable > 0 || expanded.toolSchemas.length > 0,
+              },
+              null,
+              2,
+            ),
+          };
+        } catch (err: any) {
+          return { success: false, output: "", error: err?.message || String(err) };
+        }
+      },
+    });
+
+    // 17. Skills: load_skill — §20 lazy skill expansion.
+    //
+    // Discovery advertises installed Markdown skills as one-line entries; this
+    // tool pulls ONE skill’s full body into the working context on demand. That
+    // split is the whole point of §20 ("discoverable and expanded on demand
+    // rather than fully injected into every context").
+    this.register({
+      id: "load_skill",
+      name: "load_skill",
+      displayName: "Load Skill",
+      description:
+        "Expand an installed skill into your working context. Skills are listed by name and id " +
+        "in your context but their contents are NOT loaded until you ask. Pass skill_id to load " +
+        "one, or pass several comma-separated ids to compose them into a single workflow (§20 " +
+        "skills are composable). Call with no skill_id to list what is installed.",
+      category: "context",
+      sourceType: "native",
+      parameters: {
+        type: "object",
+        properties: {
+          skill_id: {
+            type: "string",
+            description: "Skill id to expand. Comma-separate several ids to compose them in order. Omit to list installed skills.",
+          },
+        },
+        required: [],
+      },
+      dangerLevel: "safe",
+      handler: async (args) => {
+        try {
+          const { skillsGate } = await import("../skills/skills-gate.js");
+          const raw = typeof args?.skill_id === "string" ? args.skill_id.trim() : "";
+
+          if (!raw) {
+            const summaries = await skillsGate.listMarkdownSummaries();
+            if (summaries.length === 0) {
+              return { success: true, output: "No Markdown skills are installed in this workspace." };
+            }
+            const lines = ["Installed skills (expand one with load_skill):"];
+            for (const s of summaries) {
+              lines.push(`- ${s.id} (${s.category}): ${s.name} \u2014 ${s.description}`);
+            }
+            return { success: true, output: lines.join("\n") };
+          }
+
+          const ids = raw.split(",").map((s) => s.trim()).filter(Boolean);
+          if (ids.length === 1) {
+            const skill = await skillsGate.getMarkdownSkill(ids[0]);
+            if (!skill) {
+              return { success: false, output: "", error: `No enabled skill with id "${ids[0]}". Call load_skill with no skill_id to list what is installed.` };
+            }
+            return { success: true, output: `# Skill: ${skill.name} (${skill.category})\n\n${skill.body}` };
+          }
+
+          const composed = await skillsGate.composeMarkdownSkills(ids);
+          if (composed.resolved.length === 0) {
+            return { success: false, output: "", error: `None of the requested skills exist: ${composed.missing.join(", ")}.` };
+          }
+          const note = composed.missing.length > 0 ? `\n\n(skipped unknown skills: ${composed.missing.join(", ")})` : "";
+          return { success: true, output: composed.body + note };
+        } catch (err: any) {
+          return { success: false, output: "", error: err?.message || String(err) };
+        }
+      },
     });
   }
 }

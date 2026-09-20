@@ -5,7 +5,7 @@ export class MemoryRetrievalMiddleware implements IContextMiddleware {
   readonly priority = 60;
 
   async process(packet: MutableContextPacket, ctx: ContextBuildContext): Promise<void> {
-    const { agent, channelId, userInput } = ctx;
+    const { agent, channelId, userInput, workspaceId } = ctx;
 
     try {
       const { retrieveMemoryCandidates, buildMemoryPreviewBlock } = await import("../../../memories/memories-gate.js");
@@ -19,6 +19,7 @@ export class MemoryRetrievalMiddleware implements IContextMiddleware {
         unresolvedTensions: true,
         recencyBump: true,
         topK: 10,
+        workspaceId,
       });
 
       if (candidates && candidates.length > 0) {

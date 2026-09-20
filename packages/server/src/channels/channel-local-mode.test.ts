@@ -2,13 +2,20 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeEach, describe, expect, it } from "vitest";
 
 import { setLocalStoreDirForTests } from "../shared/core/local-file.js";
+import { env } from "../shared/config/env.js";
 
-vi.mock("../shared/config/database.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../shared/config/database.js")>();
-  return { ...actual, isDatabaseConfigured: () => false };
+// True no-DB simulation: unset the import-time env singleton so the REAL tier
+// resolution (not a mock predicate) takes the local path. Restored afterwards.
+// NOTE: mocking database.js predicates does NOT affect dualWrite internals —
+// ES live bindings resolve to the real module scope.
+const prevDatabaseUrl = env.DATABASE_URL;
+(env as any).DATABASE_URL = undefined;
+
+afterAll(() => {
+  (env as any).DATABASE_URL = prevDatabaseUrl;
 });
 
 import { channelGate } from "./channel-gate.js";

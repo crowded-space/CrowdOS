@@ -1,5 +1,6 @@
 import type { TokenUsage } from '../types/tool.types.js'
 import type { EventBroker } from '../event-broker/event-broker-gate.js'
+import type { VisibleCapability } from '../capabilities/capabilities-gate.js'
 
 export type { TokenUsage }
 
@@ -101,6 +102,13 @@ export interface ContextPacket {
   resumeContext?: ResumeContext | null
   /** CrowdOS §26 interpreter_output: semantic intent attached by the Executor. */
   interpreterOutput?: InterpreterOutput
+  /**
+   * CrowdOS §26 visible_capabilities: discovery-first capability view for this
+   * agent (id + domain + one-line summary, never schemas). Populated by the
+   * ToolSchemaMiddleware so runtimes and providers can surface what is possible
+   * without expanding every tool schema up front (§21).
+   */
+  visibleCapabilities?: VisibleCapability[]
 }
 
 export interface RuntimeResult {

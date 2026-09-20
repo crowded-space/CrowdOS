@@ -37,10 +37,17 @@ export function setupErrorHandler(app: FastifyInstance) {
       request.log.warn({ statusCode, message: error.message }, `Request error: ${error.message}`);
     }
     
+    // Dual-boot honesty: pass through machine-readable codes and user-facing
+    // recovery suggestions when throw-sites provide them (e.g.
+    // LOCAL_MODE_DEGRADED / WORKSPACE_DB_OFFLINE).
+    const code = (error as any).code;
+    const suggestion = (error as any).suggestion;
     return reply.status(statusCode).send({
       statusCode,
       error: error.name || "Internal Server Error",
+      ...(typeof code === "string" ? { code } : {}),
       message: error.statusCode ? error.message : "An unexpected error occurred",
+      ...(typeof suggestion === "string" ? { suggestion } : {}),
     });
   });
 }

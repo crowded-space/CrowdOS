@@ -5,6 +5,7 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { randomUUID } from "node:crypto";
 import { getDb, closeDatabaseConnection } from "../shared/config/database.js";
+import { localModeDegraded } from "../shared/core/local-mode-guard.js";
 import { env } from "../shared/config/env.js";
 import { workspaces, workspaceSettings } from "../db/schema.js";
 import {
@@ -58,6 +59,8 @@ const patchWorkspaceSchema = z.object({
   icon: z.string().trim().min(1).max(50).optional(),
   databaseUrl: z.string().nullable().optional(),
   rootPath: z.string().optional(),
+  // Dual-boot: "default" = dual-write w/ DB first-class; "local" = DB writes paused.
+  storagePreference: z.enum(["default", "local"]).optional(),
 });
 
 const testDatabaseSchema = z.object({
@@ -82,7 +85,19 @@ function resolveRequestDb(request: FastifyRequest) {
     err.code = "WORKSPACE_DB_OFFLINE";
     throw err;
   }
-  return req.db || getDb();
+  if (req.db) return req.db;
+  try {
+    return getDb();
+  } catch {
+    // Dual-boot honesty: single-DB settings/budget have no local tier —
+    // surface degraded-with-suggestion instead of a raw 500 throw.
+    const degraded: any = new Error(localModeDegraded("Workspace settings").message);
+    degraded.statusCode = 503;
+    degraded.code = "LOCAL_MODE_DEGRADED";
+    degraded.suggestion =
+      "Connect a database to this workspace (Workspace Overview → Database) to enable budgets and shared settings. Chat, channels, and files keep working locally.";
+    throw degraded;
+  }
 }
 
 export async function workspaceRoutes(app: FastifyInstance) {
@@ -234,10 +249,23 @@ export async function workspaceRoutes(app: FastifyInstance) {
         } catch {}
       }
 
+      // 8. Dual-boot pairing for fresh DB attaches (existing-DB content
+      // matrix: pair/import/push/converge/conflict). Registry record already
+      // saved above so evaluation can read it.
+      let pairing: any = null;
+      if (hasDb) {
+        const { evaluateDbPairing } = await import("../shared/core/workspace-sync.js");
+        pairing = await evaluateDbPairing(id).catch((err: any) => {
+          request.log.warn({ err }, "Notice: DB pairing evaluation deferred");
+          return null;
+        });
+      }
+
       const descriptor = await getWorkspaceDescriptor(id);
       return reply.status(201).send({
         ...descriptor,
         metadata: { database: dbMeta },
+        pairing,
       });
     }
   );
@@ -290,7 +318,7 @@ export async function workspaceRoutes(app: FastifyInstance) {
     { schema: { body: patchWorkspaceSchema }, bodyLimit: 8_192, config: { rateLimit: { max: 30, timeWindow: 60_000 } } },
     async (request, reply) => {
       const { id } = request.params;
-      const { name, icon, databaseUrl, rootPath } = request.body;
+      const { name, icon, databaseUrl, rootPath, storagePreference } = request.body;
 
       const record = await getWorkspaceRecord(id);
       let updatedDbMeta: any = undefined;
@@ -300,9 +328,11 @@ export async function workspaceRoutes(app: FastifyInstance) {
         await closeWorkspaceDatabase(id);
         if (record) {
           record.databaseUrl = "";
+          record.dbSync = null;
           if (name !== undefined) record.name = name;
           if (icon !== undefined) record.icon = icon;
           if (rootPath !== undefined) record.rootPath = rootPath;
+          if (storagePreference !== undefined) record.storagePreference = storagePreference;
           await saveWorkspaceRecord(record);
         }
         try {
@@ -346,6 +376,7 @@ export async function workspaceRoutes(app: FastifyInstance) {
         if (name !== undefined) record.name = name;
         if (icon !== undefined) record.icon = icon;
         if (rootPath !== undefined) record.rootPath = rootPath;
+        if (storagePreference !== undefined) record.storagePreference = storagePreference;
         await saveWorkspaceRecord(record);
       }
 
@@ -359,10 +390,27 @@ export async function workspaceRoutes(app: FastifyInstance) {
         await db.update(workspaces).set(updatePayload).where(eq(workspaces.id, id));
       } catch {}
 
+      // Dual-boot: a fresh attach (or URL change) evaluates pairing inline —
+      // pair, import, push, converge, or quarantine on conflict. Attach is
+      // already a long op (provision ~14s); pairing rides along. State is
+      // also visible any time via GET db-sync.
+      let pairing: any = null;
+      if (typeof databaseUrl === "string" && databaseUrl.trim()) {
+        const { evaluateDbPairing } = await import("../shared/core/workspace-sync.js");
+        pairing = await evaluateDbPairing(id).catch((err: any) => {
+          request.log.warn({ err }, "Notice: DB pairing evaluation deferred");
+          return null;
+        });
+        if (pairing?.action === "conflict") {
+          request.log.warn({ pairing }, "Workspace database conflict quarantined; serving local only");
+        }
+      }
+
       const descriptor = await getWorkspaceDescriptor(id);
       return {
         ...(descriptor || { id, name: record?.name ?? name ?? id, icon: record?.icon ?? icon ?? "💼" }),
         metadata: updatedDbMeta ? { database: updatedDbMeta } : undefined,
+        pairing,
       };
     }
   );
@@ -484,6 +532,82 @@ export async function workspaceRoutes(app: FastifyInstance) {
           error: "Bad Request",
           message: err?.message || "Failed to clear screen lock PIN",
         });
+      }
+    }
+  );
+
+  // ─── Dual-Boot Sync Endpoints ─────────────────────────────────────
+
+  const dbSyncActionSchema = z.object({
+    action: z.enum(["resolve", "sync-now", "rebuild-rag"]),
+    choice: z.enum(["flush-local", "flush-db", "change-db"]).optional(),
+  });
+
+  // GET /api/workspaces/:id/db-sync - Pairing state + backfill backlog
+  app.get<{ Params: { id: string } }>("/api/workspaces/:id/db-sync", async (request, reply) => {
+    const { id } = request.params;
+    const { tierContextFor: tierCtx } = await import("../workspace/workspace-gate.js");
+    const { resolveTier, isUrlReachable } = await import("../shared/config/database.js");
+    const { outboxBacklog } = await import("../shared/core/workspace-sync.js");
+    const { OUTBOX_NOTICE_THRESHOLD } = await import("../shared/core/outbox.js");
+    const record = await getWorkspaceRecord(id);
+    if (!record) {
+      return reply.status(404).send({ statusCode: 404, error: "Not Found", message: `Workspace ${id} not found` });
+    }
+    const ctx = await tierCtx(id);
+    const { tier, url } = resolveTier(ctx);
+    const backlog = await outboxBacklog(id).catch(() => 0);
+    return {
+      workspaceId: id,
+      storagePreference: record.storagePreference === "local" ? "local" : "default",
+      tier,
+      dbConfigured: Boolean(url),
+      dbReachable: isUrlReachable(url),
+      dbSync: record.dbSync ?? null,
+      backlog,
+      backlogNotice: backlog >= OUTBOX_NOTICE_THRESHOLD,
+      suggestion: !url
+        ? "Connect a database to enable dual-boot sync and semantic memory."
+        : undefined,
+    };
+  });
+
+  // POST /api/workspaces/:id/db-sync - Resolve conflict / sync now / rebuild RAG
+  app.post<{ Params: { id: string }; Body: z.infer<typeof dbSyncActionSchema> }>(
+    "/api/workspaces/:id/db-sync",
+    { schema: { body: dbSyncActionSchema } },
+    async (request, reply) => {
+      const { id } = request.params;
+      const { action, choice } = request.body;
+      const record = await getWorkspaceRecord(id);
+      if (!record) {
+        return reply.status(404).send({ statusCode: 404, error: "Not Found", message: `Workspace ${id} not found` });
+      }
+      const sync = await import("../shared/core/workspace-sync.js");
+      try {
+        if (action === "resolve") {
+          if (!choice) {
+            return reply.status(400).send({
+              statusCode: 400, error: "Bad Request",
+              message: "choice is required: flush-local | flush-db | change-db",
+            });
+          }
+          return await sync.resolveDbConflict(id, choice);
+        }
+        if (action === "sync-now") {
+          return await sync.drainOutbox(id);
+        }
+        return await sync.rebuildWorkspaceRag(id);
+      } catch (err: any) {
+        const { isConnectionError } = await import("../shared/config/database.js");
+        if (isConnectionError(err)) {
+          return reply.status(503).send({
+            statusCode: 503, error: "Service Unavailable", code: "WORKSPACE_DB_OFFLINE",
+            message: err?.message || "Database unreachable; still serving local files.",
+            suggestion: "Check the database connection, or continue working locally — pending writes will backfill on recovery.",
+          });
+        }
+        return reply.status(500).send({ statusCode: 500, error: "Internal Server Error", message: err?.message || "Sync action failed" });
       }
     }
   );

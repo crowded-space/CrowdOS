@@ -126,10 +126,14 @@ function unwrapEnvelope(raw: any): { payload: any; seq: number | null; type?: st
   return { payload: raw, seq: raw?.seq ?? null, type: raw?.type, eventId: raw?.eventId };
 }
 
-// ponytail: socket rooms are keyed by bare channel id (shared across workspace
-// DBs for same-id channels like ch-general), so drop events tagged for another
-// workspace. Fires only when the server tags workspaceId; untagged events pass.
-// Full per-workspace room namespacing is the follow-up.
+// DEFENCE-IN-DEPTH ONLY (§30). The server now namespaces every socket room by
+// workspace (`ws:<workspaceId>:channel:<channelId>` / `ws:<workspaceId>`), so a
+// foreign workspace's events never reach this client's socket in the first
+// place — server-side room scoping is the PRIMARY defence. This filter stays as
+// a cheap belt-and-braces check for global/mirrored broadcasts that are tagged
+// with a workspace id (e.g. runtime:snapshot, workspace-room mirrors): it drops
+// anything tagged for a different workspace than the one currently open.
+// Untagged events pass. Do NOT rely on this as the isolation boundary.
 function isForeignWorkspacePayload(payload: any): boolean {
   const wid = payload?.workspaceId;
   return typeof wid === 'string' && wid.length > 0 && wid !== useCrowdOSStore.getState().activeWorkspaceId;
@@ -321,10 +325,27 @@ interface CrowdOSState {
   // Actions
   fetchWorkspaces: () => Promise<void>;
   createWorkspace: (name: string, dbUrl?: string, icon?: string) => Promise<void>;
-  updateWorkspace: (id: string, patch: { name?: string; icon?: string; databaseUrl?: string | null }) => Promise<void>;
+  updateWorkspace: (id: string, patch: { name?: string; icon?: string; databaseUrl?: string | null; storagePreference?: 'default' | 'local' }) => Promise<void>;
   deleteWorkspace: (id: string, opts?: { flush?: boolean }) => Promise<void>;
   enterWorkspace: (id: string) => Promise<void>;
   leaveWorkspace: () => void;
+  // Dual-boot sync state (per active workspace; null when unknown)
+  dbSyncStatus: {
+    storagePreference: 'default' | 'local';
+    tier: 'dual' | 'local';
+    dbConfigured: boolean;
+    dbReachable: boolean;
+    dbSync: { dbWorkspaceId: string | null; state: string; updatedAt: string } | null;
+    backlog: number;
+    backlogNotice: boolean;
+    suggestion?: string;
+  } | null;
+  isSyncing: boolean;
+  fetchDbSync: (id?: string) => Promise<void>;
+  setStoragePreference: (id: string, preference: 'default' | 'local') => Promise<void>;
+  resolveDbConflict: (id: string, choice: 'flush-local' | 'flush-db' | 'change-db') => Promise<any>;
+  syncNow: (id: string) => Promise<any>;
+  rebuildRag: (id: string) => Promise<any>;
   clearTenantSlices: () => void;
   setActiveChannel: (id: string) => Promise<void>;
   
@@ -421,7 +442,8 @@ interface CrowdOSState {
   cancellingByAgent: Record<string, boolean>;
   cancelRun: (channelId: string, agentId?: string) => void;
   clearReconnectDigest: () => void;
-  emitChannelJoin: (channelId: string) => void;
+  /** §30: joins the channel room within the given workspace scope (defaults to the active one). */
+  emitChannelJoin: (channelId: string, workspaceId?: string | null) => void;
   isChannelMuted: (channelId: string) => boolean;
 
   // UX-2 Approval cards
@@ -521,7 +543,10 @@ const initialSelectedMode: ComposerMode = (storedIsPinned && storedSelectedMode)
 
   function emitChannelJoinDebounced(channelId: string) {
     if (!channelId) return;
-    try { emitChannelJoin(channelId); } catch {}
+    // §30: send the active workspace alongside the channel so the server can
+    // scope the join; the server still derives the authoritative room key from
+    // the channel row itself.
+    try { emitChannelJoin(channelId, get().activeWorkspaceId); } catch {}
   }
 
   async function fetchGapAndDigest(channelId: string, afterSeq: number) {
@@ -1026,56 +1051,9 @@ const initialSelectedMode: ComposerMode = (storedIsPinned && storedSelectedMode)
     get().fetchBudget();
   });
 
-  // UX-6: typed contracts + fixed payload — handle both legacy (agentId/name) and new (pairs) shapes
-  socket.on('agent:spawned', (raw: any) => {
-    const { payload, seq } = unwrapEnvelope(raw);
-    if (!payload || isForeignWorkspacePayload(payload)) return;
-    if (typeof seq === 'number' && payload.channelId) persistSeq(payload.channelId, seq);
-    // New shape: { pairs: string[], channelId, batchNum } — do NOT create garbage roster rows
-    if (Array.isArray((payload as any).pairs)) {
-      const pairs = (payload as any).pairs as string[];
-      const batchNum = (payload as any).batchNum;
-      const channelId = payload.channelId;
-      if (pairs.length > 0 && channelId) {
-        const msg: Message = {
-          id: `spawn-${Date.now()}-${Math.random().toString(36).slice(2,6)}`,
-          type: 'system',
-          content: `Swarm spawn batch ${batchNum ?? '?'}: ${pairs.length} worker(s) — ${pairs.slice(0,3).join(', ')}${pairs.length>3?'…':''}`,
-          authorId: 'system',
-          authorName: 'Swarm',
-          channelId,
-          timestamp: new Date().toISOString(),
-          metadata: { pairs, batchNum }
-        };
-        set(state => {
-          const updated = [...state.messages, msg];
-          writeMessagesMirror(capMessagesMirror(updated));
-          return { messages: updated };
-        });
-      }
-      return;
-    }
-    // Legacy single-agent shape
-    if (!(payload as any).agentId) return;
-    set(state => {
-      if (state.agents.some(a => a.id === (payload as any).agentId)) return state;
-      const newAgent: Agent = {
-        id: (payload as any).agentId,
-        name: (payload as any).name,
-        species: (payload as any).species || 'AI Assistant',
-        level: (payload as any).level as AgentLevel,
-        status: 'active',
-        createdAt: (payload as any).timestamp || new Date().toISOString(),
-        lastActive: new Date().toISOString(),
-        description: 'Dynamically spawned agent'
-      };
-      const updated = [...state.agents, newAgent];
-      if (typeof localStorage !== 'undefined') {
-        localStorage.setItem('crowdos_agents', JSON.stringify(updated));
-      }
-      return { agents: updated };
-    });
-  });
+  // agent:spawned / agent:despawned handlers were removed with the L3 spawn
+  // manager (cleanup commit 1c8274e): nothing emits these events, swarm v1
+  // delegates to existing agents instead of spawning new ones.
 
   // UX-6: delegation tree/timeline from SW-2 events — typed via shared contracts
   socket.on('delegation:start' as any, (raw: any) => {
@@ -1552,7 +1530,14 @@ const initialSelectedMode: ComposerMode = (storedIsPinned && storedSelectedMode)
 
     clearReconnectDigest: () => set({ reconnectDigest: null } as any),
 
-    emitChannelJoin: (channelId: string) => emitChannelJoinDebounced(channelId),
+    emitChannelJoin: (channelId: string, workspaceId?: string | null) => {
+      // Explicit workspace wins; otherwise the debounced helper uses the active one.
+      if (workspaceId && workspaceId !== get().activeWorkspaceId) {
+        try { emitChannelJoin(channelId, workspaceId); } catch {}
+        return;
+      }
+      emitChannelJoinDebounced(channelId);
+    },
 
     isChannelMuted: (channelId: string) => isChannelMutedLS(channelId),
 
@@ -1598,6 +1583,8 @@ const initialSelectedMode: ComposerMode = (storedIsPinned && storedSelectedMode)
     isDatabaseOffline: false,
     databaseErrorMessage: null,
     workspaceError: null,
+    dbSyncStatus: null,
+    isSyncing: false,
 
     // Core actions
     fetchWorkspaces: async () => {
@@ -1646,6 +1633,8 @@ const initialSelectedMode: ComposerMode = (storedIsPinned && storedSelectedMode)
               screenLockEnabled: !!dto.screenLockEnabled,
               dbUrl: dto.database?.configured ? `postgresql://***@${dto.database.host}/${dto.database.database}` : '',
               database: dto.database,
+              storagePreference: dto.storagePreference === 'local' ? 'local' : 'default',
+              dbSync: dto.dbSync ?? null,
               categories: existing?.categories || [],
               channels: existing?.channels || [],
               createdAt: dto.createdAt || new Date().toISOString(),
@@ -1716,15 +1705,17 @@ const initialSelectedMode: ComposerMode = (storedIsPinned && storedSelectedMode)
         }
         set({ isDatabaseOffline: false, databaseErrorMessage: null });
 
-        // ponytail: any failed tenant fetch clears slices — partial fresh +
-        // partial stale is how foreign rows survive a refresh.
-        const failedRes = [catRes, chanRes, agentRes, moduleRes, profRes].find(r => !r || !r.ok);
-        if (failedRes) {
-          const detail = await failedRes.clone().json().catch(() => ({} as any));
+        // ponytail: any failed REQUIRED tenant fetch clears slices — partial
+        // fresh + partial stale is how foreign rows survive a refresh.
+        // Dual-boot: module/profile catalogs are optional (local mode has no
+        // catalog tier); only categories/channels/agents can fail the refresh.
+        const requiredFailedRes = [catRes, chanRes, agentRes].find(r => !r || !r.ok);
+        if (requiredFailedRes) {
+          const detail = await requiredFailedRes.clone().json().catch(() => ({} as any));
           get().clearTenantSlices();
           set({
             isFetchingWorkspaces: false,
-            workspaceError: (detail as any)?.message || `Failed to load workspace data (HTTP ${failedRes.status})`,
+            workspaceError: (detail as any)?.message || `Failed to load workspace data (HTTP ${requiredFailedRes.status})`,
           });
           return;
         }
@@ -1790,13 +1781,21 @@ const initialSelectedMode: ComposerMode = (storedIsPinned && storedSelectedMode)
           }));
         }
 
-        // Modules aggregated (already fetched)
+        // Modules aggregated (already fetched). A failed catalog fetch degrades
+        // to empty — never stale rows from another mode (dual-boot).
         let dbInstructions = get().instructionModules;
         let dbModels = get().modelModules;
         let dbToolkits = get().toolkitModules;
         let dbConstraints = get().constraintsModules;
         let dbCapabilities = get().capabilitiesModules;
-        
+        if (!moduleRes.ok) {
+          dbInstructions = [];
+          dbModels = [];
+          dbToolkits = [];
+          dbConstraints = [];
+          dbCapabilities = [];
+        }
+
         if (moduleRes.ok) {
           const mods = await moduleRes.json();
           dbInstructions = (mods.instructionModules || []).map((m: any) => ({
@@ -1843,8 +1842,11 @@ const initialSelectedMode: ComposerMode = (storedIsPinned && storedSelectedMode)
           }));
         }
 
-        // Generation profiles (already fetched)
+        // Generation profiles (already fetched). Failed fetch degrades to empty.
         let dbProfiles = get().modelProfiles;
+        if (!profRes.ok) {
+          dbProfiles = [];
+        }
         if (profRes.ok) {
           const backendProfs = await profRes.json();
           dbProfiles = (backendProfs || []).map((p: any) => ({
@@ -2055,10 +2057,13 @@ const initialSelectedMode: ComposerMode = (storedIsPinned && storedSelectedMode)
                   name: updatedDto.name ?? w.name,
                   icon: updatedDto.icon ?? w.icon,
                   database: updatedDto.database ?? w.database,
+                  storagePreference: updatedDto.storagePreference ?? w.storagePreference,
+                  dbSync: updatedDto.dbSync ?? w.dbSync ?? null,
                 }
               : w
           ),
         }));
+        await get().fetchDbSync(id).catch(() => {});
       } catch (err: any) {
         if (get().workspaceError) {
           throw err;
@@ -2082,6 +2087,75 @@ const initialSelectedMode: ComposerMode = (storedIsPinned && storedSelectedMode)
               : w
           ),
         }));
+      }
+    },
+
+    fetchDbSync: async (id) => {
+      const targetId = id ?? get().activeWorkspaceId;
+      if (!targetId) {
+        set({ dbSyncStatus: null });
+        return;
+      }
+      try {
+        const status = await apiClient.getDbSync(targetId);
+        set({ dbSyncStatus: status });
+        set(s => ({
+          workspaces: s.workspaces.map(w =>
+            w.id === targetId
+              ? { ...w, storagePreference: status.storagePreference, dbSync: status.dbSync as any }
+              : w
+          ),
+        }));
+      } catch {
+        // Sync status is advisory — a failed probe must never break the shell.
+      }
+    },
+
+    setStoragePreference: async (id, preference) => {
+      await get().updateWorkspace(id, { storagePreference: preference });
+      await get().fetchDbSync(id).catch(() => {});
+    },
+
+    resolveDbConflict: async (id, choice) => {
+      set({ isSyncing: true, workspaceError: null });
+      try {
+        const result = await apiClient.postDbSync(id, { action: 'resolve', choice });
+        await get().fetchDbSync(id).catch(() => {});
+        await get().fetchWorkspaces().catch(() => {});
+        return result;
+      } catch (err: any) {
+        set({ workspaceError: err instanceof Error ? err.message : 'Failed to resolve sync conflict' });
+        throw err;
+      } finally {
+        set({ isSyncing: false });
+      }
+    },
+
+    syncNow: async (id) => {
+      set({ isSyncing: true, workspaceError: null });
+      try {
+        const result = await apiClient.postDbSync(id, { action: 'sync-now' });
+        await get().fetchDbSync(id).catch(() => {});
+        return result;
+      } catch (err: any) {
+        set({ workspaceError: err instanceof Error ? err.message : 'Sync failed' });
+        throw err;
+      } finally {
+        set({ isSyncing: false });
+      }
+    },
+
+    rebuildRag: async (id) => {
+      set({ isSyncing: true, workspaceError: null });
+      try {
+        const result = await apiClient.postDbSync(id, { action: 'rebuild-rag' });
+        await get().fetchDbSync(id).catch(() => {});
+        return result;
+      } catch (err: any) {
+        set({ workspaceError: err instanceof Error ? err.message : 'Index rebuild failed' });
+        throw err;
+      } finally {
+        set({ isSyncing: false });
       }
     },
 
@@ -2150,9 +2224,10 @@ const initialSelectedMode: ComposerMode = (storedIsPinned && storedSelectedMode)
 
     enterWorkspace: async (id) => {
       // D1 switch teardown: leave previously observed rooms before slicing.
+      // §30: the leave carries the workspace the room was joined under.
       const prevWs = get().activeWorkspaceId;
       const prevCh = get().activeChannelId;
-      if (prevCh) emitChannelLeave(prevCh);
+      if (prevCh) emitChannelLeave(prevCh, prevWs);
       if (prevWs && prevWs !== id) emitWorkspaceLeave(prevWs);
       setActiveWorkspaceId(id);
       get().clearTenantSlices();
@@ -2175,8 +2250,8 @@ const initialSelectedMode: ComposerMode = (storedIsPinned && storedSelectedMode)
       }
       if (chId) pushChannelHistory(id, chId, false);
 
-      set({ 
-        activeWorkspaceId: id, 
+      set({
+        activeWorkspaceId: id,
         activeChannelId: chId,
         mobileDrawerLeft: false,
         mobileDrawerRight: false,
@@ -2184,12 +2259,14 @@ const initialSelectedMode: ComposerMode = (storedIsPinned && storedSelectedMode)
       });
 
       await get().fetchWorkspaces();
+      await get().fetchDbSync(id).catch(() => {});
     },
 
     leaveWorkspace: () => {
+      // §30: leave both rooms under the workspace they were joined in.
       const prevWs = get().activeWorkspaceId;
       const prevCh = get().activeChannelId;
-      if (prevCh) emitChannelLeave(prevCh);
+      if (prevCh) emitChannelLeave(prevCh, prevWs);
       if (prevWs) emitWorkspaceLeave(prevWs);
       setActiveWorkspaceId(null);
       get().clearTenantSlices();
@@ -2211,8 +2288,9 @@ const initialSelectedMode: ComposerMode = (storedIsPinned && storedSelectedMode)
 
     setActiveChannel: async (id) => {
       // D1: leave the previously observed channel room before joining the next.
+      // §30: the leave names the workspace the room was joined under.
       const prevActive = get().activeChannelId;
-      if (prevActive && prevActive !== id) emitChannelLeave(prevActive);
+      if (prevActive && prevActive !== id) emitChannelLeave(prevActive, get().activeWorkspaceId);
       // Clear notifications across both categories and top-level channels
       const updatedWorkspaces = get().workspaces.map(ws => {
         if (ws.id === get().activeWorkspaceId) {

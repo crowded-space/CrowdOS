@@ -153,7 +153,8 @@ export class RuntimeExecutor {
               agent.modelModuleId ?? null,
               result.usage.promptTokens,
               result.usage.completionTokens,
-              run?.id ?? null
+              run?.id ?? null,
+              workspaceId
             )
           } catch (err) {
             console.error('[RuntimeExecutor] Failed to record token usage:', err)
@@ -228,51 +229,25 @@ export class RuntimeExecutor {
     reason: string,
     lastHopErrorCode: string | null
   ): Promise<RunRow> {
+    // CrowdOS §28: sole mutator is stateGate — validate→persist→emit in one place.
+    const { stateGate } = await import('../state/state-gate.js')
     let current = run
     for (let i = 0; i < hops.length; i++) {
       const isLast = i === hops.length - 1
-      const outcome = await runsGate.transition(
-        current.id,
-        hops[i],
+      const outcome = await stateGate.applyRunTransition({
+        runId: current.id,
+        to: hops[i],
         reason,
-        isLast ? lastHopErrorCode : null
-      )
+        errorCode: isLast ? lastHopErrorCode : null,
+        broker,
+      })
       if (!outcome) {
         throw new Error(
           `[RuntimeExecutor] Run ${current.id} transition ${current.status} -> ${hops[i]} rejected by state machine; refusing to execute with stale state`
         )
       }
-      if (outcome.changed) this.emitRunStatus(broker, outcome.row, outcome.from, outcome.to, outcome.reason)
       current = outcome.row
     }
     return current
-  }
-
-  private emitRunStatus(
-    broker: EventBroker,
-    run: RunRow,
-    from: RunStatus,
-    to: RunStatus,
-    reason: string | null
-  ): void {
-    try {
-      broker.emit(
-        'run.status_changed',
-        {
-          runId: run.id,
-          agentId: run.agentId,
-          channelId: run.channelId,
-          workspaceId: run.workspaceId,
-          runtimeType: run.runtimeType,
-          status: to,
-          from,
-          reason,
-          errorCode: run.errorCode,
-        },
-        { channelId: run.channelId }
-      )
-    } catch (err) {
-      console.error('[RuntimeExecutor] Failed to emit run.status_changed:', err)
-    }
   }
 }

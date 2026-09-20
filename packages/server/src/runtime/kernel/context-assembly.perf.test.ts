@@ -10,6 +10,18 @@ vi.mock("../../shared/config/database.js", () => ({
   runWithDb: <T>(db: unknown, fn: () => T): T => fn(),
   dbScopeKey: () => "global",
   isDatabaseConfigured: () => true,
+  isConnectionError: () => false,
+  noteDbFailure: () => {},
+  noteDbSuccess: () => {},
+  resolveTier: () => ({ tier: "dual", url: "mock" }),
+  // Record-only threading: memory paths resolve a per-workspace handle; the
+  // perf fake serves the same in-memory store so query counts still tally.
+  dbForWorkspace: async () => buildPerfTestDb(),
+  withStoreFallback: async (_ctx: unknown, dbOp: () => Promise<unknown>) => dbOp(),
+  dualWrite: async ({ pgWrite, localWrite }: { pgWrite: () => Promise<unknown>; localWrite: () => Promise<unknown> }) => {
+    await pgWrite();
+    return localWrite();
+  },
 }));
 
 vi.mock("../../shared/sockets/register-socket-server.js", () => ({

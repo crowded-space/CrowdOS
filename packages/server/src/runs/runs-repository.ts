@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { and, eq, sql } from "drizzle-orm";
-import { getDb, isDatabaseConfigured } from "../shared/config/database.js";
+import { getDb } from "../shared/config/database.js";
 import { runs, runsCompensation, type RunStatus, type RunCheckpoint, type CompensationInverseOp } from "../db/schema.js";
 import { transition } from "./run-state-machine.js";
 
@@ -41,9 +41,17 @@ export function isRunsEnabled(): boolean {
 
 export async function createRun(input: CreateRunInput): Promise<RunRow | null> {
   if (!isRunsEnabled()) return null;
-  // C3 local-first: no ledger without a database — the executor runs run-less.
-  if (!isDatabaseConfigured()) return null;
-  const db = getDb();
+  // C3 local-first, record-only DB: no ledger without the workspace's record
+  // database — the executor runs run-less (null, never throws for local).
+  // Env URLs are CLI-only, never read.
+  const { dbForWorkspace, isNoDatabaseError } = await import("../shared/config/database.js");
+  let db: Awaited<ReturnType<typeof dbForWorkspace>>;
+  try {
+    db = await dbForWorkspace(input.workspaceId ?? null);
+  } catch (err) {
+    if (isNoDatabaseError(err)) return null;
+    throw err;
+  }
   const [row] = await db
     .insert(runs)
     .values({

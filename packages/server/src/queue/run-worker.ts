@@ -8,8 +8,14 @@ let runConn: InstanceType<typeof IORedis> | null = null;
 
 export interface RunJobData extends EnqueueRunInput {}
 
+// Job data is untrusted input — only known runtime types pass through.
+// Anything else degrades to Auto (undefined), never a throw.
+const KNOWN_RUNTIMES = new Set(["conversational", "agentic", "swarm", "coding", "research"]);
+
 async function processRunJob(job: Job<RunJobData>): Promise<unknown> {
   const { channelId, agentId, messageId, userInput, workspaceId, runId } = job.data;
+  const rawRuntime = (job.data as { explicitRuntime?: unknown }).explicitRuntime;
+  const explicitRuntime = typeof rawRuntime === "string" && KNOWN_RUNTIMES.has(rawRuntime) ? rawRuntime : undefined;
   const resumeContext = (job.data as unknown as { resumeContext?: unknown; resumeFrom?: unknown }).resumeContext ?? (job.data as unknown as { resumeContext?: unknown; resumeFrom?: unknown }).resumeFrom ?? null;
 
   const [{ runtimeGate }, { agentGate }, { getSharedBroker }] = await Promise.all([
@@ -82,7 +88,7 @@ async function processRunJob(job: Job<RunJobData>): Promise<unknown> {
       workspaceId: workspaceId ?? "default",
       userInput,
       broker,
-      explicitRuntime: undefined,
+      explicitRuntime,
       librarianAgentId: "agent-librarian",
       runId: (runId as string | undefined) ?? null,
       resumeContext: resumeContext as unknown as null,

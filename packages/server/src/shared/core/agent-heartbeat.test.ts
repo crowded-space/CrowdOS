@@ -9,6 +9,19 @@ vi.mock("../../memories/memories-gate.js", () => ({
   startMemorySweeper: () => {},
 }));
 
+// Record-only fan-out: the sweep visits workspace databases, so yield the
+// fixture handle for an explicit test workspace (no global-pool fallback).
+vi.mock("../../workspace/workspace-gate.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../workspace/workspace-gate.js")>();
+  const h = await import("./agent-heartbeat-test-db.js");
+  return {
+    ...actual,
+    forEachWorkspaceDb: async (fn: (db: unknown, workspaceId: string | null) => Promise<void>) => {
+      await fn(h.fakeHeartbeatDb, "ws-test");
+    },
+  };
+});
+
 import { heartbeatFixture } from "./agent-heartbeat-test-db.js";
 import { markAgentIdle, markAgentWorking, sweepOrphans } from "./agent-heartbeat.js";
 import type { EventBroker } from "../../event-broker/event-broker-gate.js";
@@ -34,7 +47,7 @@ describe("heartbeat orphan sweeper agent:paused truth-out (CTX-1)", () => {
       "agent:paused",
       expect.objectContaining({ agentId: "agent-zombie", reason: expect.stringContaining("Heartbeat") }),
     );
-    expect(broker.emit).toHaveBeenCalledWith("agent:status", { agentId: "agent-zombie", status: "paused" });
+    expect(broker.emit).toHaveBeenCalledWith("agent:status", expect.objectContaining({ agentId: "agent-zombie", status: "paused" }));
   });
 
   it("does not pause or emit for locally-working agents", async () => {

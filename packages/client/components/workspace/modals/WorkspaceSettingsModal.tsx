@@ -35,6 +35,199 @@ const ROLE_COLORS = [
   '#00E676', '#76FF03', '#C6FF00', '#FFEA00', '#FFC400', '#FF9100', '#FF3D00', '#F50057'
 ];
 
+function StorageSyncSection(props: {
+  activeWS: any;
+  dbSyncStatus: any;
+  isSyncing: boolean;
+  workspaceError: string | null;
+  fetchDbSync: (id?: string) => Promise<void>;
+  setStoragePreference: (id: string, p: 'default' | 'local') => Promise<void>;
+  resolveDbConflict: (id: string, c: 'flush-local' | 'flush-db' | 'change-db') => Promise<any>;
+  syncNow: (id: string) => Promise<any>;
+  rebuildRag: (id: string) => Promise<any>;
+  showInfo: (t: string, d?: string) => void;
+  showSuccess: (t: string, d?: string) => void;
+  showError: (t: string, d?: string) => void;
+  askConfirmation: (o: { title: string; description: string; confirmLabel?: string; isDanger?: boolean; onConfirm: () => void }) => void;
+}) {
+  const {
+    activeWS, dbSyncStatus, isSyncing, workspaceError, fetchDbSync,
+    setStoragePreference, resolveDbConflict, syncNow, rebuildRag,
+    showInfo, showSuccess, showError, askConfirmation,
+  } = props;
+  const notifiedBacklogRef = React.useRef<string | null>(null);
+
+  React.useEffect(() => {
+    if (activeWS?.id) void fetchDbSync(activeWS.id).catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeWS?.id]);
+
+  React.useEffect(() => {
+    if (dbSyncStatus?.backlogNotice && dbSyncStatus.backlog > 0 && activeWS?.id) {
+      const key = `${activeWS.id}:${dbSyncStatus.backlog}`;
+      if (notifiedBacklogRef.current !== key) {
+        notifiedBacklogRef.current = key;
+        showInfo(
+          `Sync backlog: ${dbSyncStatus.backlog} local writes pending upload`,
+          'They will backfill automatically when the database is reachable. Nothing is blocked.',
+        );
+      }
+    }
+  }, [dbSyncStatus?.backlog, dbSyncStatus?.backlogNotice, activeWS?.id, showInfo]);
+
+  if (!activeWS) return null;
+  const dbConfigured = !!activeWS?.database?.configured;
+  const preference = (activeWS?.storagePreference === 'local' ? 'local' : 'default') as 'default' | 'local';
+  const syncState = dbSyncStatus?.dbSync?.state ?? activeWS?.dbSync?.state ?? null;
+  const backlog = dbSyncStatus?.backlog ?? 0;
+  const tier = dbSyncStatus?.tier ?? (dbConfigured ? 'dual' : 'local');
+
+  const runQuiet = async (fn: () => Promise<any>, okMsg: string) => {
+    try {
+      const res = await fn();
+      if (res && res.ok === false) {
+        showError('Sync action deferred', res?.reason ? String(res.reason) : res?.detail ? String(res.detail) : okMsg);
+        return;
+      }
+      showSuccess(okMsg, res?.detail ? String(res.detail) : undefined);
+    } catch (err: any) {
+      showError('Sync action failed', err instanceof Error ? err.message : String(err));
+    }
+  };
+
+  return (
+    <div className="space-y-3 bg-zinc-950 p-4 border border-zinc-900 rounded-lg text-left">
+      <h4 className="font-semibold text-zinc-300 text-xs">Storage &amp; Sync</h4>
+
+      {workspaceError && (
+        <div role="alert" className="rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-[12px] text-rose-200">
+          {String(workspaceError)}
+        </div>
+      )}
+
+      {!dbConfigured && (
+        <p className="text-zinc-500 leading-normal font-sans">
+          Local files only — no database connected. Chat, channels, and files work fully offline.
+          Connect a database (Portal or workspace settings) to enable dual-boot sync and semantic memory.
+        </p>
+      )}
+
+      {dbConfigured && (
+        <div className="space-y-2">
+          <div className="flex items-center gap-2 text-[12px]">
+            <span className="text-zinc-500 font-semibold">Storage mode:</span>
+            <button
+              type="button"
+              disabled={isSyncing}
+              onClick={() => void runQuiet(() => setStoragePreference(activeWS.id, 'default'), 'Dual-write enabled (database first-class)')}
+              className={`px-2.5 py-1.5 min-h-[36px] rounded-lg border text-[12px] font-semibold transition cursor-pointer ${preference === 'default' ? 'bg-indigo-500/15 border-indigo-500/40 text-indigo-200' : 'bg-zinc-900 border-zinc-800 text-zinc-400 hover:text-zinc-200'}`}
+            >
+              Default (sync Local + DB)
+            </button>
+            <button
+              type="button"
+              disabled={isSyncing}
+              onClick={() => void runQuiet(() => setStoragePreference(activeWS.id, 'local'), 'Local-first enabled (database writes paused)')}
+              className={`px-2.5 py-1.5 min-h-[36px] rounded-lg border text-[12px] font-semibold transition cursor-pointer ${preference === 'local' ? 'bg-amber-500/15 border-amber-500/40 text-amber-200' : 'bg-zinc-900 border-zinc-800 text-zinc-400 hover:text-zinc-200'}`}
+            >
+              Local-first
+            </button>
+          </div>
+          <p className="text-zinc-500 leading-normal font-sans">
+            Serving from: <span className="text-zinc-300 font-semibold">{tier === 'dual' ? 'Database + local mirror' : 'Local files'}</span>
+            {dbSyncStatus && !dbSyncStatus.dbReachable && dbConfigured && (
+              <span className="text-amber-300"> — database unreachable, local fallback active</span>
+            )}
+          </p>
+        </div>
+      )}
+
+      {syncState === 'conflict' && (
+        <div role="alert" className="rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-2.5 space-y-2">
+          <p className="text-[12px] text-rose-200 font-semibold">Database conflict — serving local files only until you choose.</p>
+          <p className="text-zinc-400 leading-normal font-sans">The connected database holds a different workspace. Pick how to resolve (a snapshot of local files is taken first):</p>
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              disabled={isSyncing}
+              onClick={() => askConfirmation({
+                title: 'Pull from database?',
+                description: 'Replace local files with the database content. A snapshot backup is kept automatically.',
+                confirmLabel: 'Flush local (pull)',
+                onConfirm: () => void runQuiet(() => resolveDbConflict(activeWS.id, 'flush-local'), 'Local state replaced from database'),
+              })}
+              className="px-2.5 py-1.5 min-h-[36px] rounded-lg border border-zinc-700 bg-zinc-900 text-[12px] font-semibold text-zinc-200 hover:bg-zinc-800 transition cursor-pointer"
+            >
+              Flush local (pull)
+            </button>
+            <button
+              type="button"
+              disabled={isSyncing}
+              onClick={() => askConfirmation({
+                title: 'Push to database?',
+                description: 'Overwrite database rows with local files (union-merged, local wins). A snapshot backup is kept automatically.',
+                confirmLabel: 'Flush DB (push)',
+                onConfirm: () => void runQuiet(() => resolveDbConflict(activeWS.id, 'flush-db'), 'Database updated from local files'),
+              })}
+              className="px-2.5 py-1.5 min-h-[36px] rounded-lg border border-zinc-700 bg-zinc-900 text-[12px] font-semibold text-zinc-200 hover:bg-zinc-800 transition cursor-pointer"
+            >
+              Flush DB (push)
+            </button>
+            <button
+              type="button"
+              disabled={isSyncing}
+              onClick={() => void runQuiet(() => resolveDbConflict(activeWS.id, 'change-db'), 'Database disconnected')}
+              className="px-2.5 py-1.5 min-h-[36px] rounded-lg border border-zinc-700 bg-zinc-900 text-[12px] font-semibold text-zinc-200 hover:bg-zinc-800 transition cursor-pointer"
+            >
+              Change DB
+            </button>
+          </div>
+        </div>
+      )}
+
+      {dbConfigured && backlog > 0 && (
+        <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 flex items-center justify-between gap-2">
+          <span className="text-[12px] text-amber-200">Sync backlog: {backlog} local write{backlog === 1 ? '' : 's'} pending upload — nothing is blocked.</span>
+          <button
+            type="button"
+            disabled={isSyncing}
+            onClick={() => void runQuiet(() => syncNow(activeWS.id), 'Backfill drained')}
+            className="px-2.5 py-1.5 min-h-[36px] rounded-lg border border-amber-500/40 bg-amber-500/10 text-[12px] font-semibold text-amber-100 hover:bg-amber-500/20 transition cursor-pointer shrink-0"
+          >
+            Sync now
+          </button>
+        </div>
+      )}
+
+      {dbConfigured && syncState !== 'conflict' && (
+        <div className="flex flex-wrap gap-2">
+          <button
+            type="button"
+            disabled={isSyncing}
+            onClick={() => void runQuiet(() => syncNow(activeWS.id), 'Backfill drained')}
+            className="px-2.5 py-1.5 min-h-[36px] rounded-lg border border-zinc-700 bg-zinc-900 text-[12px] font-semibold text-zinc-200 hover:bg-zinc-800 transition cursor-pointer"
+          >
+            Sync now
+          </button>
+          <button
+            type="button"
+            disabled={isSyncing}
+            onClick={() => askConfirmation({
+              title: 'Rebuild search index?',
+              description: 'Re-index channel content for semantic search. Memories stay deferred; nothing is deleted.',
+              confirmLabel: 'Rebuild index',
+              onConfirm: () => void runQuiet(() => rebuildRag(activeWS.id), 'Search index rebuilt'),
+            })}
+            className="px-2.5 py-1.5 min-h-[36px] rounded-lg border border-zinc-700 bg-zinc-900 text-[12px] font-semibold text-zinc-200 hover:bg-zinc-800 transition cursor-pointer"
+          >
+            Rebuild search index
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function WorkspaceSettingsModal() {
   const { 
     workspaces, 
@@ -78,10 +271,18 @@ export default function WorkspaceSettingsModal() {
     totalTokensConsumed,
     fetchBudget,
     updateBudget,
-    resetBudget
+    resetBudget,
+    dbSyncStatus,
+    isSyncing,
+    fetchDbSync,
+    setStoragePreference,
+    resolveDbConflict,
+    syncNow,
+    rebuildRag,
+    workspaceError
   } = useCrowdOSStore();
 
-  const { showSuccess, showError } = useToast();
+  const { showSuccess, showError, showInfo } = useToast();
   const [studioAgentId, setStudioAgentId] = useState<string | null>(null);
   const activeWS = workspaces.find(ws => ws.id === activeWorkspaceId);
 
@@ -834,6 +1035,22 @@ export default function WorkspaceSettingsModal() {
                     This single-user environment utilizes client-side isolated sandbox caches matching local database rules. It bypasses latency limits for microservice execution chains. You can add, edit, or terminate orchestrator nodes using the respective options above.
                   </p>
                 </div>
+
+                <StorageSyncSection
+                  activeWS={activeWS}
+                  dbSyncStatus={dbSyncStatus}
+                  isSyncing={isSyncing}
+                  workspaceError={workspaceError}
+                  fetchDbSync={fetchDbSync}
+                  setStoragePreference={setStoragePreference}
+                  resolveDbConflict={resolveDbConflict}
+                  syncNow={syncNow}
+                  rebuildRag={rebuildRag}
+                  showInfo={showInfo}
+                  showSuccess={showSuccess}
+                  showError={showError}
+                  askConfirmation={askConfirmation}
+                />
               </div>
             )}
 

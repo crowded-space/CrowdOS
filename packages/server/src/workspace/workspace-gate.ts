@@ -24,6 +24,7 @@ import {
   getWorkspaceDescriptor,
   saveWorkspaceRecord,
   removeWorkspaceRecord,
+  tierContextFor,
 } from "./workspace-registry.js";
 import {
   getScreenLockStatus,
@@ -53,6 +54,9 @@ export type {
 export type {
   WorkspaceRecord,
   WorkspaceDescriptor,
+  StoragePreference,
+  DbSyncState,
+  DbSyncInfo,
 } from "./workspace-registry.js";
 
 export {
@@ -78,6 +82,7 @@ export {
   getWorkspaceDescriptor,
   saveWorkspaceRecord,
   removeWorkspaceRecord,
+  tierContextFor,
   getScreenLockStatus,
   getWorkspacePinHash,
   setScreenLockPin,

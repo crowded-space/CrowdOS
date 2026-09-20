@@ -91,6 +91,9 @@ export class ContextAssembler {
         abortSignal,
         runId: runId ?? null,
         interpreterOutput,
+        // §26 visible_capabilities: discovery-first capability view produced by
+        // ToolSchemaMiddleware (§21 externalized/discoverable).
+        visibleCapabilities: compiled.visibleCapabilities ?? [],
       };
       if (span && tracing) tracing.endSpan(span, { attributes: { historyLen: result.history.length, toolCount: result.tools?.length ?? 0 } });
       return result;

@@ -2,7 +2,7 @@ import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { eq } from "drizzle-orm";
-import { getDb, isDatabaseConfigured } from "../shared/config/database.js";
+import { getDb, isDatabaseConfigured, isConnectionError } from "../shared/config/database.js";
 import { channels, categories, workspaces } from "../db/schema.js";
 import { channelGate } from "../channels/channel-gate.js";
 import { getWorkspaceRecord } from "../workspace/workspace-gate.js";
@@ -85,44 +85,33 @@ export async function validateMountPath(absPath: string): Promise<{ valid: boole
   return { valid: true, resolved: real };
 }
 
-export async function resolveWorkspaceMount(workspaceId: string): Promise<MountInfo> {
-  // C3 local-first: registry record is truth when no DATABASE_URL.
-  if (!isDatabaseConfigured()) {
-    const record = await getWorkspaceRecord(workspaceId).catch(() => null);
-    if (!record) return { workspaceId: null, mountedPath: null, source: "none", effectivePath: null };
-    if (record.rootPath) {
-      const v = await validateMountPath(record.rootPath);
-      if (v.valid) {
-        return { workspaceId: record.id, mountedPath: v.resolved!, source: "workspace", effectivePath: v.resolved! };
-      }
-    }
-    return { workspaceId: record.id, mountedPath: null, source: "none", effectivePath: record.rootPath ?? null };
-  }
-  const db = getDb();
-  const ws = await db.query.workspaces.findFirst({ where: eq(workspaces.id, workspaceId) });
-  if (!ws) return { workspaceId: null, mountedPath: null, source: "none", effectivePath: null };
-
-  const customPath = (ws.metadata as Record<string, unknown>)?.customMountPath as string | undefined;
-  if (customPath) {
-    const v = await validateMountPath(customPath);
+async function resolveWorkspaceMountFromRecord(workspaceId: string): Promise<MountInfo | null> {
+  const record = await getWorkspaceRecord(workspaceId).catch(() => null);
+  if (!record) return null;
+  if (record.rootPath) {
+    const v = await validateMountPath(record.rootPath);
     if (v.valid) {
-      return {
-        workspaceId: ws.id,
-        mountedPath: v.resolved!,
-        source: "workspace",
-        effectivePath: v.resolved!,
-      };
+      return { workspaceId: record.id, mountedPath: v.resolved!, source: "workspace", effectivePath: v.resolved! };
     }
   }
+  return { workspaceId: record.id, mountedPath: null, source: "none", effectivePath: record.rootPath ?? null };
+}
 
-  // Also check if rootPath itself is a valid native directory outside default sandbox
-  if (ws.rootPath) {
-    const defaultSandboxRoot = process.env.WORKSPACE_DIR?.trim()
-      ? path.resolve(process.env.WORKSPACE_DIR.trim())
-      : path.resolve(path.join(process.cwd(), "sandbox"));
-    const wsResolved = path.resolve(ws.rootPath);
-    if (!wsResolved.toLowerCase().startsWith(defaultSandboxRoot.toLowerCase())) {
-      const v = await validateMountPath(wsResolved);
+export async function resolveWorkspaceMount(workspaceId: string): Promise<MountInfo> {
+  // Dual-boot: registry record when no DATABASE_URL (or forced-local), with
+  // record fallback when the PG path dies mid-outage.
+  if (!isDatabaseConfigured()) {
+    return (await resolveWorkspaceMountFromRecord(workspaceId)) ??
+      { workspaceId: null, mountedPath: null, source: "none", effectivePath: null };
+  }
+  try {
+    const db = getDb();
+    const ws = await db.query.workspaces.findFirst({ where: eq(workspaces.id, workspaceId) });
+    if (!ws) return { workspaceId: null, mountedPath: null, source: "none", effectivePath: null };
+
+    const customPath = (ws.metadata as Record<string, unknown>)?.customMountPath as string | undefined;
+    if (customPath) {
+      const v = await validateMountPath(customPath);
       if (v.valid) {
         return {
           workspaceId: ws.id,
@@ -132,14 +121,37 @@ export async function resolveWorkspaceMount(workspaceId: string): Promise<MountI
         };
       }
     }
-  }
 
-  return {
-    workspaceId: ws.id,
-    mountedPath: null,
-    source: "none",
-    effectivePath: ws.rootPath ?? null,
-  };
+    // Also check if rootPath itself is a valid native directory outside default sandbox
+    if (ws.rootPath) {
+      const defaultSandboxRoot = process.env.WORKSPACE_DIR?.trim()
+        ? path.resolve(process.env.WORKSPACE_DIR.trim())
+        : path.resolve(path.join(process.cwd(), "sandbox"));
+      const wsResolved = path.resolve(ws.rootPath);
+      if (!wsResolved.toLowerCase().startsWith(defaultSandboxRoot.toLowerCase())) {
+        const v = await validateMountPath(wsResolved);
+        if (v.valid) {
+          return {
+            workspaceId: ws.id,
+            mountedPath: v.resolved!,
+            source: "workspace",
+            effectivePath: v.resolved!,
+          };
+        }
+      }
+    }
+
+    return {
+      workspaceId: ws.id,
+      mountedPath: null,
+      source: "none",
+      effectivePath: ws.rootPath ?? null,
+    };
+  } catch (err) {
+    if (!isConnectionError(err)) throw err;
+    return (await resolveWorkspaceMountFromRecord(workspaceId)) ??
+      { workspaceId: null, mountedPath: null, source: "none", effectivePath: null };
+  }
 }
 
 export async function attachWorkspaceMount(workspaceId: string, folderPath: string | null): Promise<{ ok: true } | { ok: false; error: string }> {

@@ -10,11 +10,38 @@ vi.mock("../shared/config/database.js", () => ({
   runWithDb: <T>(db: unknown, fn: () => T): T => fn(),
   dbScopeKey: () => "global",
   isDatabaseConfigured: () => true,
+  isConnectionError: () => false,
+  noteDbFailure: () => {},
+  noteDbSuccess: () => {},
+  resolveTier: () => ({ tier: "dual", url: "mock" }),
+  withStoreFallback: async (_ctx: unknown, dbOp: () => Promise<unknown>) => dbOp(),
+  dualWrite: async ({ pgWrite, localWrite }: { pgWrite: () => Promise<unknown>; localWrite: () => Promise<unknown> }) => {
+    await pgWrite();
+    return localWrite();
+  },
 }));
 
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { Column, Param, SQL, StringChunk } from "drizzle-orm";
 import * as schemaModule from "../db/schema.js";
+import { setLocalStoreDirForTests } from "../shared/core/local-file.js";
 import { agentRegistry } from "./agent-service.js";
+
+let rosterLocalDir: string | null = null;
+
+beforeEach(() => {
+  if (rosterLocalDir) rmSync(rosterLocalDir, { recursive: true, force: true });
+  rosterLocalDir = mkdtempSync(join(tmpdir(), "crowdos-roster-"));
+  setLocalStoreDirForTests(rosterLocalDir);
+});
+
+afterEach(() => {
+  setLocalStoreDirForTests(null);
+  if (rosterLocalDir) rmSync(rosterLocalDir, { recursive: true, force: true });
+  rosterLocalDir = null;
+});
 import {
   enableRosterCacheForTests,
   invalidateRosterCache,

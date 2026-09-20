@@ -1,10 +1,11 @@
 import { and, eq } from "drizzle-orm";
-import { getDb } from "../shared/config/database.js";
+import { isConnectionError } from "../shared/config/database.js";
 import { agentMemoryNotes } from "../db/schema.js";
-import { isSuppressionActive } from "./memory-lifecycle.js";
+import { isSuppressionActive, resolveMemoryDb } from "./memory-lifecycle.js";
 import { numEnv } from "./memory-env.js";
 import { memorySessionDiscards } from "./memory-session-discards.js";
 import { listMemoryPreviews, type MemoryNotePreview } from "./agent-memory-store.js";
+import { readLocalMemoryNotes, scoreLocalNote } from "./memory-local-store.js";
 import { wrapUntrusted } from "../shared/core/untrusted-wrapper.js";
 
 const DEFAULT_RETRIEVAL_WINDOW = 60;
@@ -37,6 +38,8 @@ export interface RetrievalInput {
   unresolvedTensions: boolean;
   recencyBump: boolean;
   topK: number;
+  /** Record-only workspace context: resolves the per-workspace DB handle when present. */
+  workspaceId?: string | null;
 }
 
 /**
@@ -47,25 +50,32 @@ export interface RetrievalInput {
  * heuristic lanes (weight via EMBEDDING_HYBRID_WEIGHT).
  */
 export async function retrieveMemoryCandidates(input: RetrievalInput): Promise<MemoryCandidate[]> {
-  const db = getDb();
-
   const discarded = new Set(memorySessionDiscards.listDiscarded(input.agentId, input.channelId));
 
-  // PERF-2: bounded hot-path window. Candidate set is capped SQL-side to the
-  // top `MEM_RETRIEVAL_WINDOW` (default 60) active notes ranked by the scored
-  // proxy (importance_score DESC, note_timestamp DESC); lane scoring and
-  // dedupe then run on that bounded set instead of the agent's full history.
-  const windowSize = retrievalWindowSize();
-  const notes = (await db.query.agentMemoryNotes.findMany({
-    where: and(
-      eq(agentMemoryNotes.agentId, input.agentId),
-      eq(agentMemoryNotes.lifecycleStatus, "active"),
-    ),
-    orderBy: (table, { desc }) => [desc(table.importanceScore), desc(table.noteTimestamp)],
-    limit: windowSize,
-  }))
-    .filter((note) => !isSuppressionActive(note))
-    .filter((note) => !discarded.has(note.id));
+  // Degraded (§18): no PG — score the local mirror with the naive matcher.
+  const db = await resolveMemoryDb({ workspaceId: input.workspaceId });
+  if (!db) return retrieveLocalCandidates(input, discarded);
+  let notes: MemoryNotePreview[];
+  try {
+    // PERF-2: bounded hot-path window. Candidate set is capped SQL-side to the
+    // top `MEM_RETRIEVAL_WINDOW` (default 60) active notes ranked by the scored
+    // proxy (importance_score DESC, note_timestamp DESC); lane scoring and
+    // dedupe then run on that bounded set instead of the agent's full history.
+    const windowSize = retrievalWindowSize();
+    notes = (await db.query.agentMemoryNotes.findMany({
+      where: and(
+        eq(agentMemoryNotes.agentId, input.agentId),
+        eq(agentMemoryNotes.lifecycleStatus, "active"),
+      ),
+      orderBy: (table, { desc }) => [desc(table.importanceScore), desc(table.noteTimestamp)],
+      limit: windowSize,
+    }))
+      .filter((note) => !isSuppressionActive(note))
+      .filter((note) => !discarded.has(note.id));
+  } catch (err) {
+    if (isConnectionError(err)) return retrieveLocalCandidates(input, discarded);
+    throw err;
+  }
 
   const candidates = new Map<string, MemoryCandidate>();
 
@@ -119,7 +129,7 @@ export async function retrieveMemoryCandidates(input: RetrievalInput): Promise<M
   if (embeddingEnabled && input.userMessageText) {
     try {
       const { embedText, cosineSimilarity, getCachedEmbeddingVector } = await import("./embeddings.js");
-      const queryEmbedding = (await embedText(input.userMessageText)).vector;
+      const queryEmbedding = (await embedText(input.userMessageText, { workspaceId: input.workspaceId })).vector;
       const weightRaw = process.env.EMBEDDING_HYBRID_WEIGHT?.trim();
       const weight = weightRaw ? Math.min(1, Math.max(0, Number(weightRaw))) : 0.5;
       if (Number.isFinite(weight) && weight > 0) {
@@ -145,6 +155,26 @@ export async function retrieveMemoryCandidates(input: RetrievalInput): Promise<M
   }
 
   return Array.from(candidates.values())
+    .sort((a, b) => b.score - a.score)
+    .slice(0, input.topK ?? 10);
+}
+
+/** Degraded local candidate search (no lanes, no vectors — naive substring). */
+async function retrieveLocalCandidates(input: RetrievalInput, discarded: Set<string>): Promise<MemoryCandidate[]> {
+  const rows = (await readLocalMemoryNotes(input.agentId).catch(() => []))
+    .filter((r) => r.lifecycleStatus === "active")
+    .filter((r) => !discarded.has(r.id));
+  return rows
+    .map((r) => {
+      const score = scoreLocalNote(r, input.userMessageText ?? "");
+      return {
+        noteId: r.id, hook: r.hook, brief: r.brief, noteType: r.noteType,
+        noteTimestamp: new Date(r.noteTimestamp), importanceScore: r.importanceScore,
+        confidence: r.confidence, contradictionFlags: r.contradictionFlags ?? [],
+        score, laneScores: { local: score }, sourceLanes: ["local"],
+      } as MemoryCandidate;
+    })
+    .filter((c) => c.score > 0.1)
     .sort((a, b) => b.score - a.score)
     .slice(0, input.topK ?? 10);
 }

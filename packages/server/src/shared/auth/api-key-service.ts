@@ -1,9 +1,10 @@
-import { randomBytes, scrypt as scryptCb, timingSafeEqual } from "node:crypto";
+import { randomBytes, randomUUID, scrypt as scryptCb, timingSafeEqual } from "node:crypto";
 import { promisify } from "node:util";
 
 import { and, eq, isNull } from "drizzle-orm";
 
-import { getDb } from "../config/database.js";
+import { getDb, resolveTier } from "../config/database.js";
+import { mutateJsonArray, readJsonArray } from "../core/local-file.js";
 import { apiKeys } from "../../db/schema.js";
 import type { ApiKeyRole } from "../../db/schema.js";
 
@@ -43,18 +44,61 @@ export function generateApiKey(): string {
   return `${API_KEY_PREFIX}${randomBytes(32).toString("base64url")}`;
 }
 
+interface LocalKeyRow {
+  id: string;
+  keyHash: string;
+  label: string | null;
+  role: ApiKeyRole;
+  revokedAt: string | null;
+  lastUsedAt: string | null;
+  createdAt: string;
+}
+
+const API_KEYS_FILE = "api-keys.json";
+
+/**
+ * Dual-boot key lookup: union PG rows + local file rows (either side may be
+ * down). A key revoked in EITHER tier counts as revoked. Local file rows let
+ * a DB-less boot stay strictly authenticated instead of failing open.
+ */
 async function findActiveKeys(): Promise<(ApiKeyRecord & { keyHash: string })[]> {
-  const db = getDb();
-  const rows = await db
-    .select({
-      id: apiKeys.id,
-      label: apiKeys.label,
-      role: apiKeys.role,
-      keyHash: apiKeys.keyHash,
-    })
-    .from(apiKeys)
-    .where(isNull(apiKeys.revokedAt));
-  return rows;
+  const [pgRows, localRows] = await Promise.all([
+    (async () => {
+      try {
+        const db = getDb();
+        return await db
+          .select({
+            id: apiKeys.id,
+            label: apiKeys.label,
+            role: apiKeys.role,
+            keyHash: apiKeys.keyHash,
+          })
+          .from(apiKeys)
+          .where(isNull(apiKeys.revokedAt));
+      } catch {
+        return [];
+      }
+    })(),
+    readJsonArray<LocalKeyRow>(API_KEYS_FILE).catch(() => [] as LocalKeyRow[]),
+  ]);
+  const revokedIds = new Set<string>();
+  for (const r of [...pgRows, ...localRows]) {
+    const revoked = (r as any).revokedAt;
+    if (revoked) revokedIds.add(r.id);
+  }
+  const byId = new Map<string, ApiKeyRecord & { keyHash: string }>();
+  for (const r of [...pgRows, ...localRows]) {
+    if (revokedIds.has(r.id) || byId.has(r.id)) continue;
+    byId.set(r.id, { id: r.id, label: r.label ?? null, role: r.role, keyHash: (r as any).keyHash });
+  }
+  return [...byId.values()];
+}
+
+async function touchLocalKey(id: string): Promise<void> {
+  await mutateJsonArray<LocalKeyRow>(API_KEYS_FILE, (rows) => {
+    const idx = rows.findIndex((r) => r.id === id);
+    if (idx !== -1) rows[idx] = { ...rows[idx], lastUsedAt: new Date().toISOString() };
+  }).catch(() => {});
 }
 
 /**
@@ -75,11 +119,15 @@ export async function verifyKey(key: string): Promise<ApiKeyRecord | null> {
   }
 
   if (matched) {
-    void getDb()
-      .update(apiKeys)
-      .set({ lastUsedAt: new Date() })
-      .where(eq(apiKeys.id, matched.id))
-      .catch(() => {});
+    try {
+      await getDb()
+        .update(apiKeys)
+        .set({ lastUsedAt: new Date() })
+        .where(eq(apiKeys.id, matched.id));
+    } catch {
+      // PG down or row lives locally — best-effort only.
+    }
+    await touchLocalKey(matched.id);
   }
 
   return matched;
@@ -89,27 +137,67 @@ export async function createApiKey(input?: {
   label?: string;
   role?: ApiKeyRole;
 }): Promise<{ key: string; record: ApiKeyRecord }> {
-  const db = getDb();
   const key = generateApiKey();
-  const [row] = await db
-    .insert(apiKeys)
-    .values({
-      keyHash: await hashApiKey(key),
-      label: input?.label ?? null,
-      role: input?.role ?? "viewer",
-    })
-    .returning({ id: apiKeys.id, label: apiKeys.label, role: apiKeys.role });
-  return { key, record: row };
+  const keyHash = await hashApiKey(key);
+  const now = new Date().toISOString();
+  // Dual-boot: PG when reachable, local file always (single-tier fallback —
+  // keys are auth infrastructure, not backfilled content).
+  const { tier } = resolveTier({});
+  if (tier === "dual") {
+    try {
+      const db = getDb();
+      const [row] = await db
+        .insert(apiKeys)
+        .values({
+          keyHash,
+          label: input?.label ?? null,
+          role: input?.role ?? "viewer",
+        })
+        .returning({ id: apiKeys.id, label: apiKeys.label, role: apiKeys.role });
+      return { key, record: row };
+    } catch (err) {
+      const { isConnectionError } = await import("../config/database.js");
+      if (!isConnectionError(err)) throw err;
+    }
+  }
+  const id = randomUUID();
+  const localRow: LocalKeyRow = {
+    id,
+    keyHash,
+    label: input?.label ?? null,
+    role: input?.role ?? "viewer",
+    revokedAt: null,
+    lastUsedAt: null,
+    createdAt: now,
+  };
+  await mutateJsonArray<LocalKeyRow>(API_KEYS_FILE, (rows) => {
+    rows.push(localRow);
+  });
+  return { key, record: { id, label: localRow.label, role: localRow.role } };
 }
 
 export async function revokeKey(keyId: string): Promise<boolean> {
-  const db = getDb();
-  const rows = await db
-    .update(apiKeys)
-    .set({ revokedAt: new Date() })
-    .where(and(eq(apiKeys.id, keyId), isNull(apiKeys.revokedAt)))
-    .returning({ id: apiKeys.id });
-  return rows.length > 0;
+  // Revoke in both tiers (either may hold the row); true when either flipped.
+  let revoked = false;
+  try {
+    const db = getDb();
+    const rows = await db
+      .update(apiKeys)
+      .set({ revokedAt: new Date() })
+      .where(and(eq(apiKeys.id, keyId), isNull(apiKeys.revokedAt)))
+      .returning({ id: apiKeys.id });
+    revoked = rows.length > 0;
+  } catch {
+    // PG down — local revoke below still applies.
+  }
+  await mutateJsonArray<LocalKeyRow>(API_KEYS_FILE, (rows) => {
+    const idx = rows.findIndex((r) => r.id === keyId && !r.revokedAt);
+    if (idx !== -1) {
+      rows[idx] = { ...rows[idx], revokedAt: new Date().toISOString() };
+      revoked = true;
+    }
+  }).catch(() => {});
+  return revoked;
 }
 
 /**
@@ -118,12 +206,8 @@ export async function revokeKey(keyId: string): Promise<boolean> {
  * block. It is never logged again and never persisted.
  */
 export async function seedBootstrapAdminKey(): Promise<{ key: string } | null> {
-  const db = getDb();
-  const existingAdmins = await db
-    .select({ id: apiKeys.id })
-    .from(apiKeys)
-    .where(and(eq(apiKeys.role, "admin"), isNull(apiKeys.revokedAt)))
-    .limit(1);
+  const existingAdmins = (await findActiveKeys().catch(() => []))
+    .filter((k) => k.role === "admin");
 
   if (existingAdmins.length > 0) return null;
 

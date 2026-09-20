@@ -79,11 +79,16 @@ describe("CTX-2 · reflection provenance stripping", () => {
       const { buildMemTestDb: b2, memTestStore: s2 } = await import("../../memories/memory-test-db.js");
       return {
         getDb: () => b2(),
+        // Record-only threading: workspace-scoped memory ops resolve a
+        // per-workspace handle; the fake serves the same in-memory store.
+        dbForWorkspace: async () => b2(),
         getSqlClient: () => { throw new Error("no sql"); },
         ensurePgVectorExtension: async () => {},
         closeDatabaseConnection: async () => {},
         withTransaction: async (fn: any) => fn(b2()),
         dbScopeKey: () => "global",
+        isDatabaseConfigured: () => true,
+        isConnectionError: () => false,
         __memTestStoreRef: s2,
       };
     });

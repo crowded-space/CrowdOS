@@ -478,9 +478,16 @@ export class ToolExecutor {
               try {
                 const { getDb } = await import("../shared/config/database.js");
                 const { channelSettings, workspaceSafetySettings } = await import("../db/schema.js");
-                const { eq } = await import("drizzle-orm");
+                const { eq, and } = await import("drizzle-orm");
                 const db = getDb();
-                const chRow = await db.query.channelSettings.findFirst({ where: eq(channelSettings.channelId, chId) });
+                // §30: channel_settings is keyed by (channel_id, workspace_id),
+                // so the read is scoped to this run's workspace.
+                const chRow = await db.query.channelSettings.findFirst({
+                  where: and(
+                    eq(channelSettings.channelId, chId),
+                    eq(channelSettings.workspaceId, wsId ?? "default"),
+                  ),
+                });
                 if ((chRow?.fsPolicy as any)?.requireApprovalFor) policy = (chRow!.fsPolicy as any).requireApprovalFor;
                 else if (wsId) {
                   const wsRow = await db.query.workspaceSafetySettings.findFirst({ where: eq(workspaceSafetySettings.workspaceId, wsId) });

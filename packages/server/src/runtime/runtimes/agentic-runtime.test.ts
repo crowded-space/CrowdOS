@@ -16,6 +16,11 @@ describe('AgenticRuntime Native Tool Calling & Lifecycle', () => {
   });
 
   it('should execute native tool calls and complete cleanly on agent_complete', async () => {
+    // Needs a seeded dev DB (record or env URL); local-first boots skip.
+    if (!process.env.DATABASE_URL) {
+      console.warn('Skipping AgenticRuntime test: no DATABASE_URL.');
+      return;
+    }
     const { getDb } = await import('../../shared/config/database.js');
     const db = getDb();
     const existingChannel = await db.query.channels.findFirst();

@@ -10,13 +10,19 @@ import { MentionParser } from "../core/mention-parser.js";
 import { AgentRegistry } from "../../agents/agent-gate.js";
 import { channelGate } from "../../channels/channel-gate.js";
 import { messageGate } from "../../messages/message-gate.js";
-import { resolveSocketIdentity } from "./socket-auth.js";
+import { isLoopbackPeer, resolveSocketIdentity } from "./socket-auth.js";
 import type { SocketIdentity } from "./socket-auth.js";
 import { createSocketRateLimiter } from "./rate-limiter.js";
+import {
+  channelRoom,
+  workspaceRoom,
+  isWorkspaceRoom,
+  parseChannelRoom,
+} from "./room-keys.js";
 import { runtimeGate } from "../../runtime/runtime-gate.js";
 import { composerModeToRuntime } from "../../runtime/types.js";
 import { IndexBuilder } from "../core/index-builder.js";
-import { getDb, isDatabaseConfigured } from "../config/database.js";
+import { getDb } from "../config/database.js";
 import { startHeartbeatSystem } from "../core/agent-heartbeat.js";
 import { agents, channels, categories, workspaces, runtimeOverrides } from "../../db/schema.js";
 import { desc, gt, and, isNull, lt, sql } from "drizzle-orm";
@@ -147,12 +153,17 @@ async function triggerSystemWarning(broker: EventBroker, channelId: string, cont
 async function emitRuntimeSnapshot(target: any): Promise<void> {
   const t0 = performance.now();
   try {
-    // C3 local-first: registry + file snapshot when no DATABASE_URL.
-    if (!isDatabaseConfigured()) {
-      const { listWorkspaceRecords } = await import("../../workspace/workspace-gate.js");
-      const { localListAgents } = await import("../../agents/agent-local-store.js");
-      const records = await listWorkspaceRecords().catch(() => []);
-      const roster = await localListAgents({}).catch(() => []);
+    // C3 local-first, record-only DB: the snapshot unions each workspace's
+    // record database (best-effort fan-out) with the local file tier, local
+    // winning on id collision (same rule as mergeRoster). No env-pool read —
+    // with zero record URLs this is pure local. Local files are always read
+    // (dual-write keeps them mirroring PG), so the snapshot never depends on
+    // a database being up.
+    const { listWorkspaceRecords } = await import("../../workspace/workspace-gate.js");
+    const { localListAgents } = await import("../../agents/agent-local-store.js");
+    const records = await listWorkspaceRecords().catch(() => []);
+    const roster = await localListAgents({}).catch(() => []);
+    if (!records.some((w: any) => w.databaseUrl?.trim())) {
       const memUsedMb = Math.round(process.memoryUsage().heapUsed / 1024 / 1024);
       target.emit("runtime:snapshot", {
         workspaces: records.map((w: any) => ({
@@ -181,21 +192,52 @@ async function emitRuntimeSnapshot(target: any): Promise<void> {
       try { logMetric({ stage: 'snapshot.emit', durationMs: Math.round(performance.now() - t0) }); } catch {}
       return;
     }
-    const db = getDb();
     // Column projection: snapshot maps a fixed field set — never SELECT * the
     // full rows (agents/workspaces carry wide jsonb + secret-adjacent columns).
-    const [dbWorkspaces, dbAgents, dbOverrides] = await Promise.all([
-      db.query.workspaces.findMany({
-        columns: { id: true, name: true, ownerId: true, status: true, rootPath: true, permissions: true, constraints: true, metadata: true, createdAt: true, updatedAt: true },
-      }),
-      db.query.agents.findMany({
-        where: isNull(agents.archivedAt),
-        columns: { id: true, name: true, title: true, species: true, avatar: true, authorityLevel: true, status: true, instructionModuleId: true, modelModuleId: true, toolkitModuleId: true, isOmniscient: true, createdAt: true, updatedAt: true },
-      }),
-      db.query.runtimeOverrides.findMany({
-        columns: { id: true, targetAgentId: true, overrideType: true, instructionPatch: true, permissionPatch: true, createdBy: true, createdAt: true },
-      }),
-    ]);
+    const wsById = new Map<string, any>();
+    const agById = new Map<string, any>();
+    const ovById = new Map<string, any>();
+    for (const rec of records) {
+      if (!(rec as any).databaseUrl?.trim()) continue;
+      try {
+        const { getWorkspaceDb } = await import("../../workspace/workspace-gate.js");
+        const { db } = await getWorkspaceDb(rec.id);
+        const [wss, ags, ovs] = await Promise.all([
+          db.query.workspaces.findMany({
+            columns: { id: true, name: true, ownerId: true, status: true, rootPath: true, permissions: true, constraints: true, metadata: true, createdAt: true, updatedAt: true },
+          }),
+          db.query.agents.findMany({
+            where: isNull(agents.archivedAt),
+            columns: { id: true, name: true, title: true, species: true, avatar: true, authorityLevel: true, status: true, instructionModuleId: true, modelModuleId: true, toolkitModuleId: true, isOmniscient: true, createdAt: true, updatedAt: true },
+          }),
+          db.query.runtimeOverrides.findMany({
+            columns: { id: true, targetAgentId: true, overrideType: true, instructionPatch: true, permissionPatch: true, createdBy: true, createdAt: true },
+          }),
+        ]);
+        for (const w of wss) if (!wsById.has(w.id)) wsById.set(w.id, w);
+        for (const a of ags) if (!agById.has(a.id)) agById.set(a.id, a);
+        for (const o of ovs) if (!ovById.has(o.id)) ovById.set(o.id, o);
+      } catch {
+        // Dead database: the local tier below still represents the workspace.
+      }
+    }
+    // Local tier overwrites on collision (local-first truth).
+    for (const w of records) {
+      wsById.set(w.id, {
+        id: w.id, name: w.name, ownerId: "system", status: "ACTIVE",
+        rootPath: w.rootPath, permissions: {}, constraints: {},
+        metadata: {}, createdAt: new Date(w.createdAt), updatedAt: new Date(w.updatedAt),
+      });
+    }
+    for (const ag of roster) {
+      agById.set(ag.id, {
+        ...ag,
+        createdAt: new Date(ag.createdAt), updatedAt: new Date(ag.updatedAt),
+      });
+    }
+    const dbWorkspaces = [...wsById.values()];
+    const dbAgents = [...agById.values()];
+    const dbOverrides = [...ovById.values()];
 
     // ponytail: legacy spawn_requests retired — Swarm gate owns DAG.
     const swarms: Array<{ swarmId: string; name: string; status: "active"; members: string[]; activeTasksCount: number; createdAt: string }> = [];
@@ -319,10 +361,18 @@ export function registerSocketServer(httpServer: HttpServer, broker: EventBroker
 
   // SEC-2 handshake trust boundary: identity is derived server-side from the
   // credential in socket.handshake.auth (or Authorization/x-api-key header).
-  // Rejection here means the socket never reaches any connection handler.
+  // Keyless handshakes are accepted only from loopback peers (same-machine
+  // single user — REST parity); the loopback identity is minted here, never
+  // from client claims. Rejection here means the socket never reaches any
+  // connection handler.
   io.use(async (socket, next) => {
     try {
-      const identity = await resolveSocketIdentity(socket.handshake as any);
+      const keyed = await resolveSocketIdentity(socket.handshake as any);
+      const identity: SocketIdentity | null =
+        keyed ??
+        (isLoopbackPeer(socket.handshake.address)
+          ? { mode: "loopback", userId: "local-user", workspaceId: "default" }
+          : null);
       if (!identity) {
         next(new Error("Unauthorized"));
         return;
@@ -339,10 +389,31 @@ export function registerSocketServer(httpServer: HttpServer, broker: EventBroker
   // Room-scoped broadcast (P0-6): never io.emit globally for channel/workspace events.
   // D6: no durable_events dual-write. The per-message commit + sequence counter
   // (§29) is the event stream; catch-up is message refetch, not event replay.
+  // §30: every room is workspace-namespaced (room-keys.ts) so two workspaces
+  // sharing a channel id can never receive each other's events.
+
+  /**
+   * §30 fan-out helper: workspaces whose sockets currently observe a channel id.
+   *
+   * The authoritative answer is the live adapter itself: a channel room is
+   * `ws:<workspaceId>:channel:<channelId>`, so scanning live rooms yields exactly
+   * the scopes that have a member — and every one of them is already
+   * workspace-scoped, so the result can never cross a workspace boundary.
+   * Rooms disappear from the adapter when their last member disconnects, so this
+   * needs no bookkeeping and cannot go stale.
+   */
+  const observedScopesForChannel = (channelId: string): string[] => {
+    const scopes: string[] = [];
+    for (const room of io.sockets.adapter.rooms.keys()) {
+      const parsed = parseChannelRoom(room);
+      if (parsed && parsed.channelId === channelId) scopes.push(parsed.workspaceId);
+    }
+    return scopes;
+  };
 
   broker.onAny((event) => {
     const channelId = (event as any).channelId || (event.payload as any)?.channelId;
-    const workspaceId = (event.payload as any)?.workspaceId;
+    const payloadWorkspaceId = (event.payload as any)?.workspaceId;
 
     // EVT-0: emit the full envelope — correlation fields at top level, payload nested
     const envelope: EventEnvelope = {
@@ -354,19 +425,33 @@ export function registerSocketServer(httpServer: HttpServer, broker: EventBroker
     };
 
     if (channelId) {
-      io.to(`channel:${channelId}`).emit(event.type, envelope as never);
-      // Also emit to workspace room for cross-channel workspace observers
-      if (workspaceId) io.to(`workspace:${workspaceId}`).emit(event.type, envelope as never);
+      // §30 scoping stays SYNCHRONOUS so event ordering is unchanged.
+      // A socket only ever joins rooms of its OWN workspace, so every room
+      // below is workspace-scoped by construction and cannot cross a boundary.
+      // Scope resolution:
+      //   1. payload workspaceId (message:new carries the message row's) —
+      //      authoritative when present, because the producing domain knows
+      //      which workspace the row belongs to;
+      //   2. otherwise the live channel rooms for this channel id, which are
+      //      exactly the scopes currently observing it.
+      const scopes = payloadWorkspaceId ? [payloadWorkspaceId] : observedScopesForChannel(channelId);
+      for (const workspaceId of scopes) {
+        io.to(channelRoom(workspaceId, channelId)).emit(event.type, envelope as never);
+      }
+      // The workspace-room mirror keeps its exact previous semantics: only a
+      // payload-tagged channel event reaches the workspace room, so a socket
+      // that never joined the channel is not woken by its traffic (SEC-2).
+      if (payloadWorkspaceId) io.to(workspaceRoom(payloadWorkspaceId)).emit(event.type, envelope as never);
       // SEC-2: the workspace:default mirror fan-out is gone — channel events are
       // delivered only to sockets that actually joined the channel/workspace room.
-    } else if (workspaceId) {
-      io.to(`workspace:${workspaceId}`).emit(event.type, envelope as never);
+    } else if (payloadWorkspaceId) {
+      io.to(workspaceRoom(payloadWorkspaceId)).emit(event.type, envelope as never);
     } else {
       // Global events (workspace:sync, runtime:snapshot, budget, escalation) fan
       // out to every live workspace room; empty rooms disappear from the adapter
       // automatically when their last member disconnects.
       for (const room of io.sockets.adapter.rooms.keys()) {
-        if (room.startsWith("workspace:")) io.to(room).emit(event.type, envelope as never);
+        if (isWorkspaceRoom(room)) io.to(room).emit(event.type, envelope as never);
       }
       // For fully global fallback, also emit but limited: only if CLIENT_ORIGIN is localhost (dev)
       if (allowedOrigins.includes("*") || allowedOrigins.some((o) => o.includes("localhost"))) {
@@ -424,7 +509,8 @@ export function registerSocketServer(httpServer: HttpServer, broker: EventBroker
 
     // Auto-join the identity's own workspace scope room only. The unconditional
     // `workspace:default` mirror join was removed with the mirror fan-out (SEC-2).
-    socket.join(`workspace:${identity.workspaceId}`);
+    // §30: rooms are workspace-namespaced — `ws:<workspaceId>`.
+    socket.join(workspaceRoom(identity.workspaceId));
 
     const deny = (code: string, message: string) => {
       console.warn(`[Socket] ${code}: ${message} (identity=${identity.userId})`);
@@ -434,13 +520,49 @@ export function registerSocketServer(httpServer: HttpServer, broker: EventBroker
     // Server-side room admission checks (SEC-2). The schema has no per-user
     // channel membership/visibility model; the strongest real rule available is:
     // verified key identity + channel/workspace must exist server-side via gates.
-    const canJoinChannelRoom = async (cid: string): Promise<boolean> => {
+    //
+    // §30 adds the workspace boundary: the room key is derived from the
+    // CHANNEL's owning workspace (server truth, never a client claim), and a
+    // socket that declared a real workspace may only join channels of that
+    // workspace. Legacy channels with no workspaceId are global by design
+    // (migration 0018 convention) and stay joinable from any workspace; the
+    // loopback/apikey identity's "default" is the unscoped single-user
+    // placeholder used across this codebase ("?? default"), not a tenant.
+    const DEFAULT_WORKSPACE_SCOPE = "default";
+
+    /** Effective workspace of this socket (declared via workspace:join, else identity). */
+    const socketWorkspace = (): string =>
+      (socket.data as { workspaceId?: string }).workspaceId ?? identity.workspaceId ?? DEFAULT_WORKSPACE_SCOPE;
+
+    /**
+     * §30 channel-room admission. Returns the room to join, or a denial reason.
+     *
+     * The room key comes from the CHANNEL's owning workspace (server truth via
+     * the gate, never a client claim). A socket whose effective workspace is a
+     * real workspace may only join channels of that workspace. Legacy channels
+     * with no workspaceId are global by design (migration 0018 convention) and
+     * stay joinable; the "default" placeholder identity is the unscoped
+     * single-user scope it already is everywhere else in this codebase.
+     */
+    const resolveChannelRoom = async (
+      cid: string,
+    ): Promise<{ room: string; workspaceId: string } | { deny: "channel_not_found" | "channel_forbidden" }> => {
+      let row: unknown = null;
       try {
-        return Boolean(await channelGate.get(cid));
+        row = await channelGate.get(cid);
       } catch {
-        return false;
+        row = null;
       }
+      if (!row) return { deny: "channel_not_found" };
+      const rawWorkspaceId = (row as { workspaceId?: string | null }).workspaceId ?? null;
+      const channelWorkspaceId = rawWorkspaceId ?? DEFAULT_WORKSPACE_SCOPE;
+      const declared = socketWorkspace();
+      if (rawWorkspaceId !== null && declared !== DEFAULT_WORKSPACE_SCOPE && declared !== rawWorkspaceId) {
+        return { deny: "channel_forbidden" };
+      }
+      return { room: channelRoom(channelWorkspaceId, cid), workspaceId: channelWorkspaceId };
     };
+
     const canJoinWorkspaceRoom = async (wid: string): Promise<boolean> => {
       try {
         // C3 local-first: registry first (works without DATABASE_URL), DB second.
@@ -470,16 +592,22 @@ export function registerSocketServer(httpServer: HttpServer, broker: EventBroker
       }
     };
 
-    // Explicit channel join handler for room-scoped broadcast
+    // Explicit channel join handler for room-scoped broadcast.
+    // §30: the room is `ws:<workspaceId>:channel:<channelId>` — the workspace
+    // comes from the channel row, so the same channel id in two workspaces maps
+    // to two distinct rooms and neither socket can observe the other.
     socket.on("channel:join" as any, async (data: any) => {
       const cid = typeof data === "string" ? data : data?.channelId;
       if (!cid || typeof cid !== "string") return;
 
-      if (!(await canJoinChannelRoom(cid))) {
-        deny("channel_not_found", `Unknown or inaccessible channel ${cid}`);
+      const resolved = await resolveChannelRoom(cid);
+      if ("deny" in resolved) {
+        deny(resolved.deny, resolved.deny === "channel_forbidden"
+          ? `Channel ${cid} belongs to another workspace`
+          : `Unknown or inaccessible channel ${cid}`);
         return;
       }
-      socket.join(`channel:${cid}`);
+      socket.join(resolved.room);
       // D6: no server replay. Catch-up is message refetch
       // (GET /api/channels/:id/messages on setActiveChannel).
     });
@@ -491,20 +619,33 @@ export function registerSocketServer(httpServer: HttpServer, broker: EventBroker
         deny("workspace_not_found", `Unknown or inaccessible workspace ${wid}`);
         return;
       }
-      socket.join(`workspace:${wid}`);
+      socket.join(workspaceRoom(wid));
       socket.data.workspaceId = wid;
     });
     // D1 switch teardown: client leaves rooms it no longer observes so
     // cross-workspace events stop arriving after enter/switch.
-    socket.on("channel:leave" as any, (data: any) => {
+    // §30: leave uses the same namespaced keys as join. The channel scope is
+    // derived from the channel row so a leave always targets the room the join
+    // created; a failed lookup falls back to the socket's own workspace scope.
+    socket.on("channel:leave" as any, async (data: any) => {
       const cid = typeof data === "string" ? data : data?.channelId;
       if (!cid || typeof cid !== "string") return;
-      try { socket.leave(`channel:${cid}`); } catch {}
+      try {
+        let row: unknown = null;
+        try {
+          row = await channelGate.get(cid);
+        } catch {
+          row = null;
+        }
+        const channelWorkspaceId =
+          (row as { workspaceId?: string | null } | null)?.workspaceId || socketWorkspace();
+        socket.leave(channelRoom(channelWorkspaceId, cid));
+      } catch {}
     });
     socket.on("workspace:leave" as any, (data: any) => {
       const wid = typeof data === "string" ? data : data?.workspaceId;
       if (!wid || typeof wid !== "string") return;
-      try { socket.leave(`workspace:${wid}`); } catch {}
+      try { socket.leave(workspaceRoom(wid)); } catch {}
       if (socket.data.workspaceId === wid) socket.data.workspaceId = undefined;
     });
 
@@ -542,17 +683,38 @@ export function registerSocketServer(httpServer: HttpServer, broker: EventBroker
 
       const { channelId, content } = payload as any;
       const rawMode = (payload as any).mode ?? (payload as any).runtimeMode;
-      const explicitRuntime = composerModeToRuntime(rawMode);
+      let explicitRuntime = composerModeToRuntime(rawMode);
       if (explicitRuntime) {
         console.log(`[Router] Override->${explicitRuntime} (from mode="${rawMode}") in #${channelId}`);
       } else {
-        console.log(`[Router] Auto mode selected for message in #${channelId}`);
+        // §6 pinned runtime: an unset/temporary mode falls back to the
+        // channel pin before Auto. A failed settings read means Auto.
+        const settings = channelId && typeof channelId === "string"
+          ? await channelGate.getSettings(channelId).catch(() => null)
+          : null;
+        const pinned = (settings as any)?.pinnedRuntime;
+        if (typeof pinned === "string" && composerModeToRuntime(pinned)) {
+          explicitRuntime = composerModeToRuntime(pinned);
+          console.log(`[Router] Pinned->${explicitRuntime} in #${channelId}`);
+        } else {
+          console.log(`[Router] Auto mode selected for message in #${channelId}`);
+        }
       }
 
-      // Auto-join the target channel so sender receives scoped events — only
-      // after the same server-side admission check as channel:join (SEC-2).
-      if (channelId && typeof channelId === "string" && (await canJoinChannelRoom(channelId))) {
-        socket.join(`channel:${channelId}`);
+      // Owning channel row once per message: admission + workspace stamping +
+      // default-target resolution share it (was 3 duplicate lookups).
+      const msgChannel = channelId && typeof channelId === "string"
+        ? await channelGate.get(channelId).catch(() => null)
+        : null;
+      // Workspace stamp for runs/agent rows (message rows resolve it via gate).
+      const msgWorkspaceId =
+        msgChannel?.workspaceId ?? (socket.data as any)?.workspaceId ?? "default";
+
+      // Auto-join the target channel so the sender receives scoped events —
+      // only after the same §30 workspace-scoped admission check as channel:join.
+      if (msgChannel) {
+        const autoJoinWorkspaceId = msgChannel.workspaceId ?? DEFAULT_WORKSPACE_SCOPE;
+        socket.join(channelRoom(autoJoinWorkspaceId, channelId));
       }
 
       try {
@@ -605,7 +767,7 @@ export function registerSocketServer(httpServer: HttpServer, broker: EventBroker
             res = await runOrReportBusy({
               agent,
               channelId,
-              workspaceId: 'default',
+              workspaceId: msgWorkspaceId,
               userInput: content,
               broker,
               explicitRuntime,
@@ -627,11 +789,27 @@ export function registerSocketServer(httpServer: HttpServer, broker: EventBroker
 
         const isQueueModeBullMq = queueGate.mode() === "bullmq" && process.env.NODE_ENV !== "test";
 
-        // Default-agent resolution (§8 hierarchy, Librarian never default).
-        // C3 local-first: gates branch to files when no DATABASE_URL.
+        // Default-agent resolution (§7 pinned mention, then §8 hierarchy,
+        // Librarian never default). C3 local-first: gates branch to files
+        // when no DATABASE_URL. Only live (non-paused/offline) agents serve.
         const resolveDefaultTargets = async (): Promise<typeof allAgents> => {
           const targetAgents: typeof allAgents = [];
-          const channel = await channelGate.get(channelId).catch(() => null);
+          const live = (id: string | null | undefined) => {
+            const agent = id ? allAgents.find(a => a.id === id) : undefined;
+            return agent && !isLibrarianAgent(agent) && agent.status !== "offline" && agent.status !== "paused" ? agent : undefined;
+          };
+          const settings = await channelGate.getSettings(channelId).catch(() => null);
+          const pinnedAgent = live((settings as any)?.activeAgentId);
+          if (pinnedAgent) {
+            targetAgents.push(pinnedAgent);
+            return targetAgents;
+          }
+          const channelDefault = live((settings as any)?.defaultAgentId);
+          if (channelDefault) {
+            targetAgents.push(channelDefault);
+            return targetAgents;
+          }
+          const channel = msgChannel;
           if (channel?.categoryId) {
             const category = await channelGate.getCategory(channel.categoryId).catch(() => null);
             if (category?.ownedByAgentId) {
@@ -691,7 +869,7 @@ export function registerSocketServer(httpServer: HttpServer, broker: EventBroker
                 // so the executor would openRun() a phantom row per attempt (x3 retries).
                 // If persist fails (runs disabled / DB down), skip enqueue.
                 const { runsGate } = await import("../../runs/runs-gate.js");
-                const persisted = await runsGate.create({ agentId: agent.id, channelId, workspaceId: "default", runtimeType: explicitRuntime ?? "agentic" }).catch(() => null);
+                const persisted = await runsGate.create({ agentId: agent.id, channelId, workspaceId: msgWorkspaceId, runtimeType: explicitRuntime ?? "agentic" }).catch(() => null);
                 if (!persisted?.id) {
                   await triggerSystemWarning(broker, channelId, `System error queueing @${agent.name}: could not persist run.`);
                   return;
@@ -703,7 +881,8 @@ export function registerSocketServer(httpServer: HttpServer, broker: EventBroker
                   agentId: agent.id,
                   messageId: userMsg.id,
                   userInput: content,
-                  workspaceId: "default",
+                  workspaceId: msgWorkspaceId,
+                  explicitRuntime: explicitRuntime ?? null,
                 });
                 broker.emit("run.queued" as never, { runId, channelId, agentId: agent.id } as never, { channelId });
                 console.log(`[Socket][Queue] Enqueued run ${runId} for @${agent.name} in #${channelId} (msg ${userMsg.id})`);
@@ -741,12 +920,11 @@ export function registerSocketServer(httpServer: HttpServer, broker: EventBroker
               }
             }
           } else {
-            const autoChannel = await channelGate.get(channelId).catch(() => null);
             for (const agent of await resolveDefaultTargets()) {
               batch.push(() =>
                 dispatchAgent(
                   agent,
-                  `[Socket] Auto-triggering agent @${agent.name} for unmentioned message in #${autoChannel?.name || channelId}...`,
+                  `[Socket] Auto-triggering agent @${agent.name} for unmentioned message in #${msgChannel?.name || channelId}...`,
                 ),
               );
             }

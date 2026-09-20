@@ -127,12 +127,22 @@ export interface WorkspaceDatabaseInfo {
   schemaReady?: boolean;
 }
 
+export type WorkspaceStoragePreference = 'default' | 'local';
+
+export interface WorkspaceDbSyncInfo {
+  dbWorkspaceId: string | null;
+  state: 'paired' | 'conflict' | 'importing' | 'pushing';
+  updatedAt: string;
+}
+
 export interface Workspace {
   id: string;
   name: string;
   icon: string; // Emoji or simple initial
   dbUrl?: string;
   database?: WorkspaceDatabaseInfo;
+  storagePreference?: WorkspaceStoragePreference;
+  dbSync?: WorkspaceDbSyncInfo | null;
   _database?: {
     configured: boolean;
     host?: string;

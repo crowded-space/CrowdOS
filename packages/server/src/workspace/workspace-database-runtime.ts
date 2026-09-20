@@ -4,12 +4,14 @@
 // held in memory — never in logs or errors.
 // ponytail: `.env` lookup kept as legacy fallback; remove when importer lands.
 //
-// Routing contract (pilot):
-//   - `getWorkspaceDb(workspaceId?)` resolves `{ db, source }`.
-//   - `source === "global"` whenever no id is given or no URL is assigned,
-//     so unconfigured workspaces behave exactly as before.
-//   - Call sites that know the workspace pass its id; by-id lookups without
-//     context stay global-first (bulk migration may add a registry later).
+// Routing contract (record-only):
+//   - `getWorkspaceDb(workspaceId)` resolves `{ db, source: "workspace" }`
+//     from the registry record (or per-workspace env file).
+//   - No id or no assigned URL throws NO_DATABASE — NEVER the process env
+//     pool (that fallback was the "single predetermined db" leak; env URLs
+//     are CLI-only). Callers degrade to local files.
+//   - `source === "global"` is retained on the type for the tenant hook's
+//     local-mode branch but is no longer produced here.
 //   - One drizzle handle === one Postgres database: never mix handles inside
 //     a single transaction.
 
@@ -80,22 +82,28 @@ async function evictIdle(now: number): Promise<void> {
 }
 
 /**
- * Resolve the drizzle handle for a workspace. Falls back to the global pool
- * when no id is given or no database URL is assigned to the workspace.
+ * Resolve the drizzle handle for a workspace's record database. Record-only:
+ * throws NO_DATABASE when no id is given or no database URL is assigned —
+ * NEVER falls back to the process env pool (that fallback was the "single
+ * predetermined db" leak; env URLs are CLI-only). Callers degrade to local.
  * Rotates the pooled handle when the assigned URL changed on disk.
  */
 export async function getWorkspaceDb(
   workspaceId?: string | null,
   opts?: { envPath?: string },
 ): Promise<ResolvedWorkspaceDb> {
-  if (!workspaceId) return { db: getDb(), source: "global", workspaceId: null };
+  if (!workspaceId) {
+    throw Object.assign(new Error("NO_DATABASE: no workspace context (local-only)"), { code: "NO_DATABASE" });
+  }
   let url: string | null = null;
   try {
     const regRecord = await getWorkspaceRecord(workspaceId);
     if (regRecord?.databaseUrl) url = regRecord.databaseUrl;
   } catch {}
   if (!url) url = await readWorkspaceDatabaseUrl(workspaceId, opts);
-  if (!url) return { db: getDb(), source: "global", workspaceId };
+  if (!url) {
+    throw Object.assign(new Error(`NO_DATABASE: workspace ${workspaceId} has no databaseUrl (local-only)`), { code: "NO_DATABASE" });
+  }
 
   const existing = pools.get(workspaceId);
   if (existing) {
@@ -155,17 +163,12 @@ export function __resetWorkspaceDbPoolsForTests(): void {
 }
 
 // ponytail: serial + per-target best-effort — one dead database never stalls
-// the rest; handles dedupe the legacy global pool when a workspace reuses its
-// URL. Parallelize if fleets make the serial pass slow.
+// the rest. Record-only: no global-pool target (env URLs are CLI-only).
+// Parallelize if fleets make the serial pass slow.
 export async function forEachWorkspaceDb(
   fn: (db: ReturnType<typeof getDb>, workspaceId: string | null) => Promise<void>,
 ): Promise<void> {
   const targets: Array<{ db: ReturnType<typeof getDb>; workspaceId: string | null }> = [];
-  try {
-    targets.push({ db: getDb(), workspaceId: null });
-  } catch {
-    // Zero-DB boot without DATABASE_URL: no global handle; workspaces still sweep.
-  }
   try {
     const records = await listWorkspaceRecords();
     for (const record of records) {
@@ -178,7 +181,7 @@ export async function forEachWorkspaceDb(
       }
     }
   } catch {
-    // Registry unreadable: global-only sweep.
+    // Registry unreadable: no sweep targets.
   }
   const seen = new Set<object>();
   for (const target of targets) {

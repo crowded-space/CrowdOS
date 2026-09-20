@@ -9,6 +9,10 @@ vi.mock("../skills/skills-gate.js", () => ({
       "rwp_write_b",
       "rwp_read_c",
       "rwp_write_c",
+      "rwp_read_p1",
+      "rwp_read_p2",
+      "rwp_write_p1",
+      "rwp_write_p2",
     ],
   },
 }));
@@ -81,10 +85,20 @@ beforeAll(() => {
   registerProbe("rwp_write_b", "write", 80);
   registerProbe("rwp_read_c", "read", 60);
   registerProbe("rwp_write_c", "write", 40);
+  // Long-sleep probes for the wall-clock concurrency proof: executor overhead
+  // (~25ms/call) is noise against these durations, so the timing assertions
+  // measure scheduling rather than harness cost.
+  registerProbe("rwp_read_p1", "read", 300);
+  registerProbe("rwp_read_p2", "read", 250);
+  registerProbe("rwp_write_p1", "write", 200);
+  registerProbe("rwp_write_p2", "write", 200);
 });
 
 afterAll(() => {
-  for (const id of ["rwp_read_a", "rwp_read_b", "rwp_write_a", "rwp_write_b", "rwp_read_c", "rwp_write_c"]) {
+  for (const id of [
+    "rwp_read_a", "rwp_read_b", "rwp_write_a", "rwp_write_b", "rwp_read_c", "rwp_write_c",
+    "rwp_read_p1", "rwp_read_p2", "rwp_write_p1", "rwp_write_p2",
+  ]) {
     toolRegistry.unregister(id);
   }
 });
@@ -134,30 +148,52 @@ describe("PERF-8 · mixed-batch scheduling (TOOL_RWP on)", () => {
     else process.env.TOOL_RWP = savedRwp;
   });
 
-  it("[read,write,read,write]: reads concurrent, writes ordered, results in request order", async () => {
+  it("[read,read,write,write]: early reads concurrent, writes ordered, results in request order", async () => {
     resetTrace();
     const started = Date.now();
     const results = await ToolExecutor.executeBatch("agent-probe", [
-      { toolId: "rwp_read_a", args: { marker: "read:a" } },
-      { toolId: "rwp_write_a", args: { marker: "write:a" } },
-      { toolId: "rwp_read_b", args: { marker: "read:b" } },
-      { toolId: "rwp_write_b", args: { marker: "write:b" } },
+      { toolId: "rwp_read_p1", args: { marker: "read:p1" } },
+      { toolId: "rwp_read_p2", args: { marker: "read:p2" } },
+      { toolId: "rwp_write_p1", args: { marker: "write:p1" } },
+      { toolId: "rwp_write_p2", args: { marker: "write:p2" } },
     ]);
     const total = Date.now() - started;
 
-    expect(results.map((r) => r.output)).toEqual(["read:a", "write:a", "read:b", "write:b"]);
+    expect(results.map((r) => r.output)).toEqual(["read:p1", "read:p2", "write:p1", "write:p2"]);
     expect(results.every((r) => r.success)).toBe(true);
 
+    // Reads before the first write run in a bounded pool → both in flight.
     expect(peakConcurrentReads).toBeGreaterThanOrEqual(2);
 
-    const wa = span("rwp_write_a");
-    const wb = span("rwp_write_b");
-    expect(wb.start + 5).toBeGreaterThanOrEqual(wa.end);
+    // Writes stay serialized in program order.
+    const wp1 = span("rwp_write_p1");
+    const wp2 = span("rwp_write_p2");
+    expect(wp2.start + 5).toBeGreaterThanOrEqual(wp1.end);
 
-    const sumAll = 120 + 80 + 100 + 80;
-    const expectedFloor = Math.max(120, 100) + 80 + 80;
+    // True contract floor: parallel read pair (max 300ms) then two serial
+    // writes (200+200). Fully-serial execution (950ms) would exceed the cap.
+    const expectedFloor = Math.max(300, 250) + 200 + 200;
+    const sumAll = 300 + 250 + 200 + 200;
     expect(total).toBeGreaterThanOrEqual(expectedFloor - 25);
     expect(total).toBeLessThan(sumAll - 20);
+  }, 15000);
+
+  it("safety rule: a read after a write runs after that write (observes it)", async () => {
+    resetTrace();
+    const results = await ToolExecutor.executeBatch("agent-probe", [
+      { toolId: "rwp_write_a", args: { marker: "write:a" } },
+      { toolId: "rwp_read_c", args: { marker: "read:c" } },
+    ]);
+
+    expect(results.map((r) => r.output)).toEqual(["write:a", "read:c"]);
+    expect(results.every((r) => r.success)).toBe(true);
+
+    // Conservative contract: read-after-write is serialized behind the write,
+    // never overlapped — the read must see the write's effect.
+    const wa = span("rwp_write_a");
+    const rc = span("rwp_read_c");
+    expect(rc.start + 5).toBeGreaterThanOrEqual(wa.end);
+    expect(peakConcurrentReads).toBe(1);
   }, 15000);
 
   it("bounded pool caps read concurrency", async () => {

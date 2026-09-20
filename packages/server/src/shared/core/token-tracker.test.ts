@@ -1,4 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { setLocalStoreDirForTests } from "./local-file.js";
+
+let localTestDir: string | null = null;
 
 vi.mock("../config/database.js", async () => {
   const h = await import("./token-tracker-test-db.js");
@@ -8,6 +14,14 @@ vi.mock("../config/database.js", async () => {
     dbScopeKey: () => "global",
     runWithDb: (_db: unknown, fn: () => unknown) => (fn as () => Promise<unknown>)(),
     isDatabaseConfigured: () => true,
+    // Dual-boot surface: budget-warning message appends stay on local files
+    // (temp dir, set below) so this suite never touches PG or dev files.
+    resolveTier: () => ({ tier: "local", url: null }),
+    withStoreFallback: async (_ctx: unknown, _dbOp: () => Promise<unknown>, localOp: () => Promise<unknown>) => localOp(),
+    isConnectionError: () => false,
+    noteDbFailure: () => {},
+    noteDbSuccess: () => {},
+    dualWrite: async ({ localWrite }: { localWrite: () => Promise<unknown> }) => localWrite(),
   };
 });
 
@@ -18,6 +32,19 @@ vi.mock("./sequence-number.js", () => ({
 vi.mock("../../agents/agent-gate.js", () => ({
   EscalationChain: { escalate: async () => {} },
 }));
+
+// Record-only fan-out: reconcile visits workspace databases, so yield the
+// budget fixture for an explicit test workspace (no global-pool fallback).
+vi.mock("../../workspace/workspace-gate.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../workspace/workspace-gate.js")>();
+  const h = await import("./token-tracker-test-db.js");
+  return {
+    ...actual,
+    forEachWorkspaceDb: async (fn: (db: unknown, workspaceId: string | null) => Promise<void>) => {
+      await fn(h.fakeBudgetDb, "ws-test");
+    },
+  };
+});
 
 import {
   budgetFixture,
@@ -52,6 +79,14 @@ describe("TokenTracker budget:warning truth-out (CTX-1)", () => {
   beforeEach(() => {
     resetBudgetFixture();
     TokenTracker.budgetWarningState = { cap: null, warned: false };
+    if (localTestDir) rmSync(localTestDir, { recursive: true, force: true });
+    localTestDir = mkdtempSync(join(tmpdir(), "crowdos-tracker-"));
+    setLocalStoreDirForTests(localTestDir);
+  });
+  afterEach(() => {
+    setLocalStoreDirForTests(null);
+    if (localTestDir) rmSync(localTestDir, { recursive: true, force: true });
+    localTestDir = null;
   });
 
   it("does not warn below the 80% threshold", async () => {

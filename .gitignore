@@ -61,3 +61,7 @@ e2e-screenshots/
 re-docs/
 
 
+# CrowdOS runtime data (registries, file stores, outboxes)
+sandbox/
+packages/server/sandbox/
+**/localstore/

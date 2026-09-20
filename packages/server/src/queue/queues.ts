@@ -13,6 +13,8 @@ export interface EnqueueRunInput {
   messageId: string;
   userInput: string;
   workspaceId?: string | null;
+  /** Manual runtime choice at send time — worker forwards it instead of re-routing Auto. */
+  explicitRuntime?: string | null;
 }
 
 export interface EnqueueResult {

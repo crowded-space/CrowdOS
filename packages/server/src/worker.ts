@@ -6,13 +6,20 @@ import { getDb, closeDatabaseConnection } from "./shared/config/database.js";
 
 async function main() {
   console.log("[worker] booting — QUEUE_MODE=", process.env.QUEUE_MODE ?? "inline");
-  console.log("[worker] connecting to DB…");
-  try {
-    getDb();
-    console.log("[worker] DB connection established");
-  } catch (err) {
-    console.error("[worker] DB connection failed", err);
-    process.exit(1);
+  // Record-only DB: the worker needs a database solely for bullmq durable
+  // execution (per-workspace pools resolve per job). Inline mode is fully
+  // local — a missing env URL must not fail boot.
+  if (queueGate.mode() === "bullmq") {
+    console.log("[worker] connecting to DB…");
+    try {
+      getDb();
+      console.log("[worker] DB connection established");
+    } catch (err) {
+      console.error("[worker] DB connection failed", err);
+      process.exit(1);
+    }
+  } else {
+    console.log("[worker] no env database configured — local-only inline mode");
   }
 
   runtimeGate.init();

@@ -3,12 +3,20 @@ import { eq, sql } from "drizzle-orm";
 import { getDb } from "../shared/config/database.js";
 import { agentMemoryNotes, embeddingModelProfiles } from "../db/schema.js";
 import { logMetric } from "../shared/core/structured-log.js";
+import { resolveMemoryDb, type MemoryWorkspaceOpts } from "./memory-lifecycle.js";
 
 /**
  * SCL-2: Semantic memory — embedding pipeline + pgvector hybrid scoring.
  *
  * Embedding profile tables (embeddingModelProfiles) are finally consumed.
  * When EMBEDDING_ENABLED=false, all semantic ops are no-ops (heuristic-only fallback).
+ *
+ * Record-only threading (CrowdOS §17): `embedText` accepts an optional
+ * workspace scope so profile resolution uses the workspace DB handle when a
+ * caller holds context (retrieval does). The remaining exports (embedNote,
+ * embedNotesBatch, ensureEmbeddingsForAgent, searchByEmbedding, hybridScore)
+ * have no production caller carrying workspace context yet — they keep the
+ * env-gated legacy handle and are documented as the remaining port surface.
  */
 
 export interface EmbeddingResult {
@@ -48,7 +56,7 @@ function hybridWeight(): number {
   return 0.5;
 }
 
-async function resolveEmbeddingProfile(): Promise<EmbeddingProfile | null> {
+async function resolveEmbeddingProfile(opts?: MemoryWorkspaceOpts): Promise<EmbeddingProfile | null> {
   const directModel = process.env.EMBEDDING_MODEL?.trim();
   if (directModel) {
     return {
@@ -59,7 +67,8 @@ async function resolveEmbeddingProfile(): Promise<EmbeddingProfile | null> {
     };
   }
   try {
-    const db = getDb();
+    const db = await resolveMemoryDb(opts);
+    if (!db) return null;
     const row = await db.query.embeddingModelProfiles.findFirst();
     if (row) {
       return {
@@ -107,8 +116,8 @@ export function mockEmbed(text: string, dimensions: number = embeddingDimensions
   return vector.map((v) => v / norm);
 }
 
-export async function embedText(text: string): Promise<EmbeddingResult> {
-  const profile = await resolveEmbeddingProfile();
+export async function embedText(text: string, opts?: MemoryWorkspaceOpts): Promise<EmbeddingResult> {
+  const profile = await resolveEmbeddingProfile(opts);
   const dimensions = profile?.dimensions ?? embeddingDimensions();
   const model = profile?.modelName ?? process.env.EMBEDDING_MODEL ?? "mock-hash";
 

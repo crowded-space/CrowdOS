@@ -15,6 +15,8 @@ export interface AgentAuthorityPermissions {
  *  All cognitive configuration (system prompt, model, tools) lives in referenced modules. */
 export interface AgentProfile {
   id: string;
+  /** Owning workspace (CrowdOS §1 isolation). Null = legacy global row. */
+  workspaceId?: string | null;
   name: string;
   title: string;
   species?: string;
@@ -45,6 +47,7 @@ export interface AgentProfile {
 }
 
 export interface CreateAgentProfileInput {
+  workspaceId?: string | null;
   name: string;
   title: string;
   species?: string;
@@ -67,6 +70,7 @@ export interface CreateAgentProfileInput {
 }
 
 export interface UpdateAgentProfileInput {
+  workspaceId?: string | null;
   name?: string;
   title?: string;
   species?: string | null;
@@ -89,6 +93,7 @@ export interface UpdateAgentProfileInput {
 }
 
 export interface AgentRegistryFilters {
+  workspaceId?: string | null;
   authorityLevel?: AuthorityLevel;
   status?: AgentStatus;
   isTemplate?: boolean;

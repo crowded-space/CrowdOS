@@ -10,6 +10,7 @@ import { mutateJsonArray, readJsonArray } from "../shared/core/local-file.js";
 
 export interface LocalAgentRow {
   id: string;
+  workspaceId?: string | null;
   name: string;
   title: string;
   species?: string;
@@ -55,6 +56,7 @@ function revive(row: LocalAgentRow): any {
 }
 
 export async function localListAgents(filters?: {
+  workspaceId?: string | null;
   authorityLevel?: number;
   status?: string;
   isTemplate?: boolean;
@@ -63,6 +65,11 @@ export async function localListAgents(filters?: {
 }): Promise<any[]> {
   const rows = await readJsonArray<LocalAgentRow>(AGENTS_FILE);
   let list = rows.filter((r) => r.archivedAt === null);
+  // Isolation: scoped rows visible only in their workspace; legacy null rows
+  // (pre-migration) visible everywhere until backfilled.
+  if (filters?.workspaceId !== undefined && filters.workspaceId !== null) {
+    list = list.filter((r) => (r.workspaceId ?? null) === null || r.workspaceId === filters.workspaceId);
+  }
   if (filters?.authorityLevel !== undefined) list = list.filter((r) => r.authorityLevel === filters.authorityLevel);
   if (filters?.status !== undefined) list = list.filter((r) => r.status === filters.status);
   if (filters?.isTemplate !== undefined) list = list.filter((r) => r.isTemplate === filters.isTemplate);
@@ -92,6 +99,7 @@ export async function localSetAgentStatus(id: string, status: string): Promise<v
 
 export async function localUpsertAgent(input: {
   id?: string;
+  workspaceId?: string | null;
   name: string;
   title: string;
   species?: string;
@@ -111,6 +119,7 @@ export async function localUpsertAgent(input: {
       if (idx !== -1) {
         rows[idx] = {
           ...rows[idx],
+          ...(input.workspaceId !== undefined ? { workspaceId: input.workspaceId } : {}),
           name: input.name,
           title: input.title,
           authorityLevel: input.authorityLevel,
@@ -123,6 +132,7 @@ export async function localUpsertAgent(input: {
     }
     const row: LocalAgentRow = {
       id: input.id ?? randomUUID(),
+      workspaceId: input.workspaceId ?? null,
       name: input.name,
       title: input.title,
       species: input.species,

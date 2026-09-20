@@ -428,6 +428,7 @@ export class CodingRuntime extends BaseRuntime {
         this.writeReflectionNoteAsync({
           agentId: packet.agentId,
           channelId: packet.channelId,
+          workspaceId: packet.workspaceId,
           importanceScore: 0.7,
           hook,
           brief: cleanBrief,

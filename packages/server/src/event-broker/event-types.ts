@@ -20,16 +20,6 @@ export interface AgentThinkingEventPayload {
   channelId: string;
 }
 
-export interface AgentSpawnedEventPayload {
-  pairs: string[];
-  channelId: string;
-  batchNum: number;
-}
-
-export interface AgentDespawnedEventPayload {
-  agentId: string;
-}
-
 export interface AgentPausedEventPayload {
   agentId: string;
   reason: string;
@@ -161,8 +151,6 @@ export interface BrokerEventMap {
   "message:new": ChannelMessage & { metadata?: Record<string, unknown>; toolCalls?: StructuredToolCall[] };
   "message:stream": MessageStreamEventPayload;
   "agent:thinking": AgentThinkingEventPayload;
-  "agent:spawned": AgentSpawnedEventPayload;
-  "agent:despawned": AgentDespawnedEventPayload;
   "agent:paused": AgentPausedEventPayload;
   "agent:resumed": { agentId: string };
   "strike:initiated": StrikeInitiatedEventPayload;

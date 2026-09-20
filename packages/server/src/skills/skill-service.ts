@@ -208,6 +208,14 @@ export class SkillService {
     toolIds.add("lock_in");
     toolIds.add("lock_out");
 
+    // 5. Universal discovery tools. §21 makes capabilities "discoverable and
+    // lazily expanded" and §20 makes skills "expanded on demand" — both need an
+    // expansion verb the agent can actually call, or the economy collapses back
+    // into wholesale injection. Authorization for whatever these return is still
+    // enforced per-call in ToolExecutor, so granting the verbs is safe.
+    toolIds.add("open_detail");
+    toolIds.add("load_skill");
+
     const result = Array.from(toolIds);
     this.resolvedToolsCache.set(key, result);
     return result;

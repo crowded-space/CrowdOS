@@ -1,21 +1,18 @@
 /**
  * PERF-9 · Provider HTTP keep-alive.
  *
- * Delivery status (honest): the `undici` npm package is NOT resolvable in this
- * workspace (only the types-only `undici-types` ships transitively), and adding
- * it was forbidden this wave. Node's global fetch (used by every provider
- * adapter via providerFetch) already pools connections per origin with HTTP
- * keep-alive enabled by default — verified against a local origin counting
- * distinct sockets across sequential requests. Therefore adapters are warm-path
- * pooled today; a custom Agent would add explicit tuning (pipelining,
- * keepAliveTimeout, connection caps) on top.
+ * Delivery status (honest): `undici` IS resolvable in this workspace (hoisted
+ * transitively via electron/electron-builder), so getProviderDispatcher()
+ * returns an Agent configured below and providerFetch attaches it as
+ * `dispatcher` on every adapter fetch (coexisting with the CAN-1 composed
+ * abort signal). The lazy probe keeps installs without a resolvable undici
+ * working unchanged: Node >=18 global fetch already pools connections per
+ * origin with keep-alive enabled by default, so adapters are warm-path pooled
+ * either way; the Agent adds explicit tuning (pipelining, keepAliveTimeout,
+ * connection caps) when available.
  *
- * This module probes for `undici` lazily at runtime WITHOUT a static import:
- * if the package ever becomes installable/resolvable, getProviderDispatcher()
- * starts returning an Agent configured below and providerFetch automatically
- * attaches it as `dispatcher` to every adapter fetch call (coexisting with the
- * CAN-1 composed abort signal). Until then it resolves undefined and fetch
- * proceeds exactly as before.
+ * The probe is dynamic (no static import) so a missing package degrades to
+ * `undefined` instead of breaking module load.
  */
 
 export interface ProviderKeepAliveConfig {
@@ -45,14 +42,32 @@ export function getProviderKeepAliveConfig(): ProviderKeepAliveConfig {
   };
 }
 
-let dispatcherOverride: unknown | null = null;
+let cachedDispatcher: unknown | undefined | null = null;
 
-/** Test hook only: force the dispatcher probe outcome. */
-export function _setUndiciDispatcherForTesting(value: unknown | null): void {
-  dispatcherOverride = value;
+/**
+ * Explicit override state: `null` = no override (probe lazily), otherwise the
+ * forced value held in `value`. A holder (not a bare sentinel) so tests can
+ * force *unavailable* (`undefined`/`null`) as well as a concrete dispatcher.
+ */
+let dispatcherOverride: { value: unknown } | null = null;
+
+/**
+ * Test hook only: force the dispatcher resolution outcome. Pass the value to
+ * force — `undefined` (or `null`) forces "unavailable". Call
+ * `_resetUndiciDispatcherForTesting()` to restore lazy probe semantics.
+ */
+export function _setUndiciDispatcherForTesting(value: unknown): void {
+  dispatcherOverride = { value };
+  // Any override change invalidates the probe cache so a later reset re-probes
+  // instead of serving a stale result from a different override regime.
+  cachedDispatcher = null;
 }
 
-let cachedDispatcher: unknown | undefined | null = null;
+/** Test hook only: clear any forced override and re-enable lazy probing. */
+export function _resetUndiciDispatcherForTesting(): void {
+  dispatcherOverride = null;
+  cachedDispatcher = null;
+}
 
 async function probeUndiciAgent(): Promise<unknown | undefined> {
   try {
@@ -76,9 +91,11 @@ async function probeUndiciAgent(): Promise<unknown | undefined> {
 /**
  * Returns an undici Agent when the package is resolvable, otherwise undefined.
  * Result is cached; the first call performs one dynamic import attempt.
+ * A test override (see `_setUndiciDispatcherForTesting`) short-circuits the
+ * probe entirely, including forced-unavailable (`undefined`/`null`).
  */
 export async function getProviderDispatcher(): Promise<unknown | undefined> {
-  if (dispatcherOverride !== null) return dispatcherOverride ?? undefined;
+  if (dispatcherOverride !== null) return dispatcherOverride.value ?? undefined;
   if (cachedDispatcher === null) {
     cachedDispatcher = await probeUndiciAgent();
   }

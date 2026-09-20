@@ -120,6 +120,34 @@
       "when": 1789262400000,
       "tag": "0016_messages_workspace_id",
       "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "7",
+      "when": 1789262400001,
+      "tag": "0017_channel_settings_pins",
+      "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1789300000000,
+      "tag": "0018_agents_workspace_id",
+      "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1789300000001,
+      "tag": "0019_drop_workspace_vfs",
+      "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "7",
+      "when": 1789300000002,
+      "tag": "0020_channel_settings_workspace",
+      "breakpoints": true
     }
   ]
 }

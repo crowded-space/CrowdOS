@@ -27,10 +27,13 @@ import {
   getChannel,
   createChannel,
   updateChannel,
-  deleteChannel
+  deleteChannel,
+  getChannelSettings,
+  updateChannelSettings
 } from "./channel-service.js";
+import type { ChannelSettingsPatch } from "./channel-service.js";
 
-export type { Category, ChannelType, Channel, ChannelIndex, CompressedSummary };
+export type { Category, ChannelType, Channel, ChannelIndex, CompressedSummary, ChannelSettingsPatch };
 export { channelTypeSchema, createChannelSchema, updateChannelSchema, paramIdSchema };
 export type { CreateChannelBody, UpdateChannelBody, ChannelParams };
 export {
@@ -44,7 +47,9 @@ export {
   getChannel,
   createChannel,
   updateChannel,
-  deleteChannel
+  deleteChannel,
+  getChannelSettings,
+  updateChannelSettings
 };
 
 export const channelGate = {
@@ -58,5 +63,7 @@ export const channelGate = {
   get: getChannel,
   create: createChannel,
   update: updateChannel,
-  remove: deleteChannel
+  remove: deleteChannel,
+  getSettings: getChannelSettings,
+  updateSettings: updateChannelSettings
 };

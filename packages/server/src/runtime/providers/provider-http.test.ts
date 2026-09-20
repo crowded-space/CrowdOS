@@ -8,7 +8,7 @@ import {
   DEFAULT_PROVIDER_IDLE_TIMEOUT_MS,
   getProviderTimeoutConfig,
 } from "./provider-http.js";
-import { _setUndiciDispatcherForTesting } from "../../shared/core/http-agent.js";
+import { _setUndiciDispatcherForTesting, _resetUndiciDispatcherForTesting } from "../../shared/core/http-agent.js";
 import { BaseRuntime } from "../runtimes/base-runtime.js";
 import type { LLMResponse, RuntimeResult } from "../types.js";
 
@@ -245,7 +245,7 @@ describe("CAN-1 · streaming idle watchdog resets per chunk", () => {
 
 describe("PERF-9 · keep-alive dispatcher forwarding", () => {
   afterEach(() => {
-    _setUndiciDispatcherForTesting(null);
+    _resetUndiciDispatcherForTesting();
   });
 
   it("providerFetch attaches the dispatcher alongside the composed CAN-1 signal", async () => {
@@ -278,7 +278,7 @@ describe("PERF-9 · keep-alive dispatcher forwarding", () => {
   });
 
   it("omits dispatcher entirely when undici is unavailable (init unchanged)", async () => {
-    _setUndiciDispatcherForTesting(null);
+    _setUndiciDispatcherForTesting(undefined);
 
     let capturedInit: RequestInit | undefined;
     vi.stubGlobal(

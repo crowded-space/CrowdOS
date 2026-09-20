@@ -5,6 +5,7 @@ import { BaseRuntime } from './base-runtime.js'
 import { enforcePerIterationBudget } from '../kernel/context-budget.js'
 import { toolsGate } from '../../tools/tools-gate.js'
 import { AGENT_COMPLETE, isLifecycleTool } from '../agent-control-tools.js'
+import { clearToolExpansions, expandedToolSchemas } from '../../shared/core/tool-expansion-registry.js'
 import type { AgentCompleteInput } from '../agent-control-tools.js'
 
 // ≈ maxToolOutputTokens (2000) at ~4 chars/token — prevents unbounded tool
@@ -61,6 +62,13 @@ export class AgenticRuntime extends BaseRuntime {
           history: [...localHistory],
         }
 
+        // §21 lazy expansion: union in any capability schemas this run has
+        // expanded since the packet was assembled. Without this the discovery
+        // layer would be a dead end — the model would be told a capability
+        // exists, expand it, and still be unable to call it because native
+        // function calling only accepts schemas present in the request.
+        tempPacket = this.withExpandedTools(tempPacket)
+
         // PERF-3: re-check the same char/token budget the assembler enforced,
         // now that monologue + tool-result turns have been appended. The memory
         // preview is injected on iteration 1 only — later calls rely on history.
@@ -93,6 +101,7 @@ export class AgenticRuntime extends BaseRuntime {
           this.writeReflectionNoteAsync({
             agentId: packet.agentId,
             channelId: packet.channelId,
+            workspaceId: packet.workspaceId,
             importanceScore: 0.6,
             hook,
             brief: cleanBrief,
@@ -305,8 +314,31 @@ export class AgenticRuntime extends BaseRuntime {
       console.error(`[AgenticRuntime] Error:`, err)
       await this.kernel.setAgentStatus(broker, packet.agentId, 'idle')
       return await this.buildFailedResult(packet, err, broker)
+    } finally {
+      // §21: a finished run’s expansions are no longer reachable, so drop them
+      // rather than letting the registry grow one entry per run forever.
+      clearToolExpansions(packet.runId ?? null)
     }
   }
 
+  /**
+   * Union the run’s lazily-expanded capability schemas into the packet’s tool
+   * list. Returns the SAME packet reference when there is nothing to add, so the
+   * under-expansion path stays byte-identical to the pre-§21 behavior.
+   */
+  private withExpandedTools(packet: ContextPacket): ContextPacket {
+    let expanded: ReturnType<typeof expandedToolSchemas>
+    try {
+      expanded = expandedToolSchemas(packet.runId ?? null)
+    } catch {
+      return packet
+    }
+    if (expanded.length === 0) return packet
 
+    const existing = packet.tools ?? []
+    const known = new Set(existing.map((t) => t.name))
+    const additions = expanded.filter((t) => !known.has(t.name))
+    if (additions.length === 0) return packet
+    return { ...packet, tools: [...existing, ...additions] }
+  }
 }

@@ -15,8 +15,12 @@ services:
       timeout: 5s
       retries: 10
 
+  # Opt-in BullMQ delivery (Murder-scale fan-out only). Default stack runs
+  # inline: `docker compose up` = api + postgres. Queue mode:
+  # `docker compose --profile queue up` (sets QUEUE_MODE=bullmq on api+worker).
   redis:
     image: redis:7-alpine
+    profiles: ["queue"]
     ports:
       - "6379:6379"
     healthcheck:
@@ -33,12 +37,9 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-      redis:
-        condition: service_healthy
     environment:
       DATABASE_URL: postgresql://postgres:postgres@postgres:5432/community_agent
-      REDIS_URL: redis://redis:6379
-      QUEUE_MODE: bullmq
+      QUEUE_MODE: ${QUEUE_MODE:-inline}
       CLIENT_ORIGIN: http://localhost:5173
       PORT: 3001
       # CREDENTIALS_ENCRYPTION_KEY must be set in production (32-byte hex). Generate: openssl rand -hex 32
@@ -58,6 +59,7 @@ services:
       context: .
       dockerfile: Dockerfile
     image: crowdos-worker
+    profiles: ["queue"]
     depends_on:
       postgres:
         condition: service_healthy

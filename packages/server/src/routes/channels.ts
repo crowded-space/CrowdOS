@@ -7,8 +7,11 @@ import {
   listChannels,
   createChannel,
   updateChannel,
-  deleteChannel
+  deleteChannel,
+  getChannelSettings,
+  updateChannelSettings
 } from "../channels/channel-gate.js";
+import { agentGate } from "../agents/agent-gate.js";
 import type {
   CreateChannelBody,
   UpdateChannelBody,
@@ -24,6 +27,13 @@ const listChannelsQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(200).optional(),
   cursor: z.string().optional(),
   offset: z.string().optional(),
+});
+
+// §6-8 per-channel composer state. Null clears a pin.
+const channelSettingsSchema = z.object({
+  pinnedRuntime: z.enum(["conversational", "agentic", "swarm", "coding", "research"]).nullish(),
+  activeAgentId: z.string().min(1).max(200).nullish(),
+  defaultAgentId: z.string().min(1).max(200).nullish(),
 });
 
 export async function channelRoutes(app: FastifyInstance) {
@@ -85,6 +95,50 @@ export async function channelRoutes(app: FastifyInstance) {
     "/api/channels/:id",
     { schema: { params: paramIdSchema, body: updateChannelSchema } },
     updateChannelHandler,
+  );
+
+  // GET /api/channels/:id/settings - Per-channel pins (§6-8)
+  app.get<{ Params: ChannelParams }>(
+    "/api/channels/:id/settings",
+    { schema: { params: paramIdSchema } },
+    async (request) => {
+      // §30: settings are workspace-scoped; the tenant hook resolved the
+      // workspace from the x-workspace-id header.
+      return (await getChannelSettings(
+        request.params.id,
+        (request as any).db,
+        (request as any).workspaceId,
+      )) ?? {
+        channelId: request.params.id,
+        pinnedRuntime: null,
+        activeAgentId: null,
+        defaultAgentId: null,
+      };
+    }
+  );
+
+  // PATCH /api/channels/:id/settings - Set or clear pins (null clears)
+  app.patch<{ Params: ChannelParams; Body: z.infer<typeof channelSettingsSchema> }>(
+    "/api/channels/:id/settings",
+    { schema: { params: paramIdSchema, body: channelSettingsSchema } },
+    async (request, reply) => {
+      for (const key of ["activeAgentId", "defaultAgentId"] as const) {
+        const agentId = request.body[key];
+        if (typeof agentId === "string" && !(await agentGate.getById(agentId))) {
+          return reply.status(400).send({ error: "Bad Request", message: `Agent not found: ${agentId}` });
+        }
+      }
+      const result = await updateChannelSettings(
+        request.params.id,
+        request.body,
+        (request as any).db,
+        (request as any).workspaceId,
+      );
+      if ("error" in result) {
+        return reply.status(400).send({ error: "Bad Request", message: `Invalid pinnedRuntime: ${result.pinnedRuntime}` });
+      }
+      return result.settings;
+    }
   );
 
   // DELETE /api/channels/:id - Delete a channel

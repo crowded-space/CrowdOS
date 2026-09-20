@@ -347,7 +347,6 @@ import { socket } from '../src/config/socket';
 | `agent:thinking` | `{ agentId }` | Shortcut triggering `status = 'thinking'` for visual indicators. |
 | `workspace:sync` | None | Dispatches `fetchWorkspaces()` to reload categories/channels nested tree. |
 | `budget:exceeded` | `payload` | Logs console warning and triggers `fetchBudget()` reload. |
-| `agent:spawned` | `{ agentId, name, level, timestamp }` | Spawns a new L3 drone, injecting it into `agents` state and local storage. |
 | `agent:paused` | `{ agentId }` | Overrides agent status to `'paused'`. |
 | `agent:resumed` | `{ agentId }` | Overrides agent status to `'idle'`. |
 | `runtime:snapshot` | `{ agents: Array, overrides: Array }` | Sets authoritative synced array of agents and runtime patches received from backend parser. |

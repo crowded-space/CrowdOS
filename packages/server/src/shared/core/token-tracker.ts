@@ -46,9 +46,39 @@ export class TokenTracker {
     modelModuleId: string | null,
     promptTokens: number,
     completionTokens: number,
-    runId?: string | null
+    runId?: string | null,
+    workspaceId?: string | null,
   ): Promise<boolean> {
-    const db = getDb();
+    // Record-only DB: local-tier workspaces skip silently (no env-pool
+    // leakage, no per-turn error noise). Callers without a workspace resolve
+    // it best-effort from the channel (local-first lookup); unknown stays
+    // legacy best-effort below.
+    if (workspaceId === undefined) {
+      try {
+        const { channelGate } = await import("../../channels/channel-gate.js");
+        const ch = await channelGate.get(channelId).catch(() => null);
+        workspaceId = (ch as { workspaceId?: string | null } | null)?.workspaceId ?? null;
+      } catch {
+        workspaceId = null;
+      }
+    }
+    if (workspaceId !== undefined && workspaceId !== null) {
+      try {
+        const { tierContextFor } = await import("../../workspace/workspace-gate.js");
+        const { resolveTier } = await import("../config/database.js");
+        if (resolveTier(await tierContextFor(workspaceId)).tier !== "dual") return false;
+      } catch {
+        return false;
+      }
+    }
+    let db: ReturnType<typeof getDb>;
+    try {
+      db = getDb();
+    } catch (err) {
+      const { isConnectionError } = await import("../config/database.js");
+      if (isConnectionError(err)) return false;
+      throw err;
+    }
     const totalTokens = promptTokens + completionTokens;
 
     // MODEL-1: incremental cost (USD per 1k tokens). Budget units stay
@@ -208,10 +238,12 @@ export async function reconcileBudgetUsage(now: Date = new Date()): Promise<Budg
   const totals = { consumedTokens: 0, reconciled: false };
   await forEachWorkspaceDb(async (db) => {
     await runWithDb(db, async () => {
-      const [res] = await getDb().select({ sum: sum(tokenUsageLog.totalTokens) }).from(tokenUsageLog);
+      // Use the fan-out handle (never the ambient global): each workspace
+      // reconciles against its own record database.
+      const [res] = await db.select({ sum: sum(tokenUsageLog.totalTokens) }).from(tokenUsageLog);
       const truth = parseInt(res?.sum || "0", 10);
 
-      const [row] = await getDb()
+      const [row] = await db
         .update(workspaceSettings)
         .set({
           perProviderBudget: sql`jsonb_set(${workspaceSettings.perProviderBudget}, '{__global,used}', to_jsonb(${truth}::numeric))`,

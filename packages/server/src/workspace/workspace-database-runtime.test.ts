@@ -50,16 +50,13 @@ afterEach(() => {
 });
 
 describe("getWorkspaceDb", () => {
-  it("falls back to the global pool without an id", async () => {
-    const resolved = await getWorkspaceDb(null);
-    expect(resolved.source).toBe("global");
-    expect(resolved.workspaceId).toBeNull();
+  it("throws NO_DATABASE without an id (never the env pool)", async () => {
+    await expect(getWorkspaceDb(null)).rejects.toMatchObject({ code: "NO_DATABASE" });
     expect(getWorkspaceDbPoolStats()).toEqual([]);
   });
 
-  it("falls back to global when the workspace has no URL", async () => {
-    const resolved = await getWorkspaceDb("ws_nodb");
-    expect(resolved.source).toBe("global");
+  it("throws NO_DATABASE when the workspace has no URL (record-only)", async () => {
+    await expect(getWorkspaceDb("ws_nodb")).rejects.toMatchObject({ code: "NO_DATABASE" });
     expect(factoryMock).not.toHaveBeenCalled();
   });
 
@@ -162,7 +159,7 @@ describe("forEachWorkspaceDb", () => {
     setRegistryFilePathForTests(null);
   });
 
-  it("visits global plus every configured workspace, skipping dead ones", async () => {
+  it("visits every configured workspace, skipping dead ones (record-only, no global)", async () => {
     const dir = mkdtempSync(join(tmpdir(), "crowdos-wsforeach-"));
     writeRegistry(dir, [
       record("ws_f1", "postgresql://u:p@h1/db1"),
@@ -174,10 +171,7 @@ describe("forEachWorkspaceDb", () => {
       if (workspaceId === "ws_f1") throw new Error("dead db");
       visited.push(workspaceId);
     });
-    // Global first, dead ws_f1 skipped without stopping ws_f2, empty URL skipped.
-    expect(visited[0]).toBeNull();
-    expect(visited).toContain("ws_f2");
-    expect(visited).not.toContain("ws_f1");
-    expect(visited).not.toContain("ws_f3");
+    // Dead ws_f1 skipped without stopping ws_f2, empty URL skipped, no global target.
+    expect(visited).toEqual(["ws_f2"]);
   });
 });

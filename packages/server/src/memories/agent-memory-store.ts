@@ -1,12 +1,13 @@
 import { randomUUID } from "node:crypto";
 import { and, asc, desc, eq, gte, or, type SQL } from "drizzle-orm";
-import { getDb, dbScopeKey } from "../shared/config/database.js";
+import { getDb, dbScopeKey, isConnectionError } from "../shared/config/database.js";
+import { mirrorMemoryNote, readLocalMemoryNotes } from "./memory-local-store.js";
 import {
   agents,
   channels,
   agentMemoryNotes,
 } from "../db/schema.js";
-import { logMemoryUpdate, enforceNoteCap, isSuppressionActive } from "./memory-lifecycle.js";
+import { logMemoryUpdate, enforceNoteCap, isSuppressionActive, resolveMemoryDb, type MemoryWorkspaceOpts } from "./memory-lifecycle.js";
 import { reflectionThrottle } from "./memory-reflection-throttle.js";
 import { sanitizeReflectionField } from "../shared/core/reflection-sanitizer.js";
 import { TtlCache } from "../shared/core/ttl-cache.js";
@@ -159,26 +160,87 @@ function toFull(note: NoteRow): MemoryNoteFull {
   };
 }
 
+// ─── Degraded local mirror (§18) ─────────────────────────────────────
+// Local rows carry ISO dates; revive to Date for the public shapes.
+function localToPreview(note: {
+  id: string; agentId: string; channelId: string | null; noteType: string;
+  noteTimestamp: string; importanceScore: number; confidence: string;
+  sourceType: string; emotionalValence: string; accessCount: number;
+  lastAccessed: string | null; links: string[]; contradictionFlags: string[];
+  lifecycleStatus: string; hook: string; brief: string; createdAt: string; updatedAt: string;
+}): MemoryNotePreview {
+  return {
+    ...note,
+    noteTimestamp: new Date(note.noteTimestamp),
+    lastAccessed: note.lastAccessed ? new Date(note.lastAccessed) : null,
+    createdAt: new Date(note.createdAt),
+    updatedAt: new Date(note.updatedAt),
+  } as MemoryNotePreview;
+}
+
+function localToFull(note: Parameters<typeof localToPreview>[0] & {
+  observed: string; interpreted: string; feltSense: string;
+  futureRelevance: string; uncertainty: string; detailed: string;
+}): MemoryNoteFull {
+  return { ...localToPreview(note), observed: note.observed, interpreted: note.interpreted, feltSense: note.feltSense, futureRelevance: note.futureRelevance, uncertainty: note.uncertainty, detailed: note.detailed };
+}
+
+/** Local-only create when PG is unconfigured/unreachable (no FK validation). */
+async function createLocalNote(input: CreateMemoryNoteInput, resolvedAgentId: string): Promise<MemoryNotePreview> {
+  const now = new Date();
+  const id = buildNoteId(now);
+  const row = {
+    id, agentId: resolvedAgentId, channelId: input.channelId ?? null,
+    noteType: input.noteType, noteTimestamp: (input.noteTimestamp ?? now).toISOString(),
+    importanceScore: input.importanceScore ?? 0.5, confidence: input.confidence ?? "medium",
+    sourceType: input.sourceType ?? "direct_experience", emotionalValence: input.emotionalValence ?? "neutral",
+    accessCount: 0, lastAccessed: null, links: input.links ?? [], contradictionFlags: [],
+    lifecycleStatus: "active", hook: input.hook, brief: input.brief,
+    observed: input.observed ?? "", interpreted: input.interpreted ?? "",
+    feltSense: input.feltSense ?? "", futureRelevance: input.futureRelevance ?? "",
+    uncertainty: input.uncertainty ?? "", detailed: input.detailed ?? "",
+    createdAt: now.toISOString(), updatedAt: now.toISOString(),
+  };
+  await mirrorMemoryNote(resolvedAgentId, row);
+  return localToPreview(row as Parameters<typeof localToPreview>[0]);
+}
+
 /** Resolve a human-readable agent name or slug to its DB UUID. */
 const resolveCache = new TtlCache<string>(60_000, 500);
-export async function resolveAgentId(agentId: string): Promise<string> {
+export async function resolveAgentId(agentId: string, opts?: MemoryWorkspaceOpts): Promise<string> {
   if (!agentId) return agentId;
   const cleanId = agentId.trim();
-  const cacheKey = `${dbScopeKey()}:${cleanId}`;
+  // Workspace id participates in the key: the same alias may resolve to
+  // different rows in different workspace DBs (and "global" covers no scope).
+  const cacheKey = `${dbScopeKey()}:${opts?.workspaceId ?? ""}:${cleanId}`;
   const cached = resolveCache.get(cacheKey);
   if (cached) return cached;
+  // Degraded (§18): no PG to resolve against — return the id as-given.
+  const db = await resolveMemoryDb(opts);
+  if (!db) return cleanId;
   const rawName = cleanId.replace(/^@+/, "");
-  const db = getDb();
 
   // 1. Direct ID match
-  const byId = await db.query.agents.findFirst({ where: eq(agents.id, cleanId) });
+  let byId: { id: string } | undefined;
+  try {
+    byId = await db.query.agents.findFirst({ where: eq(agents.id, cleanId) });
+  } catch (err) {
+    if (isConnectionError(err)) return cleanId;
+    throw err;
+  }
   if (byId) {
     resolveCache.set(cacheKey, byId.id);
     return byId.id;
   }
 
   // 2. Query all agents to perform flexible, case-insensitive and handle-based matching
-  const allAgents = await db.query.agents.findMany();
+  let allAgents: Array<{ id: string; name: string | null; title: string | null }>;
+  try {
+    allAgents = await db.query.agents.findMany();
+  } catch (err) {
+    if (isConnectionError(err)) return cleanId;
+    throw err;
+  }
   const matched = allAgents.find((a) => {
     const aName = (a.name || "").toLowerCase();
     const aTitle = (a.title || "").toLowerCase();
@@ -223,21 +285,33 @@ export async function generateNoteId(_agentId?: string): Promise<string> {
 
 export async function createMemoryNote(
   input: CreateMemoryNoteInput,
+  opts?: MemoryWorkspaceOpts,
 ): Promise<MemoryStoreResult<MemoryNotePreview>> {
-  const db = getDb();
-  const resolvedAgentId = await resolveAgentId(input.agentId);
-  const [agent, channel] = await Promise.all([
-    db.query.agents.findFirst({ where: eq(agents.id, resolvedAgentId) }),
-    input.channelId
-      ? db.query.channels.findFirst({ where: eq(channels.id, input.channelId) })
-      : Promise.resolve(null),
-  ]);
+  const resolvedAgentId = await resolveAgentId(input.agentId, opts).catch(() => input.agentId.trim());
+  // Degraded (§18): no PG — local-only note, no FK validation.
+  const db = await resolveMemoryDb(opts);
+  if (!db) {
+    return { ok: true, value: await createLocalNote(input, resolvedAgentId) };
+  }
+  let agent: unknown;
+  let channel: unknown;
+  try {
+    [agent, channel] = await Promise.all([
+      db.query.agents.findFirst({ where: eq(agents.id, resolvedAgentId) }),
+      input.channelId
+        ? db.query.channels.findFirst({ where: eq(channels.id, input.channelId) })
+        : Promise.resolve(null),
+    ]);
+  } catch (err) {
+    if (isConnectionError(err)) return { ok: true, value: await createLocalNote(input, resolvedAgentId) };
+    throw err;
+  }
   if (!agent) {
     return { ok: false, error: { code: "AGENT_NOT_FOUND", message: `Agent not found: ${input.agentId}` } };
   }
 
   // Validate channelId: if non-existent or invalid, fallback to null to avoid foreign key errors
-  const validChannelId: string | null = channel ? channel.id : null;
+  const validChannelId: string | null = (channel as { id?: string } | null)?.id ?? null;
 
   const noteTimestamp = input.noteTimestamp ?? new Date();
 
@@ -305,12 +379,18 @@ export async function createMemoryNote(
         fieldsChanged: ["noteType", "hook", "brief"],
       });
 
-      void enforceNoteCap(resolvedAgentId).catch((err) => {
+      void enforceNoteCap(resolvedAgentId, undefined, opts).catch((err) => {
         console.error("[MemoryStore] Note-cap enforcement failed:", (err as any)?.message || err);
+      });
+
+      // Best-effort local mirror for degraded reads (never fails the write).
+      await mirrorMemoryNote(resolvedAgentId, inserted as unknown as Record<string, unknown>).catch((err) => {
+        console.warn("[MemoryStore] local mirror failed:", (err as Error)?.message || err);
       });
 
       return { ok: true, value: toPreview(inserted) };
     } catch (err: any) {
+      if (isConnectionError(err)) return { ok: true, value: await createLocalNote(input, resolvedAgentId) };
       if (attempt === 2) {
         throw err;
       }
@@ -320,25 +400,53 @@ export async function createMemoryNote(
   return { ok: false, error: { code: "UPDATE_FAILED", message: "Failed to allocate a unique memory note ID." } };
 }
 
+/** Patch the local mirror (degraded updates). Returns null when missing. */
+async function patchLocalNote(agentId: string, noteId: string, patch: Record<string, unknown>): Promise<MemoryNotePreview | null> {
+  const rows = await readLocalMemoryNotes(agentId).catch(() => []);
+  const found = rows.find((r) => r.id === noteId);
+  if (!found) return null;
+  const next = { ...found, ...patch, updatedAt: new Date().toISOString() };
+  await mirrorMemoryNote(agentId, next as unknown as Record<string, unknown>);
+  return localToPreview(next as Parameters<typeof localToPreview>[0]);
+}
+
 export async function readMemoryNote(
   agentId: string,
   noteId: string,
   options?: { updateAccess?: boolean },
+  opts?: MemoryWorkspaceOpts,
 ): Promise<MemoryStoreResult<MemoryNoteFull>> {
-  const db = getDb();
-  const resolvedAgentId = await resolveAgentId(agentId);
-  const note = await db.query.agentMemoryNotes.findFirst({
-    where: and(eq(agentMemoryNotes.id, noteId), eq(agentMemoryNotes.agentId, resolvedAgentId)),
-  });
+  const resolvedAgentId = await resolveAgentId(agentId, opts).catch(() => agentId.trim());
+  const readLocal = async (): Promise<MemoryStoreResult<MemoryNoteFull>> => {
+    const rows = await readLocalMemoryNotes(resolvedAgentId).catch(() => []);
+    const found = rows.find((r) => r.id === noteId);
+    if (!found) return { ok: false, error: { code: "NOTE_NOT_FOUND", message: `Memory note not found: ${noteId}` } };
+    return { ok: true, value: localToFull(found as Parameters<typeof localToFull>[0]) };
+  };
+  const db = await resolveMemoryDb(opts);
+  if (!db) return readLocal();
+  let note;
+  try {
+    note = await db.query.agentMemoryNotes.findFirst({
+      where: and(eq(agentMemoryNotes.id, noteId), eq(agentMemoryNotes.agentId, resolvedAgentId)),
+    });
+  } catch (err) {
+    if (isConnectionError(err)) return readLocal();
+    throw err;
+  }
   if (!note) {
     return { ok: false, error: { code: "NOTE_NOT_FOUND", message: `Memory note not found: ${noteId}` } };
   }
 
   if (options?.updateAccess !== false) {
-    await db
-      .update(agentMemoryNotes)
-      .set({ accessCount: note.accessCount + 1, lastAccessed: new Date() })
-      .where(eq(agentMemoryNotes.id, noteId));
+    try {
+      await db
+        .update(agentMemoryNotes)
+        .set({ accessCount: note.accessCount + 1, lastAccessed: new Date() })
+        .where(eq(agentMemoryNotes.id, noteId));
+    } catch (err) {
+      if (!isConnectionError(err)) throw err;
+    }
   }
 
   return { ok: true, value: toFull(note) };
@@ -347,9 +455,23 @@ export async function readMemoryNote(
 export async function listMemoryPreviews(
   agentId: string,
   filter: MemoryListFilter = {},
+  opts?: MemoryWorkspaceOpts,
 ): Promise<MemoryStoreResult<MemoryNotePreview[]>> {
-  const db = getDb();
-  const resolvedAgentId = await resolveAgentId(agentId);
+  const resolvedAgentId = await resolveAgentId(agentId, opts).catch(() => agentId.trim());
+  const listLocal = async (): Promise<MemoryStoreResult<MemoryNotePreview[]>> => {
+    let rows = await readLocalMemoryNotes(resolvedAgentId).catch(() => []);
+    if (!filter.includeArchived && !filter.includeSuppressed) rows = rows.filter((r) => r.lifecycleStatus === "active");
+    else if (filter.includeArchived && !filter.includeSuppressed) rows = rows.filter((r) => r.lifecycleStatus !== "suppressed");
+    else if (!filter.includeArchived && filter.includeSuppressed) rows = rows.filter((r) => r.lifecycleStatus !== "archived");
+    if (filter.noteType) rows = rows.filter((r) => r.noteType === filter.noteType);
+    if (filter.channelId) rows = rows.filter((r) => r.channelId === filter.channelId);
+    if (filter.minImportance != null) rows = rows.filter((r) => r.importanceScore >= filter.minImportance!);
+    rows = rows.slice().sort((a, b) => b.importanceScore - a.importanceScore || (a.noteTimestamp < b.noteTimestamp ? 1 : -1));
+    const limit = filter.limit ?? 50;
+    return { ok: true, value: rows.slice(0, limit).map((r) => localToPreview(r as Parameters<typeof localToPreview>[0])) };
+  };
+  const db = await resolveMemoryDb(opts);
+  if (!db) return listLocal();
 
   const conditions: SQL[] = [eq(agentMemoryNotes.agentId, resolvedAgentId)];
 
@@ -376,11 +498,17 @@ export async function listMemoryPreviews(
   if (filter.minImportance != null) conditions.push(gte(agentMemoryNotes.importanceScore, filter.minImportance));
 
   const where = conditions.length > 0 ? and(...conditions) : undefined;
-  const notes = await db.query.agentMemoryNotes.findMany({
-    where,
-    orderBy: (table, { desc }) => [desc(table.importanceScore), desc(table.noteTimestamp)],
-    limit: filter.limit ?? 50,
-  });
+  let notes;
+  try {
+    notes = await db.query.agentMemoryNotes.findMany({
+      where,
+      orderBy: (table, { desc }) => [desc(table.importanceScore), desc(table.noteTimestamp)],
+      limit: filter.limit ?? 50,
+    });
+  } catch (err) {
+    if (isConnectionError(err)) return listLocal();
+    throw err;
+  }
 
   const visible = filter.includeSuppressed
     ? notes
@@ -393,12 +521,33 @@ export async function updateMemoryNote(
   agentId: string,
   noteId: string,
   patch: UpdateMemoryNotePatch,
+  opts?: MemoryWorkspaceOpts,
 ): Promise<MemoryStoreResult<MemoryNotePreview>> {
-  const db = getDb();
-  const resolvedAgentId = await resolveAgentId(agentId);
-  const existing = await db.query.agentMemoryNotes.findFirst({
-    where: and(eq(agentMemoryNotes.id, noteId), eq(agentMemoryNotes.agentId, resolvedAgentId)),
-  });
+  const resolvedAgentId = await resolveAgentId(agentId, opts).catch(() => agentId.trim());
+  const updateLocal = async (patchFields: Record<string, unknown>): Promise<MemoryStoreResult<MemoryNotePreview>> => {
+    const updated = await patchLocalNote(resolvedAgentId, noteId, patchFields);
+    if (!updated) return { ok: false, error: { code: "NOTE_NOT_FOUND", message: `Memory note not found: ${noteId}` } };
+    return { ok: true, value: updated };
+  };
+  const db = await resolveMemoryDb(opts);
+  if (!db) {
+    const fields: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(patch)) if (v !== undefined && k !== "reason") fields[k] = v;
+    return updateLocal(fields);
+  }
+  let existing;
+  try {
+    existing = await db.query.agentMemoryNotes.findFirst({
+      where: and(eq(agentMemoryNotes.id, noteId), eq(agentMemoryNotes.agentId, resolvedAgentId)),
+    });
+  } catch (err) {
+    if (isConnectionError(err)) {
+      const fields: Record<string, unknown> = {};
+      for (const [k, v] of Object.entries(patch)) if (v !== undefined && k !== "reason") fields[k] = v;
+      return updateLocal(fields);
+    }
+    throw err;
+  }
   if (!existing) {
     return { ok: false, error: { code: "NOTE_NOT_FOUND", message: `Memory note not found: ${noteId}` } };
   }
@@ -453,6 +602,8 @@ export async function updateMemoryNote(
     previousValues,
   });
 
+  await mirrorMemoryNote(resolvedAgentId, updated as unknown as Record<string, unknown>).catch(() => {});
+
   return { ok: true, value: toPreview(updated) };
 }
 
@@ -460,12 +611,26 @@ export async function archiveMemoryNote(
   agentId: string,
   noteId: string,
   reason: string,
+  opts?: MemoryWorkspaceOpts,
 ): Promise<MemoryStoreResult<MemoryNotePreview>> {
-  const db = getDb();
-  const resolvedAgentId = await resolveAgentId(agentId);
-  const existing = await db.query.agentMemoryNotes.findFirst({
-    where: and(eq(agentMemoryNotes.id, noteId), eq(agentMemoryNotes.agentId, resolvedAgentId)),
-  });
+  const resolvedAgentId = await resolveAgentId(agentId, opts).catch(() => agentId.trim());
+  const db = await resolveMemoryDb(opts);
+  if (!db) {
+    const updated = await patchLocalNote(resolvedAgentId, noteId, { lifecycleStatus: "archived", archiveReason: reason });
+    if (!updated) return { ok: false, error: { code: "NOTE_NOT_FOUND", message: `Memory note not found: ${noteId}` } };
+    return { ok: true, value: updated };
+  }
+  let existing;
+  try {
+    existing = await db.query.agentMemoryNotes.findFirst({
+      where: and(eq(agentMemoryNotes.id, noteId), eq(agentMemoryNotes.agentId, resolvedAgentId)),
+    });
+  } catch (err) {
+    if (!isConnectionError(err)) throw err;
+    const updated = await patchLocalNote(resolvedAgentId, noteId, { lifecycleStatus: "archived", archiveReason: reason });
+    if (!updated) return { ok: false, error: { code: "NOTE_NOT_FOUND", message: `Memory note not found: ${noteId}` } };
+    return { ok: true, value: updated };
+  }
   if (!existing) {
     return { ok: false, error: { code: "NOTE_NOT_FOUND", message: `Memory note not found: ${noteId}` } };
   }
@@ -490,6 +655,8 @@ export async function archiveMemoryNote(
     previousValues: { lifecycleStatus: existing.lifecycleStatus },
   });
 
+  await mirrorMemoryNote(resolvedAgentId, updated as unknown as Record<string, unknown>).catch(() => {});
+
   return { ok: true, value: toPreview(updated) };
 }
 
@@ -498,12 +665,26 @@ export async function suppressMemoryNote(
   noteId: string,
   reason: string,
   suppressUntil: Date,
+  opts?: MemoryWorkspaceOpts,
 ): Promise<MemoryStoreResult<MemoryNotePreview>> {
-  const db = getDb();
-  const resolvedAgentId = await resolveAgentId(agentId);
-  const existing = await db.query.agentMemoryNotes.findFirst({
-    where: and(eq(agentMemoryNotes.id, noteId), eq(agentMemoryNotes.agentId, resolvedAgentId)),
-  });
+  const resolvedAgentId = await resolveAgentId(agentId, opts).catch(() => agentId.trim());
+  const db = await resolveMemoryDb(opts);
+  if (!db) {
+    const updated = await patchLocalNote(resolvedAgentId, noteId, { lifecycleStatus: "suppressed", suppressReason: reason, suppressUntil: suppressUntil.toISOString() });
+    if (!updated) return { ok: false, error: { code: "NOTE_NOT_FOUND", message: `Memory note not found: ${noteId}` } };
+    return { ok: true, value: updated };
+  }
+  let existing;
+  try {
+    existing = await db.query.agentMemoryNotes.findFirst({
+      where: and(eq(agentMemoryNotes.id, noteId), eq(agentMemoryNotes.agentId, resolvedAgentId)),
+    });
+  } catch (err) {
+    if (!isConnectionError(err)) throw err;
+    const updated = await patchLocalNote(resolvedAgentId, noteId, { lifecycleStatus: "suppressed", suppressReason: reason, suppressUntil: suppressUntil.toISOString() });
+    if (!updated) return { ok: false, error: { code: "NOTE_NOT_FOUND", message: `Memory note not found: ${noteId}` } };
+    return { ok: true, value: updated };
+  }
   if (!existing) {
     return { ok: false, error: { code: "NOTE_NOT_FOUND", message: `Memory note not found: ${noteId}` } };
   }
@@ -528,6 +709,8 @@ export async function suppressMemoryNote(
     fieldsChanged: ["lifecycleStatus", "suppressUntil"],
     previousValues: { lifecycleStatus: existing.lifecycleStatus },
   });
+
+  await mirrorMemoryNote(resolvedAgentId, updated as unknown as Record<string, unknown>).catch(() => {});
 
   return { ok: true, value: toPreview(updated) };
 }

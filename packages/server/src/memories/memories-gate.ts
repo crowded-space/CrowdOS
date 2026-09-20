@@ -21,10 +21,12 @@ import {
   isSuppressionActive,
   type MemoryUpdateAction,
   type MemoryUpdateLogInput,
+  type MemoryWorkspaceOpts,
 } from "./memory-lifecycle.js";
 import { memorySessionDiscards } from "./memory-session-discards.js";
 import { reflectionThrottle, jaccardSimilarity, normalizeHookTokens } from "./memory-reflection-throttle.js";
 import { embedText, embedNote, embedNotesBatch, ensureEmbeddingsForAgent, searchByEmbedding, mockEmbed, cosineSimilarity } from "./embeddings.js";
+import { mirrorMemoryNote, readLocalMemoryNotes, scoreLocalNote } from "./memory-local-store.js";
 
 export {
   resolveAgentId,
@@ -50,10 +52,12 @@ export {
 };
 export { memorySessionDiscards };
 export { reflectionThrottle, jaccardSimilarity, normalizeHookTokens };
+export { mirrorMemoryNote, readLocalMemoryNotes, scoreLocalNote };
 
 export type {
   MemoryUpdateAction,
   MemoryUpdateLogInput,
+  MemoryWorkspaceOpts,
 };
 
 export type {
@@ -83,6 +87,8 @@ export const memoriesGate = {
   suppressMemoryNote,
   retrieveMemoryCandidates,
   buildMemoryPreviewBlock,
+  mirrorMemoryNote,
+  readLocalMemoryNotes,
   runMemorySweep: runSuppressionSweep,
   enforceNoteCap,
   enforceCapsAllAgents,

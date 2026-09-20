@@ -14,6 +14,7 @@ const permissionsSchema = z
   .optional();
 
 export const createAgentSchema = z.object({
+  workspaceId: z.string().min(1).nullable().optional(),
   name: z.string().min(1),
   title: z.string().min(1),
   species: z.string().min(1).optional(),
@@ -35,6 +36,7 @@ export const createAgentSchema = z.object({
 });
 
 export const updateAgentSchema = z.object({
+  workspaceId: z.string().min(1).nullable().optional(),
   name: z.string().min(1).optional(),
   title: z.string().min(1).optional(),
   species: z.string().min(1).nullable().optional(),
@@ -56,6 +58,7 @@ export const updateAgentSchema = z.object({
 });
 
 export const listAgentsQuerySchema = z.object({
+  workspaceId: z.string().min(1).optional(),
   authorityLevel: z.coerce.number().int().min(0).max(3).optional(),
   status: agentStatusSchema.optional(),
   isTemplate: z.coerce.boolean().optional(),
