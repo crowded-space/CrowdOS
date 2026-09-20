@@ -13,6 +13,20 @@ function sha256Hex(content: string): string {
   return createHash('sha256').update(content, 'utf8').digest('hex');
 }
 
+// Channel-mount-aware root: channel → category → workspace → workspace dir.
+// Dynamic import keeps the Runtime → ChannelMounts gate edge lazy (no module cycle).
+async function resolveRuntimeRoot(packet: { channelId?: string; workspaceId?: string }): Promise<string> {
+  if (packet?.channelId) {
+    try {
+      const { channelMountGate } = await import('../../channel-mounts/channel-mount-gate.js');
+      const mount = await channelMountGate.resolve(packet.channelId);
+      if (mount?.effectivePath) return mount.effectivePath;
+    } catch {}
+  }
+  const { Guard } = await import('../../tools/safety/guard.js');
+  return Guard.getWorkspaceDir(packet?.workspaceId);
+}
+
 function generateNaivePatch(filePath: string, before: string, after: string): string {
   if (before === after) return `--- a/${filePath}\n+++ b/${filePath}\n(no changes)`;
   const bLines = before.split('\n');
@@ -198,7 +212,7 @@ export class CodingRuntime extends BaseRuntime {
               let resolved: string;
               try {
                 const { Guard } = await import('../../tools/safety/guard.js');
-                resolved = await Guard.validatePath(targetPath, packet.workspaceId);
+                resolved = await Guard.validatePath(targetPath, await resolveRuntimeRoot(packet));
               } catch (e: any) {
                 return { success: false, output: '', error: e?.message || String(e) };
               }
@@ -268,7 +282,7 @@ export class CodingRuntime extends BaseRuntime {
               let resolved: string;
               try {
                 const { Guard } = await import('../../tools/safety/guard.js');
-                resolved = await Guard.validatePath(targetPath, packet.workspaceId);
+                resolved = await Guard.validatePath(targetPath, await resolveRuntimeRoot(packet));
               } catch (e: any) {
                 return { success: false, output: '', error: e?.message || String(e) };
               }

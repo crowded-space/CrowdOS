@@ -60,11 +60,21 @@ async function undoCompensation(runId: string, compId: string): Promise<{ ok: bo
     const { getDb } = await import("../shared/config/database.js");
     const db = getDb();
     let workspaceRoot: string | null = null;
+    // Channel-mount-aware root: channel → category → workspace → workspace row.
     try {
       const run = await getRunById(runId);
-      const wsId = run?.workspaceId ?? "default";
-      const ws = await (db.query as unknown as { workspaces: { findFirst: (opts: unknown) => Promise<{ rootPath: string } | null> } }).workspaces.findFirst({ where: (await import("drizzle-orm")).eq((await import("../db/schema.js")).workspaces.id, wsId) });
-      workspaceRoot = ws?.rootPath ?? null;
+      if (run?.channelId) {
+        try {
+          const { channelMountGate } = await import("../channel-mounts/channel-mount-gate.js");
+          const mount = await channelMountGate.resolve(run.channelId);
+          if (mount?.effectivePath) workspaceRoot = mount.effectivePath;
+        } catch {}
+      }
+      if (!workspaceRoot) {
+        const wsId = run?.workspaceId ?? "default";
+        const ws = await (db.query as unknown as { workspaces: { findFirst: (opts: unknown) => Promise<{ rootPath: string } | null> } }).workspaces.findFirst({ where: (await import("drizzle-orm")).eq((await import("../db/schema.js")).workspaces.id, wsId) });
+        workspaceRoot = ws?.rootPath ?? null;
+      }
     } catch {}
     if (!workspaceRoot) {
       const pathMod = await import("node:path");

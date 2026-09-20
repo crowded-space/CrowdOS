@@ -132,6 +132,20 @@ async function honestSchedulerEmit(
   } catch {}
 }
 
+// Channel-mount-aware root: channel → category → workspace → workspace dir.
+// Falls back to workspace dir when no channel or mount is unresolvable.
+// Dynamic import keeps the Tools → ChannelMounts gate edge lazy (no module cycle).
+export async function resolveToolRoot(ctx?: { channelId?: string; workspaceId?: string }): Promise<string> {
+  if (ctx?.channelId) {
+    try {
+      const { channelMountGate } = await import("../channel-mounts/channel-mount-gate.js");
+      const mount = await channelMountGate.resolve(ctx.channelId);
+      if (mount?.effectivePath) return mount.effectivePath;
+    } catch {}
+  }
+  return Guard.getWorkspaceDir(ctx?.workspaceId);
+}
+
 export class ToolRegistry {
   private tools: Map<string, ToolDefinition> = new Map();
 
@@ -186,7 +200,7 @@ export class ToolRegistry {
       authLevelRequired: 3,
       handler: async (args, ctx) => {
         try {
-          const resolved = await Guard.validatePath(args.path, ctx?.workspaceId);
+          const resolved = await Guard.validatePath(args.path, await resolveToolRoot(ctx));
           const content = await fs.readFile(resolved, "utf8");
           return { success: true, output: content };
         } catch (err: any) {
@@ -215,7 +229,7 @@ export class ToolRegistry {
       authLevelRequired: 3,
       handler: async (args, ctx) => {
         try {
-          const resolved = await Guard.validatePath(args.path, ctx?.workspaceId);
+          const resolved = await Guard.validatePath(args.path, await resolveToolRoot(ctx));
           if (ctx?.runId) {
             try {
               const { runsGate } = await import("../runs/runs-gate.js");
@@ -265,7 +279,7 @@ export class ToolRegistry {
       authLevelRequired: 3,
       handler: async (args, ctx) => {
         try {
-          const resolved = await Guard.validatePath(args.path, ctx?.workspaceId);
+          const resolved = await Guard.validatePath(args.path, await resolveToolRoot(ctx));
           const original = await fs.readFile(resolved, "utf8");
           if (!original.includes(String(args.targetContent))) {
             return { success: false, output: "", error: `Target content not found in ${args.path}` };
@@ -298,7 +312,7 @@ export class ToolRegistry {
       handler: async (args, ctx) => {
         try {
           const relPath = args?.path || ".";
-          const resolved = await Guard.validatePath(relPath, ctx?.workspaceId);
+          const resolved = await Guard.validatePath(relPath, await resolveToolRoot(ctx));
           const items = await fs.readdir(resolved, { withFileTypes: true });
           const mapped = items.map(item => ({
             name: item.name,
@@ -331,7 +345,7 @@ export class ToolRegistry {
       authLevelRequired: 2,
       handler: async (args, ctx) => {
         try {
-          const resolved = await Guard.validatePath(args.path, ctx?.workspaceId);
+          const resolved = await Guard.validatePath(args.path, await resolveToolRoot(ctx));
           if (ctx?.runId) {
             try {
               const { runsGate } = await import("../runs/runs-gate.js");
@@ -380,7 +394,7 @@ export class ToolRegistry {
       authLevelRequired: 1,
       handler: async (args, ctx) => {
         Guard.validateCommand(args.command);
-        const cwd = await Guard.getWorkspaceDir(ctx?.workspaceId);
+        const cwd = await resolveToolRoot(ctx);
         return await execHardened({
           command: args.command,
           cwd,
@@ -411,7 +425,7 @@ export class ToolRegistry {
         if (!Guard.isCommandWhitelisted(args.command)) {
           return { success: false, output: "", error: `Command '${args.command}' is not in the safe whitelist.` };
         }
-        const cwd = await Guard.getWorkspaceDir(ctx?.workspaceId);
+        const cwd = await resolveToolRoot(ctx);
         return await execHardened({
           command: args.command,
           cwd,
