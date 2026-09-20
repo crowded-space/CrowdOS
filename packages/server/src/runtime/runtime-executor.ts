@@ -4,6 +4,7 @@ import { runsGate } from '../runs/runs-gate.js'
 import type { RunRow, RunStatus } from '../runs/runs-gate.js'
 import type { IRuntime, RuntimeResult, RuntimeType } from './types.js'
 import { ContextAssembler } from './kernel/context-assembler.js'
+import { interpret } from './interpreter.js'
 import { RuntimeRouter } from './runtime-router.js'
 import { ConversationalRuntime } from './runtimes/conversational-runtime.js'
 import { AgenticRuntime } from './runtimes/agentic-runtime.js'
@@ -58,6 +59,9 @@ export class RuntimeExecutor {
     let run: RunRow | null = null
     let isResume = false
     try {
+      // §24 → §25: stabilize intent first, then route. The Router stays
+      // authoritative — the intent rides the packet for runtimes to consume.
+      const interpreterOutput = interpret({ content: userInput, explicitRuntime })
       const runtimeType = this.router.route({
         agent,
         channelTags,
@@ -112,6 +116,7 @@ export class RuntimeExecutor {
         runtimeType: resolvedType,
         abortSignal,
         runId: run?.id ?? null,
+        interpreterOutput,
       })
       if (isResume && resumeContext) {
         (packet as unknown as Record<string, unknown>).resumeContext = resumeContext

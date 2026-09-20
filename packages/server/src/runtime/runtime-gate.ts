@@ -1,6 +1,7 @@
 import { registerProviders } from "./providers/index.js";
 import { RuntimeExecutor, type ExecuteRequest } from "./runtime-executor.js";
 import { RuntimeRouter, type RoutingContext } from "./runtime-router.js";
+import { interpret } from "./interpreter.js";
 import { ContextAssembler, type AssembleOptions } from "./kernel/context-assembler.js";
 import { RuntimeKernel } from "./kernel/runtime-kernel.js";
 import { ProviderRegistry } from "./providers/provider-registry.js";
@@ -20,6 +21,8 @@ import { agentCompleteTool, AGENT_COMPLETE, isLifecycleTool } from "./agent-cont
 import type { AgentCompleteInput } from "./agent-control-tools.js";
 import type {
   ContextPacket,
+  InterpreterOutput,
+  InteractionMode,
   RuntimePacket,
   RuntimeResult,
   RuntimeEvent,
@@ -64,6 +67,7 @@ function getAssembler(): ContextAssembler {
 export {
   RuntimeExecutor,
   RuntimeRouter,
+  interpret,
   ContextAssembler,
   RuntimeKernel,
   ProviderRegistry,
@@ -90,6 +94,8 @@ export type {
   RoutingContext,
   AssembleOptions,
   ContextPacket,
+  InterpreterOutput,
+  InteractionMode,
   RuntimePacket,
   RuntimeResult,
   RuntimeEvent,
@@ -119,6 +125,7 @@ export const runtimeGate = {
   init: initRuntime,
   execute: (req: ExecuteRequest) => getExecutor().execute(req),
   route: (ctx: RoutingContext) => getRouter().route(ctx),
+  interpret: (input: { content: string; explicitRuntime?: string }) => interpret(input),
   assembleContext: (opts: AssembleOptions) => getAssembler().assemble(opts),
   useMiddleware: (middleware: IContextMiddleware) => contextPipeline.use(middleware),
   registerProvider: (adapter: IProviderAdapter) => ProviderRegistry.register(adapter),

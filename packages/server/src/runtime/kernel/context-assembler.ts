@@ -2,6 +2,7 @@
 import type { AgentProfile } from "../../agents/agent-gate.js";
 import type {
   ContextPacket,
+  InterpreterOutput,
   RuntimePolicy,
   RuntimeType,
   ModelModuleConfig,
@@ -36,13 +37,15 @@ export interface AssembleOptions {
   abortSignal?: AbortSignal;
   /** RUN-0 correlation id copied onto the packet so persisted messages trace to a run row. */
   runId?: string | null;
+  /** §26 interpreter_output, computed by the Executor via interpret(). */
+  interpreterOutput?: InterpreterOutput;
 }
 
 export class ContextAssembler {
   async assemble(
     options: AssembleOptions
   ): Promise<ContextPacket & { _modelConfig: ModelModuleConfig }> {
-    const { agent, channelId, workspaceId, userInput, runtimeType, policyOverrides, abortSignal, runId } = options;
+    const { agent, channelId, workspaceId, userInput, runtimeType, policyOverrides, abortSignal, runId, interpreterOutput } = options;
     const obsMod: typeof import("../../observability/observability-gate.js") | null = await import("../../observability/observability-gate.js").catch(() => null);
     const tracing = obsMod?.observabilityGate ?? null;
     const span = tracing ? tracing.startSpan("assemble", { runId: runId ?? null, channelId, agentId: agent.id, attributes: { runtimeType } }) : null;
@@ -87,6 +90,7 @@ export class ContextAssembler {
         _modelConfig: compiled._modelConfig,
         abortSignal,
         runId: runId ?? null,
+        interpreterOutput,
       };
       if (span && tracing) tracing.endSpan(span, { attributes: { historyLen: result.history.length, toolCount: result.tools?.length ?? 0 } });
       return result;

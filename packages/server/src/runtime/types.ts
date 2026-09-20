@@ -52,6 +52,23 @@ export interface ExecutionMetadata {
   startedAt: Date
 }
 
+// CrowdOS §24: semantic stabilization only — targets, communication mode,
+// execution hints. Never planning, tool choice, or memory retrieval.
+export type InteractionMode = 'chat' | 'agentic' | 'coding' | 'research'
+
+export interface InterpreterOutput {
+  /** Raw @-tokens in send order (unresolved — resolution stays in dispatch). */
+  targets: string[]
+  /** Stabilized mode hint; 'auto' means the Router decides. */
+  mode: InteractionMode | 'auto'
+  /** Opaque hints (e.g. 'multi-target', 'lock_in-requested', 'code-context'). */
+  executionHints: string[]
+  /** True when neither target nor mode could be stabilized. */
+  ambiguous: boolean
+  /** Refused assumptions, listed — never silently made. */
+  assumptions: string[]
+}
+
 export interface ResumeContext {
   watermarkSeq: number
   completedCallIds: string[]
@@ -82,6 +99,8 @@ export interface ContextPacket {
   /** RUN-0 correlation: id of the runs row opened for this execution (null if bookkeeping failed). */
   runId?: string | null
   resumeContext?: ResumeContext | null
+  /** CrowdOS §26 interpreter_output: semantic intent attached by the Executor. */
+  interpreterOutput?: InterpreterOutput
 }
 
 export interface RuntimeResult {
@@ -196,9 +215,9 @@ export interface IRuntime {
 }
 
 // D2 (CrowdOS §26): spec name is RuntimePacket. ContextPacket is the current
-// shape; the alias keeps both names compiling. Future §26 fields
-// (interpreter_output, visible_capabilities, state_updates, artifacts) land
-// with their features (Interpreter, capability filter, artifacts) — not here.
+// shape; the alias keeps both names compiling. interpreter_output landed with
+// the Interpreter; remaining §26 fields (visible_capabilities, state_updates,
+// artifacts) land with their features (capability filter, artifacts) — not here.
 export type RuntimePacket = ContextPacket;
 
 export interface IProviderAdapter {
