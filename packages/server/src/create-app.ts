@@ -14,7 +14,7 @@ import { registerSocketServer } from "./shared/sockets/register-socket-server.js
 import { initRuntime } from "./runtime/runtime-gate.js";
 import { runWithDb, closeDatabaseConnection } from "./shared/config/database.js";
 import { closeAllWorkspaceDatabases, listWorkspaceRecords, getWorkspaceDb, getWorkspacePinHash, getWorkspaceRecord } from "./workspace/workspace-gate.js";
-import { LocalVFS } from "./vfs/vfs-gate.js";
+import { LocalFilesystem } from "./Filesystem/filesystem-gate.js";
 import { pinGate, isWorkspaceManagementPath } from "./shared/auth/pin-gate.js";
 import { authGate } from "./shared/auth/auth-gate.js";
 import { startBudgetReconciler } from "./shared/core/token-tracker.js";
@@ -40,45 +40,45 @@ export interface BuiltServer {
   eventBroker: any;
   start(): Promise<{ host: string; port: number }>;
   stop(): Promise<void>;
-  /** M5 listen-first: true once background VFS bootstrap has settled. */
+  /** M5 listen-first: true once background filesystem bootstrap has settled. */
   isReady(): boolean;
 }
 
-// Auto-initialize VFS folders for every workspace on server startup.
+// Auto-initialize filesystem folders for every workspace on server startup.
 // workspaceDir overrides the sandbox root (opts.workspaceDir ?? WORKSPACE_DIR ?? <cwd>/sandbox).
 async function bootstrapWorkspaces(logger: any, workspaceDir: string) {
   try {
     // Read registered workspaces from local registry (Zero-DB boot compliant)
     const allWorkspaces = await listWorkspaceRecords();
-    logger.info(`Found ${allWorkspaces.length} workspaces in registry for VFS bootstrapping.`);
+    logger.info(`Found ${allWorkspaces.length} workspaces in registry for filesystem bootstrapping.`);
 
     const sandboxRoot = workspaceDir;
 
     // M5: bounded concurrency — serial await per workspace blocked listen.
     const initOne = async (ws: { id: string; name: string; rootPath?: string }) => {
-      logger.info(`Bootstrapping VFS for workspace: ${ws.name} (${ws.id})...`);
-      const vfs = new LocalVFS({
+      logger.info(`Bootstrapping filesystem for workspace: ${ws.name} (${ws.id})...`);
+      const filesystem = new LocalFilesystem({
         workspaceId: ws.id,
         workspaceRoot: ws.rootPath || path.join(sandboxRoot, ws.id),
         actorId: "system",
       });
-      await vfs.initialize();
-      logger.info(`Successfully initialized VFS for workspace: ${ws.id}`);
+      await filesystem.initialize();
+      logger.info(`Successfully initialized filesystem for workspace: ${ws.id}`);
     };
     for (let i = 0; i < allWorkspaces.length; i += 4) {
       await Promise.allSettled(allWorkspaces.slice(i, i + 4).map((ws) => initOne(ws)));
     }
 
-    // 2. Also ensure default workspace VFS is fully bootstrapped — actor derived from system, not hard-coded human_operator (P0-1)
-    logger.info("Bootstrapping default developer workspace VFS...");
+    // 2. Also ensure the default workspace filesystem is fully bootstrapped — actor derived from system, not hard-coded human_operator (P0-1)
+    logger.info("Bootstrapping default developer workspace filesystem...");
     const systemActor = process.env.SYSTEM_ACTOR_ID || "system";
-    const defaultVfs = new LocalVFS({
+    const defaultFilesystem = new LocalFilesystem({
       workspaceId: "default",
       workspaceRoot: path.join(sandboxRoot, "default"),
       actorId: systemActor,
     });
-    await Promise.allSettled([defaultVfs.initialize()]);
-    logger.info("Successfully initialized default developer workspace VFS.");
+    await Promise.allSettled([defaultFilesystem.initialize()]);
+    logger.info("Successfully initialized default developer workspace filesystem.");
   } catch (error) {
     logger.error(`Error bootstrapping workspaces on startup: ${error instanceof Error ? error.message : String(error)}`);
   }
@@ -406,14 +406,14 @@ export async function buildServer(opts?: BuildServerOptions): Promise<BuiltServe
   const resolvedPort = opts?.port ?? env.PORT;
 
   let stopped = false;
-  // M5 listen-first: never block listen on VFS bootstrap; background it and
+  // M5 listen-first: never block listen on filesystem bootstrap; background it and
   // expose readiness so /health can gate on it. skipListen (tests) keeps the
   // old synchronous order for determinism.
-  let vfsReady = false;
+  let filesystemReady = false;
   async function start(): Promise<{ host: string; port: number }> {
     if (opts?.skipListen) {
       await bootstrapWorkspaces(app.log, resolvedWorkspaceDir);
-      vfsReady = true;
+      filesystemReady = true;
       return { host: resolvedHost, port: resolvedPort };
     }
     try {
@@ -424,10 +424,10 @@ export async function buildServer(opts?: BuildServerOptions): Promise<BuiltServe
     }
     void bootstrapWorkspaces(app.log, resolvedWorkspaceDir).then(
       () => {
-        vfsReady = true;
+        filesystemReady = true;
       },
       () => {
-        vfsReady = true;
+        filesystemReady = true;
       },
     );
     const addr = app.server.address();
@@ -454,5 +454,5 @@ export async function buildServer(opts?: BuildServerOptions): Promise<BuiltServe
     } catch {}
   }
 
-  return { app, io, eventBroker, start, stop, isReady: () => vfsReady };
+  return { app, io, eventBroker, start, stop, isReady: () => filesystemReady };
 }

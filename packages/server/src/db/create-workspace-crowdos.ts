@@ -1,6 +1,6 @@
 import { getDb, closeDatabaseConnection } from "../shared/config/database.js";
 import { workspaces } from "./schema.js";
-import { LocalVFS } from "../vfs/vfs-gate.js";
+import { LocalFilesystem } from "../Filesystem/filesystem-gate.js";
 import * as path from "node:path";
 import { eq } from "drizzle-orm";
 
@@ -15,7 +15,7 @@ async function run() {
   });
 
   if (existing) {
-    console.log(`Workspace '${id}' already exists. Initializing VFS...`);
+    console.log(`Workspace '${id}' already exists. Initializing filesystem...`);
   } else {
     console.log(`Inserting workspace '${id}' into workspaces table...`);
     const now = new Date();
@@ -43,15 +43,15 @@ async function run() {
     console.log(`Workspace '${id}' inserted successfully.`);
   }
 
-  const vfs = new LocalVFS({
+  const filesystem = new LocalFilesystem({
     workspaceId: id,
     workspaceRoot: rootPath,
     actorId: "human_operator",
   });
 
-  console.log("Initializing VFS sectors on disk and in database...");
-  await vfs.initialize();
-  console.log("VFS initialization completed successfully!");
+  console.log("Initializing filesystem sectors on disk and in database...");
+  await filesystem.initialize();
+  console.log("Filesystem initialization completed successfully!");
 }
 
 run()

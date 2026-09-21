@@ -181,15 +181,15 @@ Events: AGENT_SPAWNED, AGENT_DESPAWNED, AGENT_PAUSED, AGENT_RESUMED, AGENT_LIFEC
 | WorkspaceStatus | type | CREATED, INITIALIZING, ACTIVE, PAUSED, TERMINATED, ARCHIVED |
 | WorkspaceScope | type | private, shared, readonly, ephemeral |
 | ArtifactType | type | reasoning_trace, execution_log, analysis_report, generated_component, task_result, runtime_snapshot |
-| WorkspaceNodeType | type | file, directory |
+
 | WorkspacePermissions | interface | network, shell, maxAgents |
 | RuntimeConstraints | interface | networkAccess, shellExecution, memoryLimitMb, cpuLimit |
-| VFSPermissions | interface | read, write, execute |
+| FilesystemPermissions | interface | read, write, execute |
 | Workspace | interface | id, name, ownerId, status, rootPath, permissions, constraints, metadata |
-| WorkspaceNode | interface | id, workspaceId, path, name, type, mimeType, size, checksum, createdBy, updatedBy, metadata |
-| WorkspaceEvent | interface | id, workspaceId, type, agentId?, path?, payload |
-| WorkspaceEventType | type | 12 event type strings |
-| WorkspaceAgentSession | interface | id, workspaceId, agentId, scope, permissions |
+
+
+
+
 | Artifact | interface | id, workspaceId, producerAgent, artifactType, path?, semanticTags[], metadata |
 | CreateWorkspaceInput | interface | name, ownerId?, permissions?, constraints?, metadata? |
 | MountAgentInput | interface | agentId, scope?, permissions? |
@@ -283,7 +283,7 @@ Events: AGENT_SPAWNED, AGENT_DESPAWNED, AGENT_PAUSED, AGENT_RESUMED, AGENT_LIFEC
 | categoryRoutes | categories.ts | /api/categories, /api/categories/:id | GET, POST, PUT /:id, PATCH /:id, DELETE /:id |
 | channelRoutes | channels.ts | /api/channels, /api/channels/:id | GET, POST, PUT /:id, PATCH /:id, DELETE /:id |
 | messageRoutes | messages.ts | /api/channels/:channelId/messages | GET (with ?includeMonologue query) |
-| vfsRoutes | vfs.ts | /api/workspace/files, /api/workspace/files/content | GET /files (list), GET /files/content (read), POST /files/content (write), DELETE /files |
+| filesystemRoutes | filesystem.ts | /api/workspace/files, /api/workspace/files/content | GET /files (list), GET /files/content (read), POST /files/content (write), DELETE /files |
 | healthRoutes | health.ts | /health | GET |
 
 ### 2.5 Socket Server (server/src/sockets/)
@@ -310,17 +310,17 @@ Background jobs: IndexBuilder.incrementMessageCount (on message:new), IndexBuild
 
 Tools registered: read_file, write_file, list_directory, delete_file, execute_bash, execute_safe, web_search, query_database, system_scheduler, dispatch_agent, search_all_channels
 
-### 2.7 Workspace & VFS
+### 2.7 Workspace & Filesystem
 
 #### Workspace Manager & Permissions
 
 | Class/Function | File | Key Methods / Signatures |
 |---|---|---|
-| WorkspaceManager | workspace/workspace-manager.ts | constructor(sandboxRoot, eventBroker?), createWorkspace(input), getWorkspace(id), listWorkspaces(), deleteWorkspace(id), updateWorkspaceStatus(id, status), mountAgent(workspaceId, input), unmountAgent(workspaceId, agentId), getAgentSessions(workspaceId), getVFS(workspaceId, workspace, actorId), getEvents(workspaceId, limit?) |
+| WorkspaceManager | workspace/workspace-manager.ts | constructor(sandboxRoot, eventBroker?), createWorkspace(input), getWorkspace(id), listWorkspaces(), deleteWorkspace(id), updateWorkspaceStatus(id, status), mountAgent(workspaceId, input), unmountAgent(workspaceId, agentId), getAgentSessions(workspaceId), getFilesystem(workspaceId, workspace, actorId), getEvents(workspaceId, limit?) |
 | PermissionError | workspace/permission-guard.ts | constructor(message) — statusCode = 403 |
 | WorkspaceNotActiveError | workspace/permission-guard.ts | constructor(workspaceId, status) — statusCode = 409 |
 | assertWorkspaceActive | workspace/permission-guard.ts | (workspace: Workspace): void |
-| assertPermission | workspace/permission-guard.ts | (session: WorkspaceAgentSession, required: keyof VFSPermissions): void |
+| assertPermission | workspace/permission-guard.ts | (session: WorkspaceAgentSession, required: keyof FilesystemPermissions): void |
 | assertCanRead / assertCanWrite / assertCanExecute | workspace/permission-guard.ts | (session: WorkspaceAgentSession): void |
 | validateAgentAccess | workspace/permission-guard.ts | (sessions, agentId, workspaceId): WorkspaceAgentSession |
 
@@ -328,14 +328,14 @@ Tools registered: read_file, write_file, list_directory, delete_file, execute_ba
 
 | Interface/Class | File | Members / Description |
 |---|---|---|
-| VirtualFS | vfs/vfs.interface.ts | read(path), readBinary(path), write(path, content), mkdir(path), delete(path), rename(oldPath, newPath), list(path), stat(path), exists(path), initialize() |
-| FileNode | vfs/vfs.interface.ts | name, path, type (file\|directory), size, mimeType, updatedAt |
-| FileStat | vfs/vfs.interface.ts | name, path, type, size, mimeType, checksum, createdAt, updatedAt, createdBy, updatedBy |
-| LocalVFSOptions | vfs/local-vfs.ts | workspaceId, workspaceRoot, actorId, onEvent? |
-| LocalVFS (implements VirtualFS) | vfs/local-vfs.ts | All 10 VirtualFS methods + auto-creates workspace dirs on initialize (src/, artifacts/, agents/, .crowdos/, .crowdos/runtime\|cache\|snapshots) |
-| VFS barrel | vfs/index.ts | Re-exports VirtualFS, FileNode, FileStat, LocalVFS, LocalVFSOptions, normalizePath, isPathSafe, resolveWorkspacePath, extractName, guessMimeType |
+| FileNode | Filesystem/filesystem-types.ts | name, path, type (file\|directory), size, mimeType, updatedAt |
+| FileStat | Filesystem/filesystem-types.ts | name, path, type, size, mimeType, checksum, createdAt, updatedAt, createdBy, updatedBy |
 
-#### PathGuard Functions (vfs/path-guard.ts)
+| LocalFilesystemOptions | Filesystem/local-filesystem.ts | workspaceId, workspaceRoot, actorId, onEvent? |
+| LocalFilesystem | Filesystem/local-filesystem.ts | read/readBinary/write/mkdir/delete/rename/list/stat/exists/initialize + auto-creates workspace dirs on initialize (src/, artifacts/, agents/, .crowdos/, .crowdos/runtime\|cache\|snapshots) |
+| Filesystem barrel | Filesystem/index.ts | Re-exports FileNode, FileStat, LocalFilesystem, LocalFilesystemOptions, normalizePath, isPathSafe, isInsideRoot, resolveWorkspacePath, extractName, guessMimeType |
+
+#### PathGuard Functions (Filesystem/path-guard.ts)
 
 | Function | Signature | Description |
 |---|---|---|
@@ -353,7 +353,7 @@ Tools registered: read_file, write_file, list_directory, delete_file, execute_ba
 | database | config/database.ts | getSqlClient, getDb, ensurePgVectorExtension, closeDatabaseConnection |
 | app | index.ts | Fastify HTTP server instance |
 | eventBroker | index.ts | EventBroker singleton |
-| startServer | index.ts | Bootstrap: initialize workspaces VFS → listen |
+| startServer | index.ts | Bootstrap: initialize workspace filesystems → listen |
 
 ### 2.9 Empty Scaffold Directories
 
@@ -394,9 +394,9 @@ Tools registered: read_file, write_file, list_directory, delete_file, execute_ba
 
 ### 3.2 State Store (client/stores/crowd-os-store.ts) — Zustand
 
-State slices: workspaces[], agents[], messages[], modelProfiles[], instructionModules[], modelModules[], toolkitModules[], constraintsModules[], capabilitiesModules[], runtimeOverrides[], tools[], roles[], archivedChannels[], globalSoftCap, perProviderBudget, totalTokensConsumed, activeWorkspaceId, activeChannelId, selectedAgentId, selectedSandboxFile, vfsRevision, rightSidebarOpen, leftSidebarCollapsed, settingsModalOpen, agentProfileModalOpen, workspaceSettingsTab, activeMobileTab, mobileDrawerLeft/Right, chatSearchQuery, isFetchingWorkspaces, isCreatingWorkspace, workspaceError
+State slices: workspaces[], agents[], messages[], modelProfiles[], instructionModules[], modelModules[], toolkitModules[], constraintsModules[], capabilitiesModules[], runtimeOverrides[], tools[], roles[], archivedChannels[], globalSoftCap, perProviderBudget, totalTokensConsumed, activeWorkspaceId, activeChannelId, selectedAgentId, selectedSandboxFile, filesystemRevision, rightSidebarOpen, leftSidebarCollapsed, settingsModalOpen, agentProfileModalOpen, workspaceSettingsTab, activeMobileTab, mobileDrawerLeft/Right, chatSearchQuery, isFetchingWorkspaces, isCreatingWorkspace, workspaceError
 
-Core actions: fetchWorkspaces, createWorkspace, deleteWorkspace, enterWorkspace, leaveWorkspace, setActiveChannel, addMessage, clearChannelMessages, addAgent, updateAgentStatus, updateAgent, deleteAgent, openAgentProfileModal, closeAgentProfileModal, addModelProfile, updateModelProfile, deleteModelProfile, add/update/delete InstructionModule, add/update/delete ModelModule, add/update/delete ToolkitModule, add/update/delete ConstraintsModule, add/update/delete CapabilitiesModule, addRuntimeOverride, toggleRuntimeOverride, deleteRuntimeOverride, toggleRightSidebar, setRightSidebarOpen, toggleLeftSidebar, setSettingsModalOpen, setWorkspaceSettingsTab, toggleCategoryCollapse, deleteCategory, createCategory, createChannel, deleteChannel, archiveChannel, reorderCategory, reorderChannel, setSelectedSandboxFile, incrementVfsRevision, setActiveMobileTab, setMobileDrawerLeft/Right, selectChannelMobile, toggleToolEnabled, incrementToolUsage, addRole, updateRole, reorderRoles, deleteRole, fetchBudget, updateBudget, resetBudget
+Core actions: fetchWorkspaces, createWorkspace, deleteWorkspace, enterWorkspace, leaveWorkspace, setActiveChannel, addMessage, clearChannelMessages, addAgent, updateAgentStatus, updateAgent, deleteAgent, openAgentProfileModal, closeAgentProfileModal, addModelProfile, updateModelProfile, deleteModelProfile, add/update/delete InstructionModule, add/update/delete ModelModule, add/update/delete ToolkitModule, add/update/delete ConstraintsModule, add/update/delete CapabilitiesModule, addRuntimeOverride, toggleRuntimeOverride, deleteRuntimeOverride, toggleRightSidebar, setRightSidebarOpen, toggleLeftSidebar, setSettingsModalOpen, setWorkspaceSettingsTab, toggleCategoryCollapse, deleteCategory, createCategory, createChannel, deleteChannel, archiveChannel, reorderCategory, reorderChannel, setSelectedSandboxFile, incrementFilesystemRevision, setActiveMobileTab, setMobileDrawerLeft/Right, selectChannelMobile, toggleToolEnabled, incrementToolUsage, addRole, updateRole, reorderRoles, deleteRole, fetchBudget, updateBudget, resetBudget
 
 Socket listeners: message:new, message:stream, agent:status, agent:thinking, workspace:sync, budget:exceeded, budget:warning, agent:spawned, agent:paused, agent:resumed, runtime:snapshot, escalation:created, strike:initiated, parliament:convened, parliament:updated, sandbox:updated
 

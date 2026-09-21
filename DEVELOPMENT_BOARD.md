@@ -39,7 +39,7 @@ Status keys:
 | — | Runtime Layer Rewrite | `done` | 100% | Replaced monolithic core/L0-L2Runtimes with modular runtime/ layer: 4 provider adapters, kernel, context assembler, 3 runtimes, router, executor, and full socket handler migration. |
 | — | Perf Pass 1 (P0/P1) | `done` | 100% | Parallel context pipeline (8 middlewares concurrent, PIPELINE_PARALLEL flag), TTL caches (modelModules/resolved tools/skills) with mutation invalidation, default 8k context cap enforced + tool output clamp, parallel read-only tools, fire-and-forget memory notes, 50ms stream batching (STREAM_BATCH_MS), single-RTT persistMessage, perf instrumentation ([perf] logs). 38/38 tests + gate lint green. |
 | — | Perf Pass 2 (P1 cancel/usage) | `done` | 100% | Real token accounting: all 5 adapters parse provider usage (Google usageMetadata incl. SSE, Anthropic message_start/delta, OpenAI/Ollama/Custom usage chunks + stream_options); runtimes record via TokenTracker off hot path; CodingRuntime usage no longer zeroed (pi-core accumulates per-step usage into agent_end). AbortSignal end-to-end: user:cancel socket event → AbortController per run → adapter fetch + tool execution abort; cancelled runs return status 'cancelled', persist nothing. Snapshot interval skips DB queries when no clients connected. All tests green (38 server / 5 pi-core / 4 client). |
-| — | Perf Pass 3 (durable events + VFS) | `done` | 100% | durable_events table (bigserial seq, channel+seq index) pushed to PG; non-ephemeral broker events dual-written fire-and-forget (DURABLE_EVENTS=false disables); catch-up replay of last 50 events on channel:join; GET /api/events/recent?afterSeq cursor replay endpoint; hourly 24h retention cleanup. VFS: list() fs.stat N+1 parallelized + 10s LRU listing cache with mutation invalidation (write/mkdir/delete/rename). Typecheck/build/gates/38 tests green. |
+| — | Perf Pass 3 (durable events + filesystem) | `done` | 100% | durable_events table (bigserial seq, channel+seq index) pushed to PG; non-ephemeral broker events dual-written fire-and-forget (DURABLE_EVENTS=false disables); catch-up replay of last 50 events on channel:join; GET /api/events/recent?afterSeq cursor replay endpoint; hourly 24h retention cleanup. Filesystem: list() fs.stat N+1 parallelized + 10s LRU listing cache with mutation invalidation (write/mkdir/delete/rename). Typecheck/build/gates/38 tests green. |
 | — | Perf Pass 4 (P0-4/P0-5) | `done` | 100% | Heartbeat + zombie recovery: setAgentStatus writes runtimeStates.lastHeartbeat, Shared/core/agentHeartbeat toucher (15s) + orphan sweeper (20s) pauses 'working' agents with stale heartbeat (ORPHAN_AFTER_MS=60s default), emits agent:status paused. Guard hardening: generalized pipe-to-shell deny (any|sh/bash/pwsh/iex), interpreter one-liner denies anchored to interpreters (python3 -c, perl -e, ruby -e, php -r, sh -c, node -e/-p, powershell -command/-enc), fork bomb, netcat -e, history/shred tampering, reg add/schtasks persistence, .env* file variants blocked in validatePath, ASK list extended (pip3/taskkill/icacls/crontab/Invoke-WebRequest). Identifier_Index §9 added. All green. |
 
 ---
@@ -406,9 +406,9 @@ Checklist:
 Short notes:
 - 2026-04-18: Board initialized.
 - 2026-05-24: Setup client Vitest store unit testing and Playwright E2E smoke runner, successfully compiling and passing 100% of monorepo tests (57/57).
-- 2026-05-25: E2E smoke test verified passing — full portal workspace entry flow, channel switching, and VFS sandbox connectivity confirmed.
+- 2026-05-25: E2E smoke test verified passing — full portal workspace entry flow, channel switching, and filesystem sandbox connectivity confirmed.
 - 2026-05-25: Completed Unified Runtime Convergence Layer (Phases 1-6) linking shared contracts, canonicalizing socket events, implementing periodic state snapshot reconciliation, achieving full constraints/capabilities module parity across UI modals, and integrating Agent Lifecycle heartbeats.
-- 2026-05-25: Completed Unified Runtime Convergence Layer (Phases 7-10) wiring Swarm Provider health and failover dashboard, reactive VFS auto-sync, Parliament multi-agent consensus voting, and strike warning alerts.
+- 2026-05-25: Completed Unified Runtime Convergence Layer (Phases 7-10) wiring Swarm Provider health and failover dashboard, reactive filesystem auto-sync, Parliament multi-agent consensus voting, and strike warning alerts.
 
 ---
 
@@ -465,7 +465,7 @@ Reconciled with `execution-plan/` — this board is now the single source of tru
 | 5 | ART-1 | Artifact service | `done` | 100% | `Artifacts/` `diff`/`report`/`citations` + retention + `artifact.created` events |
 | 6 | UX-1 | Cancel | `done` | 100% | Stop button → `user:cancel` + `run.status_changed` cancelled |
 | 6 | UX-2 | Approval cards | `done` | 100% | `approval-card.tsx` grant/deny/scope |
-| 6 | UX-3 | Diff review | `done` | 100% | `diff-viewer.tsx` side-by-side + apply/revert via VFS |
+| 6 | UX-3 | Diff review | `done` | 100% | `diff-viewer.tsx` side-by-side + apply/revert via filesystem |
 | 6 | UX-4 | Edit/regenerate/retry | `done` | 100% | Hover actions → `run:resume` lineage |
 | 6 | UX-5 | Background continuity | `done` | 100% | `channel:join` + `afterSeq` cursor + reconnect digest + Notification + mute map |
 | 6 | UX-6 | Delegation timeline | `done` | 100% | Typed shared contracts + `delegation-message.tsx` |

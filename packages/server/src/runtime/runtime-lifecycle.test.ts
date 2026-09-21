@@ -22,7 +22,7 @@ import {
   type LLMResponse,
 } from "./runtime-gate.js";
 import { toolsGate, toolRegistry } from "../tools/tools-gate.js";
-import { vfsGate } from "../vfs/vfs-gate.js";
+import { filesystemGate } from "../Filesystem/filesystem-gate.js";
 import { EventBroker, isValidMode } from "../event-broker/event-broker-gate.js";
 import { composerModeToRuntime, type ComposerMode } from "./types.js";
 import { getDb } from "../shared/config/database.js";
@@ -552,11 +552,12 @@ describe("Agent Runtime, Routing, Tools & Lifecycle Integrated QA Suite", () => 
       expect(toolsGate.unregister).toBeDefined();
     });
 
-    it("exposes VFS capabilities exclusively through vfsGate facade", () => {
-      expect(vfsGate.createLocalVFS).toBeDefined();
-      expect(vfsGate.normalizePath).toBeDefined();
-      expect(vfsGate.isPathSafe).toBeDefined();
-      expect(vfsGate.resolveWorkspacePath).toBeDefined();
+    it("exposes filesystem capabilities exclusively through filesystemGate facade", () => {
+      expect(filesystemGate.createLocalFilesystem).toBeDefined();
+      expect(filesystemGate.normalizePath).toBeDefined();
+      expect(filesystemGate.isPathSafe).toBeDefined();
+      expect(filesystemGate.resolveWorkspacePath).toBeDefined();
+      expect(filesystemGate.isInsideRoot).toBeDefined();
     });
   });
   describe("6. Swarm & Conversational Runtime Execution", () => {

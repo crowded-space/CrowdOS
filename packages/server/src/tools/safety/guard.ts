@@ -1,6 +1,6 @@
 import fsp from "node:fs/promises";
 import path from "node:path";
-import { isInsideRoot as sharedIsInsideRoot } from "../../vfs/path-guard.js";
+import { isInsideRoot as sharedIsInsideRoot } from "../../Filesystem/filesystem-gate.js";
 import { TtlCache } from "../../shared/core/ttl-cache.js";
 
 export type CommandDecision = "ALLOW" | "ASK" | "DENY";
@@ -118,7 +118,8 @@ export class Guard {
     return process.cwd();
   }
 
-  // Shared anchored containment check — single impl lives in vfs/path-guard.
+  // Shared anchored containment check — single impl lives in the Filesystem domain
+  // (re-exported through its gate; §2 forbids importing past the gate).
   static isInsideRoot = sharedIsInsideRoot;
 
   private static async getRootReal(root: string): Promise<string> {

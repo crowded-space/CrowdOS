@@ -1,6 +1,6 @@
 # CrowdOS Currently Implemented Client — Complete Specification
 
-> **Purpose**: This document exhaustively maps every component, behavior, state variable, event handler, rendering pattern, network/socket event, VFS mechanism, and design token in the `/packages/client` codebase. Written so that any agent can work with this implemented frontend without re-analyzing the source code.
+> **Purpose**: This document exhaustively maps every component, behavior, state variable, event handler, rendering pattern, network/socket event, filesystem mechanism, and design token in the `/packages/client` codebase. Written so that any agent can work with this implemented frontend without re-analyzing the source code.
 
 ---
 
@@ -20,7 +20,7 @@
 12. [Modals](#12-modals)
 13. [UI Primitives](#13-ui-primitives)
 14. [Mobile Components](#14-mobile-components)
-15. [File Explorer & Sandbox (VFS)](#15-file-explorer--sandbox-vfs)
+15. [File Explorer & Sandbox (Filesystem)](#15-file-explorer--sandbox-filesystem)
 16. [Settings Tabs](#16-settings-tabs)
 17. [Design System & Tokens](#17-design-system--tokens)
 18. [Animations](#18-animations)
@@ -36,7 +36,7 @@ The currently implemented client (`@community-agent/client`) is a Discord-styled
 - **Cognitive Assemblies**: Modular component construction including Instruction prompts, Model variables, and Toolkit capabilities.
 - **Dynamic Behavior Patches**: Instant runtime overrides allowing developers to live-patch agent directives, limits, and tools.
 - **Authoritative Database Sync**: Workspace configuration, channel sectors, messages history, and cognitive presets are synced to a live PostgreSQL/Spanner database pool.
-- **Integrated Virtual File System (VFS)**: Read, write, revert, and sync files inside a secure code sandbox directly from the UI.
+- **Integrated file tree**: Read, write, revert, and sync files inside a secure code sandbox directly from the UI.
 - **Governance Audit Telemetries**: Real-time strike tracking, parliamentary consensuses, and safety cap logs.
 
 ---
@@ -93,7 +93,7 @@ packages/client/
 │       ├── workspace-sidebar.tsx        # Left sidebar with channels, categories & JH user profile
 │       ├── workspace-dropdown.tsx       # Accordion menu with workspace settings / leave portal
 │       ├── right-sidebar.tsx            # Right sidebar with tier rosters & telemetry toggle
-│       ├── file-explorer.tsx            # Sandbox VFS recursive tree explorer
+│       ├── file-explorer.tsx            # Sandbox filesystem recursive tree explorer
 │       │
 │       ├── messages/
 │       │   ├── message.tsx              # Router dispatches by type (includes strike & parliament)
@@ -311,7 +311,7 @@ Local storage caching is manually synchronized for `workspaces`, `agents`, `mess
 - `globalSoftCap`: number (default `1,000,000` tokens)
 - `perProviderBudget`: Record<string, { softCap: number, used: number }>
 - `totalTokensConsumed`: number
-- `vfsRevision`: number (monitors sandbox edits)
+- `filesystemRevision`: number (monitors sandbox edits)
 
 #### Selection & UI States
 - `activeWorkspaceId`: string | null (persisted in `crowdos_active_workspace`)
@@ -354,7 +354,7 @@ import { socket } from '../src/config/socket';
 | `strike:initiated` | `{ agentId, reason, strikeCount, maxStrikes }` | Triggers safety warning and logs a safety strike warning banner. |
 | `parliament:convened`| `{ parliamentId, topic, status, votes, timestamp }` | Convenes a parliamentary voting consensus card inline in active channel. |
 | `parliament:updated` | `{ parliamentId, status, votes }` | Updates real-time consensus counts, vote bars, and ballots grid. |
-| `sandbox:updated` | `payload` | Triggers VFS sync via `incrementVfsRevision()`. |
+| `sandbox:updated` | `payload` | Triggers filesystem sync via `incrementFilesystemRevision()`. |
 
 ---
 
@@ -401,9 +401,9 @@ All CRUD operations communicate with REST API backend endpoints:
 - `toggleRuntimeOverride(id, active)`: Activates or deactivates runtime patch.
 - `deleteRuntimeOverride(id)`: Deletes patch.
 
-#### Sandboxing (VFS)
+#### Sandboxing (Filesystem)
 - `setSelectedSandboxFile(file)`
-- `incrementVfsRevision()`: Signals file explorer to reload directories.
+- `incrementFilesystemRevision()`: Signals file explorer to reload directories.
 
 #### Budgets & Safety Controls
 - `fetchBudget()`: Restores budget cap telemetry from `/api/workspace/budget`.
@@ -460,13 +460,13 @@ App
     │   │   ├── ToolExecutionMessage -> expandable inputs & output logs
     │   │   └── Governance Alerts -> strike dots warning meter & parliament consensus vote bars
     │   │
-    │   ├── SandboxCodeViewer (VFS text area editor with revert & save actions)
+    │   ├── SandboxCodeViewer (filesystem text area editor with revert & save actions)
     │   └── Composer text area with Drag-and-drop file uploader & mention suggestions
     │
     ├── RightSidebar (Desktop & Mobile drawer instance)
     │   ├── Telemetry Dashboard (Channel vs Global metrics cards)
     │   ├── Tiered agents roster list
-    │   └── FileExplorer VFS Recursive Tree Node
+    │   └── FileExplorer recursive tree node
     │
     ├── BottomNav (Mobile footer)
     ├── AgentProfileModal (Runtime patches form & DM composer)
@@ -482,7 +482,7 @@ App
 
 Reads all layout states directly from the Zustand store. Has no custom component props.
 
-### Inline VFS Text Editor: `SandboxCodeViewer`
+### Inline Filesystem Text Editor: `SandboxCodeViewer`
 
 Instead of target-frontend's simple mock highlights, the implemented client includes a fully active `SandboxCodeViewer` component embedded locally:
 
@@ -588,7 +588,7 @@ Renders the workspace selector dropdown wrapped in `<AnimatePresence>` motion bl
 **File**: `right-sidebar.tsx`
 
 Swaps dynamically under motion transitions:
-- If `rightSidebarOpen` is false: Renders VFS `<FileExplorer />`.
+- If `rightSidebarOpen` is false: Renders the filesystem `<FileExplorer />`.
 - If `rightSidebarOpen` is true: Renders Swarm Telemetries & Agents Roster.
 
 #### Swarm Telemetries Dashboard
@@ -652,13 +652,13 @@ Provides comprehensive agent details, hierarchical mapping, direct DM compositio
 
 A 140KB administration console organized into 8 tabs:
 
-1. **Overview Tab (`overview`)**: Displays workspace identity cards, active VFS sectors, registered agent counts, and general metrics. Contains the "Delete Workspace" trigger.
+1. **Overview Tab (`overview`)**: Displays workspace identity cards, active filesystem sectors, registered agent counts, and general metrics. Contains the "Delete Workspace" trigger.
 2. **Agents Tab (`agents`)**: Fully manages agents. Implements **Mind Preset templates** (CEO Owl, Coder Sparrow, QA Pigeon, Writer Raven) to instantly pre-fill forms. Supports **Import/Export Mind** as `.json` files, agent duplication, and modular cognitive assembly mapping.
 3. **Permissions & Roles Tab (`roles`)**: Renders custom roles with drag-and-drop ordering. Allows selecting a role to edit its name, pick one of 32 colors, and toggle any of the 10 role permissions.
 4. **Tools Tab (`tools`)**: Toggles whitelisted sandbox tool status and displays total usage statistics.
 5. **Model Modules Tab (`model_cards`)**: Renders model modules.
 6. **Skills Manager Tab (`skills_manager`)**: Dual-pane cognitive modules editor:
-  - **Skills Catalog**: Manage instruction modules, system prompts, VFS target paths, and associated model profiles.
+  - **Skills Catalog**: Manage instruction modules, system prompts, filesystem target paths, and associated model profiles.
   - **Toolkits Catalog**: Create and edit toolkit modules with whitelisted tools checkboxes and JSON schemas.
 7. **Category & Channels Tab (`channels`)**: Fully configures sectors. Implements category collapsers, channel deletion, channel archiving (sets channel type to `'archived'`), and channel ordering buttons (up/down).
 8. **Safety Policies Tab (`safety`)**: Configures safety parameters, including human approval gates, rate limiters, and emergency kill switches.
@@ -712,19 +712,19 @@ Pill badge container displaying presence dots and capitalized status labels. App
 
 ---
 
-## 15. File Explorer & Sandbox (VFS)
+## 15. File Explorer & Sandbox (Filesystem)
 
 **File**: `workspace/file-explorer.tsx`
 
-Implements a recursive, dynamic Virtual File System (VFS) linked to the server sandbox:
+Implements a recursive, dynamic file tree linked to the server sandbox:
 
 ### File Tree Recursion: `FileTreeNode`
 Renders folder and file nodes. Folder clicks check if children are cached; if empty, it triggers a fetch request:
 `GET /api/workspace/files?path={node.path}&workspaceId={workspaceId}`
 The returned nodes are cached as child elements and rendered recursively. File clicks select the file path in the store, opening it in the editor.
 
-### VFS Synchronization
-The `FileExplorer` root element fetches root files from `/api/workspace/files?path=/&workspaceId={workspaceId}` on mount. It automatically re-fetches root files whenever the active workspace or `vfsRevision` changes.
+### Filesystem Synchronization
+The `FileExplorer` root element fetches root files from `/api/workspace/files?path=/&workspaceId={workspaceId}` on mount. It automatically re-fetches root files whenever the active workspace or `filesystemRevision` changes.
 
 ---
 
@@ -830,7 +830,7 @@ Trigger classes are available as `.animate-slide-up`, `.animate-slide-in-left`, 
 |---|---|---|
 | **Backend Integration** | Simulated in Zustand (800-4000ms setTimeout replies). | Real Fastify REST + Socket.io integration via Vite proxy. |
 | **Monologues** | Visual only. | Buffered and streamed via WebSocket (`message:stream`, thought chunks). |
-| **VFS Sandbox Code** | Read-only mocked Syntax Highlighter panel. | Dynamic recursive file tree; editing via `SandboxCodeViewer` using POST/GET endpoints. |
+| **Filesystem Sandbox Code** | Read-only mocked Syntax Highlighter panel. | Dynamic recursive file tree; editing via `SandboxCodeViewer` using POST/GET endpoints. |
 | **Onboarding Portal** | Simple tabs with mock connection logs. | Fully active PostgreSQL URL tester verifying schema integrity with live server connection handshakes. |
 | **Governance Features** | Standard rose warning box. | Custom Safety Strike meters and Swarm Parliament ballot consensus cards. |
 | **Model Telemetry** | Simple card crud profiles. | Telemetry cascades (Primary → Failover → Offline) with latency monitors and test sync connection actions. |

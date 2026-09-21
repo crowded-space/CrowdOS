@@ -588,7 +588,7 @@ export async function seedWorkspacePresets(
         authorName: "CrowdOS System",
         authorLevel: "0",
         authorType: "system",
-        content: "# Welcome to CrowdOS\n\nCrowdOS provides autonomous multi-agent coordination with dedicated workspace sandboxes and isolated database storage.\n\n### Getting Started\n- **General Chat**: Use `#general` to communicate with the swarm and initiate tasks.\n- **Agents**: Raven (L0 Assistant) coordinates requests, and Owl indexes information.\n- **Filesystem**: Check the File Explorer in the center panel to inspect sandboxed VFS files.",
+        content: "# Welcome to CrowdOS\n\nCrowdOS provides autonomous multi-agent coordination with dedicated workspace sandboxes and isolated database storage.\n\n### Getting Started\n- **General Chat**: Use `#general` to communicate with the swarm and initiate tasks.\n- **Agents**: Raven (L0 Assistant) coordinates requests, and Owl indexes information.\n- **Filesystem**: Check the File Explorer in the center panel to inspect sandboxed files.",
         sequenceNumber: 1,
         timestamp: now,
       });

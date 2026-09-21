@@ -11,7 +11,7 @@ interface Props {
 export default function RepositorySelector({ className }: Props) {
   const activeChannelId = useCrowdOSStore((s) => s.activeChannelId);
   const activeWorkspaceId = useCrowdOSStore((s) => s.activeWorkspaceId);
-  const vfsRevision = useCrowdOSStore((s) => s.vfsRevision);
+  const filesystemRevision = useCrowdOSStore((s) => s.filesystemRevision);
   const { showSuccess, showError } = useToast();
 
   const [mountedPath, setMountedPath] = useState<string | null>(null);
@@ -47,7 +47,7 @@ export default function RepositorySelector({ className }: Props) {
 
   useEffect(() => {
     fetchMount();
-  }, [activeChannelId, activeWorkspaceId, vfsRevision]);
+  }, [activeChannelId, activeWorkspaceId, filesystemRevision]);
 
   const displayName = mountedPath ? mountedPath.split(/[\\/]/).pop() || mountedPath : '.ThisCrowd';
   const isDefault = !mountedPath;
@@ -78,7 +78,7 @@ export default function RepositorySelector({ className }: Props) {
         const putData = await putRes.json().catch(() => ({}));
         if (!putRes.ok) throw new Error(putData.message || 'Mount failed');
         setMountedPath(desktopPath);
-        useCrowdOSStore.getState().incrementVfsRevision();
+        useCrowdOSStore.getState().incrementFilesystemRevision();
         showSuccess('Repository mounted', desktopPath);
         return;
       }
@@ -101,7 +101,7 @@ export default function RepositorySelector({ className }: Props) {
       const putData = await putRes.json().catch(() => ({}));
       if (!putRes.ok) throw new Error(putData.message || 'Mount failed');
       setMountedPath(data.path);
-      useCrowdOSStore.getState().incrementVfsRevision();
+      useCrowdOSStore.getState().incrementFilesystemRevision();
       showSuccess('Repository mounted', data.path);
     } catch (e: any) {
       // Fallback to manual picker on failure (e.g., headless, remote, or error)
@@ -148,7 +148,7 @@ export default function RepositorySelector({ className }: Props) {
             initialPath={mountedPath}
             onSaved={(path) => {
               setMountedPath(path);
-              useCrowdOSStore.getState().incrementVfsRevision();
+              useCrowdOSStore.getState().incrementFilesystemRevision();
               showSuccess(path ? 'Repository switched' : 'Mount cleared', path ?? 'Inherits category');
             }}
             onClose={() => setPickerOpen(false)}

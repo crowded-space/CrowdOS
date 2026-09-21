@@ -5,7 +5,7 @@ import { useToast } from '@/components/ui/ToastProvider';
 
 const BACKEND_URL = '';
 
-export interface VfsNode {
+export interface ExplorerNode {
   name: string;
   path: string;
   type: 'folder' | 'file';
@@ -34,14 +34,14 @@ const getFileIcon = (ext?: string) => {
 };
 
 const FileTreeNode: React.FC<{ 
-  node: VfsNode, 
+  node: ExplorerNode, 
   level?: number, 
   selectedFile?: string,
   activeWorkspaceId?: string | null,
-  onSelectFile?: (node: VfsNode) => void 
+  onSelectFile?: (node: ExplorerNode) => void 
 }> = ({ node, level = 0, selectedFile, activeWorkspaceId, onSelectFile }) => {
   const [isOpen, setIsOpen] = useState(false);
-  const [children, setChildren] = useState<VfsNode[]>([]);
+  const [children, setChildren] = useState<ExplorerNode[]>([]);
   const [isLoading, setIsLoading] = useState(false);
 
   const toggleOpen = async () => {
@@ -140,9 +140,9 @@ const FileTreeNode: React.FC<{
 };
 
 export default function FileExplorer() {
-  const { selectedSandboxFile, setSelectedSandboxFile, activeWorkspaceId, vfsRevision } = useCrowdOSStore();
+  const { selectedSandboxFile, setSelectedSandboxFile, activeWorkspaceId, filesystemRevision } = useCrowdOSStore();
   const { showSuccess } = useToast();
-  const [rootNodes, setRootNodes] = useState<VfsNode[]>([]);
+  const [rootNodes, setRootNodes] = useState<ExplorerNode[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
@@ -166,7 +166,7 @@ export default function FileExplorer() {
       }
     } catch (err: any) {
       setErrorMsg(`Fetch Error: ${err.message}`);
-      console.error("VFS fetch error:", err);
+      console.error("Filesystem fetch error:", err);
     } finally {
       setIsLoading(false);
     }
@@ -174,9 +174,9 @@ export default function FileExplorer() {
 
   useEffect(() => {
     fetchRoot();
-  }, [activeWorkspaceId, vfsRevision]);
+  }, [activeWorkspaceId, filesystemRevision]);
 
-  const handleSelectFile = (node: VfsNode) => {
+  const handleSelectFile = (node: ExplorerNode) => {
     setSelectedSandboxFile(node.path);
   };
 
@@ -194,7 +194,7 @@ export default function FileExplorer() {
           <button 
             onClick={() => {
               fetchRoot();
-              showSuccess('Refreshed', 'VFS File Tree synced.');
+              showSuccess('Refreshed', 'File tree synced.');
             }} 
             className="w-9 h-9 rounded-xl bg-zinc-900 border border-zinc-800 hover:bg-zinc-800 text-zinc-400 hover:text-zinc-100 flex items-center justify-center transition cursor-pointer focus:outline-none active:scale-95 touch-manipulation"
             title="Refresh File Tree"
@@ -251,7 +251,7 @@ export default function FileExplorer() {
         <div className="flex items-center justify-between text-[10px] text-zinc-500 font-mono">
           <div className="flex items-center gap-1">
             <Database size={10} />
-            <span>VFS Connected</span>
+            <span>Filesystem Connected</span>
           </div>
         </div>
       </div>

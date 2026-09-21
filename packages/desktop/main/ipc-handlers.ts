@@ -10,7 +10,7 @@ import { canAutoUpdate } from "./updater.js";
 // IPC → action wiring for the desktop main process (Windows-first, v1).
 //
 // Scope: dialogs, config, notifications, windows, updater, logs. The
-// data-plane channels (vfs:*, runs:*, approvals:*) intentionally stay on the
+// data-plane channels (filesystem:*, runs:*, approvals:*) intentionally stay on the
 // embedded HTTP API + socket.io in v1 — the renderer already speaks those via
 // apiClient/socket, so main returns a 501-style envelope pointing there
 // instead of duplicating the backend behind IPC.
@@ -95,7 +95,7 @@ const openChannelSchema = z
   .passthrough();
 
 const REST_FALLBACK_BY_PREFIX: Array<{ prefix: string; area: string }> = [
-  { prefix: "crowdos:vfs:", area: "VFS (LocalVFS)" },
+  { prefix: "crowdos:fs:", area: "Filesystem (LocalFilesystem)" },
   { prefix: "crowdos:runs:", area: "runs (checkpoint/resume/compensations)" },
   { prefix: "crowdos:approvals:", area: "approvals (decide/list)" },
 ];
@@ -259,12 +259,12 @@ export function registerIpcHandlers(deps: IpcHandlerDeps): void {
     "crowdos:dialog:openDirectory",
     "crowdos:dialog:openFile",
     "crowdos:dialog:save",
-    "crowdos:vfs:list",
-    "crowdos:vfs:read",
-    "crowdos:vfs:write",
-    "crowdos:vfs:mkdir",
-    "crowdos:vfs:delete",
-    "crowdos:vfs:rename",
+    "crowdos:fs:list",
+    "crowdos:fs:read",
+    "crowdos:fs:write",
+    "crowdos:fs:mkdir",
+    "crowdos:fs:delete",
+    "crowdos:fs:rename",
     "crowdos:runs:resume",
     "crowdos:runs:compensations",
     "crowdos:runs:undo",

@@ -1,6 +1,6 @@
 /*
  * Coding diff journey — UX-3 diff viewer from ART-1
- * Covers: diff.created artifact, side-by-side viewer, apply/revert via VFS
+ * Covers: diff.created artifact, side-by-side viewer, apply/revert via filesystem
  */
 import { test, expect } from '@playwright/test';
 
@@ -32,7 +32,7 @@ test.describe('coding diff journey (UX-3)', () => {
     expect([200, 401, 403].includes(res.status)).toBeTruthy();
   });
 
-  test('VFS file explorer is present', async ({ page }) => {
+  test('filesystem explorer is present', async ({ page }) => {
     let viteUp = true;
     try {
       await fetch('http://localhost:3000', { signal: AbortSignal.timeout(3000) });

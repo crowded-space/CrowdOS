@@ -17,11 +17,11 @@ EventBroker (typed, durable_events, replay)
   ↓  RuntimeExecutor (router → Conversational/Agentic/Coding/Research/Swarm)
   ↓  Queue (BullMQ: runs/maintenance/scheduler, idempotency channel:agent:message, 15m lease, 7d DLQ) + Runs (17-state machine, checkpoint + compensation)
   ↓  Swarm (DAG swarm_tasks + aggregator + verifier,Delegations depth≤2) / Research (Brave/Tavily/Serper evidence bundle)
-  ↓  VFS (LocalVFS, 10s LRU) + Memories (pgvector hybrid, cap 500) + Observability (OTel spans runId-keyed + cost ledger)
+  ↓  Filesystem (LocalFilesystem, 10s LRU) + Memories (pgvector hybrid, cap 500) + Observability (OTel spans runId-keyed + cost ledger)
   ↓  Postgres 16 + Redis 7
 ```
 
-**Gated domains (18):** `Agents`, `Approvals`, `Artifacts`, `Channels`, `EventBroker`, `Memories`, `Messages`, `Modules`, `Observability`, `Queue`, `Runs`, `runtime`, `SearchProviders`, `Skills`, `Swarm`, `tools`, `vfs`, `Workspace` — enforced via `scripts/check-gates.mjs` (dynamic discovery) + `check-redaction.mjs` + `check-events.mjs` in CI.
+**Gated domains (18):** `Agents`, `Approvals`, `Artifacts`, `Channels`, `EventBroker`, `Memories`, `Messages`, `Modules`, `Observability`, `Queue`, `Runs`, `runtime`, `SearchProviders`, `Skills`, `Swarm`, `tools`, `Filesystem`, `Workspace` — enforced via `scripts/check-gates.mjs` (dynamic discovery) + `check-redaction.mjs` + `check-events.mjs` in CI.
 
 ## 2. Runtime Model
 
@@ -29,7 +29,7 @@ EventBroker (typed, durable_events, replay)
 |---|---|---|---|---|---|
 | Chat | ✓ | high | TTFT via stream coalescing (50ms), 17-state cancel, reconnect digest | — | — |
 | Agentic | ✓ | high | ReAct loop, tool R/W classifier, per-iteration budget, checkpoint/resume | — | — |
-| Coding | ✓ | high | PiCore loop + VFS + diff artifacts, real `process.cwd()` sandbox | PiBridge still env-complete not allowlist | P2 |
+| Coding | ✓ | high | PiCore loop + filesystem + diff artifacts, real `process.cwd()` sandbox | PiBridge still env-complete not allowlist | P2 |
 | Research | ✓ | v1 | Isolated sub-runs, evidence bundle deduplicated + synthesized cited report, raw never leaks to parent | Sub-runs inline not yet BullMQ durably queued | P2 |
 | Swarm | ✓ | v1 | DAG `swarm_tasks`, leaf workers (BullMQ leases), aggregator dedupe, verifier gates COMPLETED, partial-failure honest | Linear chains first, fan-out second | P2 |
 

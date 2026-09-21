@@ -1,26 +1,26 @@
 // ─── Local Filesystem Implementation ───────────────────────────────────
-// CrowdOS §16 + §35.5 NO VFS: direct clamped fs, no DB mirror.
-// Reads/writes hit disk only via path-guard jail. workspace_nodes is dead.
+// CrowdOS §16 + §35.5: direct clamped fs, no DB mirror.
+// Reads/writes hit disk only via the path-guard jail.
 
 import fs from "node:fs/promises";
 import { join } from "node:path";
 import { resolveWorkspacePath, normalizePath, extractName, guessMimeType } from "./path-guard.js";
-import type { VirtualFS, FileNode, FileStat } from "./vfs.interface.js";
+import type { FileNode, FileStat } from "./filesystem-types.js";
 
-export interface LocalVFSOptions {
+export interface LocalFilesystemOptions {
   workspaceId: string;
   workspaceRoot: string;
   actorId: string;
   onEvent?: (type: string, path: string, metadata?: Record<string, unknown>) => void;
 }
 
-export class LocalVFS implements VirtualFS {
+export class LocalFilesystem {
   private readonly workspaceId: string;
   private readonly workspaceRoot: string;
   private readonly actorId: string;
-  private readonly onEvent?: LocalVFSOptions["onEvent"];
+  private readonly onEvent?: LocalFilesystemOptions["onEvent"];
 
-  constructor(options: LocalVFSOptions) {
+  constructor(options: LocalFilesystemOptions) {
     this.workspaceId = options.workspaceId;
     this.workspaceRoot = options.workspaceRoot;
     this.actorId = options.actorId;

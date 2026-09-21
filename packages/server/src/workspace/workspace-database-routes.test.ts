@@ -56,8 +56,8 @@ vi.mock("../shared/config/database.js", () => ({
   withTransaction: async <T>(fn: (tx: unknown) => Promise<T>) => fn({}),
 }));
 
-vi.mock("../vfs/vfs-gate.js", () => ({
-  LocalVFS: class {
+vi.mock("../Filesystem/filesystem-gate.js", () => ({
+  LocalFilesystem: class {
     constructor(_opts: unknown) {}
     async initialize() {}
   },

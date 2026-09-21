@@ -2,7 +2,6 @@
 
 export type WorkspaceStatus = "CREATED" | "INITIALIZING" | "ACTIVE" | "PAUSED" | "TERMINATED" | "ARCHIVED";
 export type WorkspaceScope = "private" | "shared" | "readonly" | "ephemeral";
-export type WorkspaceNodeType = "file" | "directory";
 
 export interface WorkspacePermissions {
   network: boolean;
@@ -17,7 +16,7 @@ export interface RuntimeConstraints {
   cpuLimit: number;
 }
 
-export interface VFSPermissions {
+export interface FilesystemPermissions {
   read: boolean;
   write: boolean;
   execute: boolean;
@@ -36,55 +35,6 @@ export interface Workspace {
   updatedAt: Date;
 }
 
-export interface WorkspaceNode {
-  id: string;
-  workspaceId: string;
-  path: string;
-  name: string;
-  type: WorkspaceNodeType;
-  mimeType: string | null;
-  size: number;
-  checksum: string | null;
-  createdBy: string;
-  updatedBy: string;
-  metadata: Record<string, unknown>;
-  createdAt: Date;
-  updatedAt: Date;
-}
-
-export interface WorkspaceEvent {
-  id: string;
-  workspaceId: string;
-  type: string;
-  agentId: string | null;
-  path: string | null;
-  payload: Record<string, unknown>;
-  createdAt: Date;
-}
-
-export type WorkspaceEventType =
-  | "workspace.created"
-  | "workspace.deleted"
-  | "file.created"
-  | "file.updated"
-  | "file.deleted"
-  | "file.renamed"
-  | "agent.joined"
-  | "agent.left"
-  | "artifact.created"
-  | "execution.started"
-  | "execution.finished"
-  | "execution.failed";
-
-export interface WorkspaceAgentSession {
-  id: string;
-  workspaceId: string;
-  agentId: string;
-  scope: WorkspaceScope;
-  permissions: VFSPermissions;
-  createdAt: Date;
-}
-
 export interface CreateWorkspaceInput {
   name: string;
   ownerId?: string;
@@ -96,7 +46,7 @@ export interface CreateWorkspaceInput {
 export interface MountAgentInput {
   agentId: string;
   scope?: WorkspaceScope;
-  permissions?: Partial<VFSPermissions>;
+  permissions?: Partial<FilesystemPermissions>;
 }
 
 export interface ScreenLockStatus {

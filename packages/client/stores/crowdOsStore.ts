@@ -293,7 +293,7 @@ interface CrowdOSState {
   activeChannelId: string | null;
   selectedAgentId: string | null;
   selectedSandboxFile: string | null;
-  vfsRevision: number;
+  filesystemRevision: number;
   rightSidebarOpen: boolean;
   leftSidebarCollapsed: boolean;
   settingsModalOpen: boolean;
@@ -427,7 +427,7 @@ interface CrowdOSState {
   reorderChannel: (channelId: string, direction: 'up' | 'down') => Promise<void>;
 
   setSelectedSandboxFile: (file: string | null) => void;
-  incrementVfsRevision: () => void;
+  incrementFilesystemRevision: () => void;
 
   // Mobile Layout Actions
   setActiveMobileTab: (tab: CrowdOSState['activeMobileTab']) => void;
@@ -1326,7 +1326,7 @@ const initialSelectedMode: ComposerMode = (() => {
       if (ch) persistSeq(ch, seq);
     }
     console.log('[Socket] Sandbox updated event:', data);
-    get().incrementVfsRevision();
+    get().incrementFilesystemRevision();
   });
 
   function handleApprovalRequested(raw: any) {
@@ -1501,7 +1501,7 @@ const initialSelectedMode: ComposerMode = (() => {
     activeChannelId: initialChannelId,
     selectedAgentId: null,
     selectedSandboxFile: null,
-    vfsRevision: 0,
+    filesystemRevision: 0,
     rightSidebarOpen: true,
     leftSidebarCollapsed: false,
     settingsModalOpen: false,
@@ -3256,7 +3256,7 @@ const initialSelectedMode: ComposerMode = (() => {
 
     // Mobile States routing
     setSelectedSandboxFile: (file) => set({ selectedSandboxFile: file }),
-    incrementVfsRevision: () => set(state => ({ vfsRevision: state.vfsRevision + 1 })),
+    incrementFilesystemRevision: () => set(state => ({ filesystemRevision: state.filesystemRevision + 1 })),
     setActiveMobileTab: (tab) => set({ activeMobileTab: tab }),
     setMobileDrawerLeft: (open) => set({ mobileDrawerLeft: open }),
     setMobileDrawerRight: (open) => set({ mobileDrawerRight: open }),
@@ -3403,7 +3403,7 @@ const initialSelectedMode: ComposerMode = (() => {
       const workspaceId = get().activeWorkspaceId || art.workspaceId || 'default';
       const content = art.contentRef ?? '';
       await apiClient.applyFileContent(art.path, content, workspaceId);
-      get().incrementVfsRevision();
+      get().incrementFilesystemRevision();
     },
 
     revertDiff: async (artifactId) => {
@@ -3430,7 +3430,7 @@ const initialSelectedMode: ComposerMode = (() => {
           await apiClient.deleteFile(art.path, workspaceId);
         }
       }
-      get().incrementVfsRevision();
+      get().incrementFilesystemRevision();
     },
 
     editResend: (originalMessageId, newContent) => {

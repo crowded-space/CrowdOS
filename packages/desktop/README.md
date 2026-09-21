@@ -20,7 +20,7 @@ Electron desktop shell for CrowdOS (Windows-first, zero-auth, loopback-only).
 - `main/app-shell.ts` — single-instance lock, window factory, protocol stub.
 - `main/index.ts` — real main entry (backend lifecycle, IPC, hardening).
 - `main/ipc-handlers.ts` — allowlist-enforced invoke handlers (dialogs, config,
-  notify, windows, updater, logs; vfs/runs/approvals stay on REST/socket).
+  notify, windows, updater, logs; fs/runs/approvals stay on REST/socket).
 - `main/config-store.ts` — `<userData>/config.json` (backend port, bounds).
 - `main/ensure-database.ts` — first-run migrate (forks server `db/bootstrap`).
 - `preload/bridge.ts` — whitelisted `window.crowdos` bridge only.

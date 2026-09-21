@@ -6,7 +6,37 @@ import { join, dirname, normalize, sep } from "node:path";
 
 const SRC = join(process.cwd(), "src");
 
-const GATE_RE = /^[a-z][A-Za-z0-9]*Gate\.ts$/;
+// AGENTS.md §1 names gate files kebab-case + "-gate.ts" (e.g. "agent-gate.ts").
+// The previous pattern (^[a-z][A-Za-z0-9]*Gate\.ts$) could not match a single
+// real gate file, so discoverDomains() always returned {} and this script
+// scanned 0 domains and reported success unconditionally. Fixed here.
+const GATE_RE = /^[a-z][A-Za-z0-9-]*[Gg]ate\.ts$/;
+
+// AGENTS.md §2: "Shared/, lib/, config/ exempt" — these folders may reach
+// domain internals. They are not gated domains themselves.
+const EXEMPT_IMPORTERS = ["shared", "lib", "config"];
+
+// Pre-existing violations that predate the GATE_RE fix above. They live in
+// domains this task does not own; listed here so the rule is enforced for all
+// NEW code without silently swallowing the old debt. Remove an entry only by
+// fixing the import (route it through that domain's gate).
+const KNOWN_VIOLATIONS = [
+  {
+    file: "create-app.ts",
+    imports: "./approvals/approval-sweeper.js",
+    note: "gate->sweeper->gate cycle blocks a plain re-export; needs an approvals-owned restructure",
+  },
+  {
+    file: join("runtime", "runtimes", "swarm-runtime.ts"),
+    imports: "../../swarm/swarm-worker-resolver.js",
+    note: "resolveWorker/loadWorkerCandidates are not re-exported by swarm-gate.ts",
+  },
+];
+
+function isKnownViolation(file, spec) {
+  const rel = file.slice(SRC.length + 1);
+  return KNOWN_VIOLATIONS.some((k) => k.file === rel && k.imports === spec);
+}
 
 // Domains are derived dynamically: any top-level src folder containing at
 // least one [x]Gate.ts file is a gated domain. Folders without a gate
@@ -56,6 +86,7 @@ function isEntryOf(domain, target) {
 }
 
 const violations = [];
+let knownHit = false;
 const files = walk(SRC);
 
 for (const file of files) {
@@ -77,7 +108,16 @@ for (const file of files) {
     if (!targetDomain) continue; // not inside a gated domain
     const importingDomain = domainOf(file);
     if (importingDomain === targetDomain) continue; // internal imports allowed
+    // AGENTS.md §2 exempts Shared/, lib/, config/ from the gate rule.
+    if (importingDomain === null) {
+      const top = file.slice(SRC.length + 1).split(sep)[0];
+      if (EXEMPT_IMPORTERS.includes(top)) continue;
+    }
     if (isEntryOf(targetDomain, target)) continue;
+    if (isKnownViolation(file, spec)) {
+      knownHit = true;
+      continue;
+    }
     violations.push({
       file: file.slice(SRC.length + 1),
       imports: spec,
@@ -97,3 +137,11 @@ if (violations.length > 0) {
 console.log(
   `Gate rule OK: scanned ${files.length} files across ${Object.keys(DOMAINS).length} domains (${Object.keys(DOMAINS).join(", ")}), 0 violations.`
 );
+if (knownHit) {
+  console.warn(
+    `Gate rule NOTE: ${KNOWN_VIOLATIONS.length} pre-existing violation(s) allowlisted (enforced for new code, not yet fixed):`
+  );
+  for (const k of KNOWN_VIOLATIONS) {
+    console.warn(`  ${k.file} -> '${k.imports}' — ${k.note}`);
+  }
+}

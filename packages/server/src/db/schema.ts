@@ -476,7 +476,7 @@ export const workspaceSettings = pgTable("workspace_settings", {
 
 // â”€â”€â”€ Workspace Sandbox Runtime Tables â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
-import type { WorkspacePermissions, RuntimeConstraints, VFSPermissions } from "../workspace/workspace-gate.js";
+import type { WorkspacePermissions, RuntimeConstraints, FilesystemPermissions } from "../workspace/workspace-gate.js";
 
 export const workspaces = pgTable("workspaces", {
   id: text("id").primaryKey(),
@@ -492,15 +492,15 @@ export const workspaces = pgTable("workspaces", {
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
-// REMOVED (0019): workspace_nodes + workspace_events dropped — CrowdOS §16
-// NO VFS: LocalVFS is truth, no DB mirror. See 0019_drop_workspace_vfs.sql.
+// REMOVED (0019): workspace_nodes + workspace_events dropped — CrowdOS §16:
+// LocalFilesystem is truth, no DB mirror. See 0019_drop_workspace_vfs.sql.
 
 export const workspaceAgents = pgTable("workspace_agents", {
   id: text("id").primaryKey(),
   workspaceId: text("workspace_id").notNull().references(() => workspaces.id, { onDelete: "cascade" }),
   agentId: text("agent_id").notNull().references(() => agents.id, { onDelete: "cascade" }),
   scope: workspaceScopeEnum("scope").notNull().default("shared"),
-  permissions: jsonb("permissions").$type<VFSPermissions>().notNull().default(sql`'{"read":true,"write":false,"execute":false}'::jsonb`),
+  permissions: jsonb("permissions").$type<FilesystemPermissions>().notNull().default(sql`'{"read":true,"write":false,"execute":false}'::jsonb`),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 }, (table) => ({
   workspaceIdx: index("workspace_agents_workspace_idx").on(table.workspaceId),

@@ -25,7 +25,7 @@ async function applyMigrations(): Promise<void> {
 }
 
 // DEPRECATED: legacy hand-rolled DDL behind LEGACY_BOOTSTRAP=true.
-// Drizzle migrations are truth (0019 drops the NO-VFS residue). Legacy path
+// Drizzle migrations are truth (0019 drops the pre-NO-VFS residue). Legacy path
 // is frozen and will be removed; it no longer creates workspace_nodes/events.
 async function ensureSchema(): Promise<void> {
   console.warn("[db] LEGACY_BOOTSTRAP=true is deprecated and will be removed — use drizzle migrations (npm run db:push without the flag).");

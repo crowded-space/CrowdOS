@@ -186,7 +186,7 @@ export async function workspaceRoutes(app: FastifyInstance) {
       };
       await saveWorkspaceRecord(record);
       // ponytail: bounded mkdir — a stalled filesystem must degrade to
-      // DB-backed creation, never wedge the request (VFS lazily bootstraps).
+      // DB-backed creation, never wedge the request (filesystem lazily bootstraps).
       try {
         await Promise.race([
           fs.mkdir(resolvedSandbox, { recursive: true }),
@@ -196,7 +196,7 @@ export async function workspaceRoutes(app: FastifyInstance) {
           }),
         ]);
       } catch (err: any) {
-        request.log.warn({ err }, "Notice: sandbox directory deferred, VFS will bootstrap on first use");
+        request.log.warn({ err }, "Notice: sandbox directory deferred, filesystem will bootstrap on first use");
       }
 
       // 6. Seed presets: attached database when one was given, else local

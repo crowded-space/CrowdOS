@@ -9,7 +9,7 @@ import { workspaceRoutes } from "./workspace.js";
 import { categoryRoutes } from "./categories.js";
 import { channelRoutes } from "./channels.js";
 import { messageRoutes } from "./messages.js";
-import { vfsRoutes } from "./vfs.js";
+import { filesystemRoutes } from "./filesystem.js";
 import { skillRoutes } from "./skills.js";
 import { toolRoutes } from "./tools.js";
 import { mcpRoutes } from "./mcp.js";
@@ -32,7 +32,7 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(categoryRoutes);
   await app.register(channelRoutes);
   await app.register(messageRoutes);
-  await app.register(vfsRoutes);
+  await app.register(filesystemRoutes);
   await app.register(skillRoutes);
   await app.register(toolRoutes);
   await app.register(mcpRoutes);
