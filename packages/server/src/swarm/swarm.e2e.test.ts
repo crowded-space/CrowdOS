@@ -1,4 +1,44 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+
+// §22/§31: the swarm now delegates to REAL L3 workers, so the roster the
+// resolver reads must be deterministic. Only `agentGate.list` is overridden —
+// the rest of the gate (AgentRegistry and friends) stays real, because other
+// modules in this graph import it and a partial mock would break them.
+const E2E_ROSTER = [
+  { id: 'agent-e2e', name: 'E2EAgent', authorityLevel: 2, status: 'idle', modelModuleId: 'mod-worker-e2e' },
+  { id: 'agent-worker-1', name: 'Crow-Worker-1', authorityLevel: 3, status: 'idle', modelModuleId: 'mod-worker-e2e' },
+  { id: 'agent-worker-2', name: 'Crow-Worker-2', authorityLevel: 3, status: 'idle', modelModuleId: 'mod-worker-e2e' },
+];
+vi.mock('../agents/agent-gate.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../agents/agent-gate.js')>();
+  return {
+    ...actual,
+    agentGate: {
+      ...actual.agentGate,
+      list: async () => E2E_ROSTER as never,
+      getById: async (id: string) => (E2E_ROSTER.find((w) => w.id === id) ?? null) as never,
+    },
+  };
+});
+
+// Workers assemble their OWN context (§27), so their model module is resolved
+// through the real pipeline. Pointing that resolution at the test adapter keeps
+// the delegation path genuine — a worker really is an agent with its own model
+// and instructions — without reaching a live provider.
+vi.mock('../modules/module-gate.js', () => ({
+  moduleGate: {
+    model: {
+      get: async () => ({
+        provider: 'swarm-e2e-test',
+        modelName: 'test-model',
+        temperature: 0.2,
+        maxOutputTokens: 2048,
+        topP: 0.95,
+      }),
+    },
+  },
+}));
+
 import { swarmGate } from './swarm-gate.js';
 import { ProviderRegistry } from '../runtime/providers/provider-registry.js';
 import { EventBroker } from '../event-broker/event-broker-gate.js';
@@ -170,6 +210,20 @@ describe('Swarm SW-1 e2e', () => {
     expect(result.status).toBe('completed');
     expect(result.finalResponse).toContain('Completed 2/2');
     expect(result.finalResponse.toLowerCase()).toContain('swarm');
+    // §22/§31 delegation contract: the report must name the REAL worker that ran
+    // each task. Before this existed the plan's assigneeTemplate was parsed and
+    // never resolved, so every "worker" silently re-ran the orchestrator.
+    expect(result.finalResponse).toContain('## Workers');
+    expect(result.finalResponse).toContain('Crow-Worker-1');
+    expect(result.finalResponse).toMatch(/match: (any-l3|id|name|level)/);
+    // The orchestrator must NOT be the reported worker: that was the defect.
+    expect(result.finalResponse).not.toMatch(/→ E2EAgent .*match: requesting-agent/);
+    // §23 usage accounting: the supervisor (planning) + 2 workers + the
+    // verifier are all paid calls. Before this the whole swarm reported ZERO
+    // tokens, so budget enforcement saw a free operation. The mock provider
+    // returns 10 tokens per call, so 4 calls must be visible in the total —
+    // a bare `> 0` would pass even if three of the four were dropped.
+    expect(result.usage.totalTokens).toBeGreaterThanOrEqual(40);
     // Artifact path not required to assert DB, but ensure no mocked strings
     expect(result.finalResponse).not.toContain('Task Output for');
     expect(result.finalResponse).not.toContain('runTask');

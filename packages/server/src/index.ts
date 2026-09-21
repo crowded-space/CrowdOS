@@ -8,6 +8,12 @@
 import { env, initConfig } from "./shared/config/env.js";
 import { buildServer } from "./create-app.js";
 import { authGate } from "./shared/auth/auth-gate.js";
+import { installProcessGuards } from "./shared/core/process-guards.js";
+
+// Install before anything else can schedule detached work (config init, VFS
+// bootstrap, reindex timers, outbox drains). See process-guards.ts for why a
+// local-first app logs-and-continues instead of exiting.
+installProcessGuards({ role: "server" });
 
 try {
   initConfig();

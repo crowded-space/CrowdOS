@@ -79,10 +79,14 @@ export async function verifySwarm(
 
     const response = await kernel.callLLM(verifyPacket, broker as any);
     const content = response.content ?? "";
+    // §23: the verifier is a real paid call; its usage must reach the run's
+    // accounting rather than being discarded, or the swarm looks cheaper than
+    // it is. Threaded through every return path below.
+    const usage = (response as { usage?: { promptTokens: number; completionTokens: number; totalTokens: number } }).usage;
     const parsed = parseVerificationJson(content);
-    if (parsed) return parsed;
+    if (parsed) return { ...parsed, usage };
     // Invalid JSON — fallback to honest heuristic, not fabricated pass
-    return honestFallback(aggregatedContent, aggregationSummary, `verifier returned invalid JSON: ${content.slice(0, 200)}`);
+    return { ...honestFallback(aggregatedContent, aggregationSummary, `verifier returned invalid JSON: ${content.slice(0, 200)}`), usage };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     return honestFallback(aggregatedContent, aggregationSummary, `verifier LLM failure: ${msg}`);

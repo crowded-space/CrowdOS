@@ -7,6 +7,8 @@ export interface PlanResult {
   rawContent: string | null;
   fallbackUsed: boolean;
   fallbackReason?: string | null;
+  /** Tokens spent planning (§23: budget must see real numbers). */
+  usage?: { promptTokens: number; completionTokens: number; totalTokens: number };
 }
 
 export function parsePlanJson(content: string): SwarmPlan | null {
@@ -126,7 +128,10 @@ export function buildSupervisorPrompt(packet: ContextPacket): string {
     "Rules:",
     "- Use ids task-1, task-2, ... sequentially",
     "- dependsOn lists ids that must complete before this task starts; empty for independent tasks",
-    "- assigneeTemplate is the worker agent template id to execute the task (use the requesting agent id if unsure)",
+    "- assigneeTemplate names the WORKER for the task. Prefer an L3 worker agent id or name.",
+    "- Do NOT assign tasks to the requesting agent: the requester is the orchestrator,",
+    "  and assigning work back to it defeats the point of decomposing the task.",
+    "- If you do not know a worker's id, use \"L3\" and the runtime will pick a worker.",
     "- Linear chains: task-2 dependsOn task-1; Fan-out: multiple tasks have empty dependsOn for parallel execution",
     "- Keep tasks 2–4 unless goal clearly needs fewer or more",
     "- Do not add prose outside JSON; no markdown fencing needed but tolerated",
@@ -149,12 +154,15 @@ export async function generateSwarmPlan(
   try {
     const response = await kernel.callLLM(planPacket, broker as any);
     const content = response.content ?? "";
+    // §23: planning is a real paid call. Without this the swarm's reported
+    // usage excluded the supervisor entirely.
+    const usage = (response as { usage?: { promptTokens: number; completionTokens: number; totalTokens: number } }).usage;
     const parsed = parsePlanJson(content);
     if (parsed && parsed.tasks.length > 0) {
-      return { plan: { ...parsed, fallbackUsed: false, rawPlanText: content }, rawContent: content, fallbackUsed: false };
+      return { plan: { ...parsed, fallbackUsed: false, rawPlanText: content }, rawContent: content, fallbackUsed: false, usage };
     }
     const fallback = buildFallbackLinearPlan(packet, "planner LLM returned invalid JSON — fallback to honest linear chain");
-    return { plan: { ...fallback, rawPlanText: content }, rawContent: content, fallbackUsed: true, fallbackReason: fallback.fallbackReason ?? null };
+    return { plan: { ...fallback, rawPlanText: content }, rawContent: content, fallbackUsed: true, fallbackReason: fallback.fallbackReason ?? null, usage };
   } catch (err) {
     const fallback = buildFallbackLinearPlan(packet, err instanceof Error ? err.message : String(err));
     return { plan: { ...fallback, rawPlanText: null }, rawContent: null, fallbackUsed: true, fallbackReason: (err instanceof Error ? err.message : String(err)) };

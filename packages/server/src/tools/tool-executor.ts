@@ -45,6 +45,20 @@ export interface BatchedToolCall {
 
 const DEFAULT_MAX_PARALLEL_READS = 4;
 
+/**
+ * §31 stateless workers: tools that durably mutate private agent memory.
+ *
+ * A worker is defined as stateless — "no private memory carried between
+ * tasks". Suppressing only the reflection note (BaseRuntime) left the `remember`
+ * TOOL reachable, so a worker could still write a permanent note and the tier
+ * rule would hold on one path and leak on another. Authorization is enforced
+ * here, where every other tool rule is enforced, so the guarantee is total.
+ */
+const MEMORY_WRITE_TOOL_IDS: ReadonlySet<string> = new Set<string>([
+  "remember",
+  "discard_memory_from_context",
+]);
+
 // Approval fallback poll (one DB getById per tick while a run waits, up to ~5min).
 // Slow on purpose: the broker event is the fast path, this is only the fallback.
 const APPROVAL_FALLBACK_POLL_INITIAL_MS = 1000;
@@ -145,6 +159,23 @@ export class ToolExecutor {
     args: any,
     partialCtx?: Partial<ToolExecutionContext>
   ): Promise<ToolResult> {
+    // §31 stateless worker: refuse durable private-memory writes.
+    //
+    // This is a POLICY decision — it depends on nothing but the call context and
+    // the tool id — so it is checked before ANY dependency is touched. That keeps
+    // the guarantee total (it holds with no database, no agent row, no skills)
+    // and fails fast instead of paying a DB round trip to reject the call.
+    //
+    // An L3 worker's scope is one narrow subtask; memory that outlives the task
+    // is exactly what the tier forbids. Refused with a reason rather than
+    // silently succeeding, so the worker adapts instead of believing it
+    // persisted something it did not.
+    if (partialCtx?.stateless === true && MEMORY_WRITE_TOOL_IDS.has(toolId)) {
+      throw new Error(
+        `Stateless worker: tool "${toolId}" writes private agent memory, which an L3 worker must not accumulate (CrowdOS §31). Complete the subtask and return your findings in the task result instead.`
+      );
+    }
+
     const db = getDb();
     const startTime = Date.now();
     const __runId = (partialCtx as unknown as { runId?: string | null })?.runId ?? null;

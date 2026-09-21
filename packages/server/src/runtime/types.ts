@@ -119,9 +119,26 @@ export interface RuntimeResult {
   internalMonologue?: string
   toolCalls?: ToolCallRecord[]
   memoryCandidates?: MemoryCandidate[]
+  /**
+   * §26 `artifacts[]`: durable outputs this run produced, referenced rather than
+   * inlined. Populated by runtimes that write artifacts (Research citations,
+   * Coding diffs, the Swarm report). A runtime that writes an artifact but does
+   * not report it here forces every consumer to re-query by run — the caller is
+   * told what was produced instead of having to guess.
+   */
+  artifacts?: RuntimeArtifactRef[]
   runtimeEvents: RuntimeEvent[]
   usage: TokenUsage
   status: 'completed' | 'failed' | 'loop_detected' | 'budget_exceeded' | 'cancelled'
+}
+
+/** A durable output produced by a run (§26). Ids are the artifact rows' own. */
+export interface RuntimeArtifactRef {
+  id: string
+  type: string
+  /** Present when the runtime knows the artifact was persisted; absent when the
+   *  write failed and the runtime is reporting the failure honestly. */
+  persisted: boolean
 }
 
 export interface ToolCallRecord {
@@ -202,7 +219,10 @@ export type RuntimeType =
   | 'coding'
   | 'research'
 
-export type ComposerMode = 'auto' | 'chat' | 'conversational' | 'agentic' | 'coding' | 'research'
+// §6 runtime selector: Auto + the five runtimes. 'chat' is the UI name for the
+// Conversational Runtime; 'conversational' is accepted as an alias so persisted
+// values written before this type existed keep resolving.
+export type ComposerMode = 'auto' | 'chat' | 'conversational' | 'agentic' | 'coding' | 'research' | 'swarm'
 
 export const COMPOSER_MODE_TO_RUNTIME: Record<Exclude<ComposerMode, 'auto'>, RuntimeType> = {
   chat: 'conversational',
@@ -210,11 +230,31 @@ export const COMPOSER_MODE_TO_RUNTIME: Record<Exclude<ComposerMode, 'auto'>, Run
   agentic: 'agentic',
   coding: 'coding',
   research: 'research',
+  swarm: 'swarm',
 }
 
 export function composerModeToRuntime(mode: ComposerMode | string | undefined): RuntimeType | undefined {
   if (!mode || mode === 'auto') return undefined
   return COMPOSER_MODE_TO_RUNTIME[mode as Exclude<ComposerMode, 'auto'>]
+}
+
+const RUNTIME_TYPES: ReadonlySet<string> = new Set<string>([
+  'conversational', 'agentic', 'swarm', 'coding', 'research',
+])
+
+/**
+ * Resolve a raw string to a runtime TYPE (not a composer mode).
+ *
+ * `channel_settings.pinned_runtime` stores runtime names — the column is
+ * validated against the runtime set, so it must be read with this function.
+ * Reading it with `composerModeToRuntime` was a real defect: the stored value
+ * 'swarm' is not a composer mode, so every Swarm pin silently resolved to
+ * undefined and the channel fell back to Auto.
+ */
+export function runtimeTypeFromString(value: string | null | undefined): RuntimeType | undefined {
+  if (!value) return undefined
+  const raw = value.trim().toLowerCase()
+  return RUNTIME_TYPES.has(raw) ? (raw as RuntimeType) : undefined
 }
 
 export interface IRuntime {

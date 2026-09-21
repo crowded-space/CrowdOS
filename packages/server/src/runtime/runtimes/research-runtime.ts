@@ -525,11 +525,16 @@ export class ResearchRuntime extends BaseRuntime {
 
       // (e) Store bundle as Artifacts type citations + report as type report
       // Best-effort: DB may be unavailable in tests; never fail the run over artifacts.
+      // Each write records its artifact id so the §26 contract can report what
+      // was produced. A failed write is recorded as persisted:false rather than
+      // omitted — a silent gap in the artifact list is indistinguishable from
+      // "no artifact was needed".
+      const producedArtifacts: Array<{ id: string; type: string; persisted: boolean }> = []
       try {
         const { artifactsGate } = await import("../../artifacts/artifacts-gate.js")
         const bundleJson = JSON.stringify(evidenceBundle, null, 2)
         // citations artifact — full bundle preserved
-        await artifactsGate.create({
+        const citationsArtifact = await artifactsGate.create({
           runId: packet.runId ?? null,
           workspaceId: packet.workspaceId,
           producerAgent: packet.agentId,
@@ -555,13 +560,19 @@ export class ResearchRuntime extends BaseRuntime {
             freshnessVisible: true,
           },
         } as unknown as Parameters<typeof artifactsGate.create>[0])
+        producedArtifacts.push({
+          id: (citationsArtifact as unknown as { id?: string })?.id ?? "unpersisted",
+          type: "citations",
+          persisted: Boolean((citationsArtifact as unknown as { id?: string })?.id),
+        })
       } catch (err) {
         console.warn("[ResearchRuntime] citations artifact store failed:", err instanceof Error ? err.message : String(err))
+        producedArtifacts.push({ id: "unpersisted", type: "citations", persisted: false })
       }
 
       try {
         const { artifactsGate } = await import("../../artifacts/artifacts-gate.js")
-        await artifactsGate.create({
+        const reportArtifact = await artifactsGate.create({
           runId: packet.runId ?? null,
           workspaceId: packet.workspaceId,
           producerAgent: packet.agentId,
@@ -583,8 +594,14 @@ export class ResearchRuntime extends BaseRuntime {
             queueMode,
           },
         } as unknown as Parameters<typeof artifactsGate.create>[0])
+        producedArtifacts.push({
+          id: (reportArtifact as unknown as { id?: string })?.id ?? "unpersisted",
+          type: "report",
+          persisted: Boolean((reportArtifact as unknown as { id?: string })?.id),
+        })
       } catch (err) {
         console.warn("[ResearchRuntime] report artifact store failed:", err instanceof Error ? err.message : String(err))
+        producedArtifacts.push({ id: "unpersisted", type: "report", persisted: false })
       }
 
       // (f) Return report to channel, raw results NEVER injected into main context (only report size counted)
@@ -611,6 +628,8 @@ export class ResearchRuntime extends BaseRuntime {
         agentId: packet.agentId,
         channelId: packet.channelId,
         finalResponse: report,
+        // §26 artifacts[]: the caller is told which durable outputs exist.
+        artifacts: producedArtifacts,
         runtimeEvents,
         usage: totalUsage,
         status: "completed",

@@ -16,6 +16,10 @@ async function processRunJob(job: Job<RunJobData>): Promise<unknown> {
   const { channelId, agentId, messageId, userInput, workspaceId, runId } = job.data;
   const rawRuntime = (job.data as { explicitRuntime?: unknown }).explicitRuntime;
   const explicitRuntime = typeof rawRuntime === "string" && KNOWN_RUNTIMES.has(rawRuntime) ? rawRuntime : undefined;
+  // §6 pin: same validation as explicitRuntime — untrusted job data, so an
+  // unknown value degrades to Auto rather than reaching the Router.
+  const rawPreferred = (job.data as { preferredRuntime?: unknown }).preferredRuntime;
+  const preferredRuntime = typeof rawPreferred === "string" && KNOWN_RUNTIMES.has(rawPreferred) ? rawPreferred : undefined;
   const resumeContext = (job.data as unknown as { resumeContext?: unknown; resumeFrom?: unknown }).resumeContext ?? (job.data as unknown as { resumeContext?: unknown; resumeFrom?: unknown }).resumeFrom ?? null;
 
   const [{ runtimeGate }, { agentGate }, { getSharedBroker }] = await Promise.all([
@@ -89,6 +93,7 @@ async function processRunJob(job: Job<RunJobData>): Promise<unknown> {
       userInput,
       broker,
       explicitRuntime,
+      preferredRuntime,
       librarianAgentId: "agent-librarian",
       runId: (runId as string | undefined) ?? null,
       resumeContext: resumeContext as unknown as null,

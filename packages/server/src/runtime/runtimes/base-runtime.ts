@@ -4,12 +4,40 @@ import { RuntimeKernel } from '../kernel/runtime-kernel.js'
 import { ProviderAbortError, ProviderTimeoutError, isProviderError } from '../providers/provider-errors.js'
 import type { AgentAbortError } from '@crowdspace/pi-core'
 
+export interface BaseRuntimeOptions {
+  /**
+   * Kernel used for this runtime. Injected so a runtime can be constructed in
+   * QUIET mode (swarm workers) without a second class hierarchy: a worker runs
+   * the same agentic loop, it simply does not commit its transcript to the
+   * channel.
+   */
+  kernel?: RuntimeKernel
+  /**
+   * When false, reflection memory notes are not written. §31 defines an L3
+   * worker as stateless — a worker that accumulates private memory across
+   * tasks is not an L3, and quietly giving it one would break the tier model.
+   * Defaults to true.
+   */
+  persistMemories?: boolean
+  /**
+   * §31 stateless worker: true for a task-scoped worker that must not
+   * accumulate private memory. Unlike `persistMemories` (which only suppresses
+   * the reflection note), this is propagated onto every tool call so the
+   * executor can refuse memory-writing TOOLS too. Defaults to false.
+   */
+  stateless?: boolean
+}
+
 export abstract class BaseRuntime implements IRuntime {
   abstract readonly type: RuntimeType
   protected readonly kernel: RuntimeKernel
+  protected readonly persistMemories: boolean
+  protected readonly stateless: boolean
 
-  constructor() {
-    this.kernel = new RuntimeKernel()
+  constructor(options: BaseRuntimeOptions = {}) {
+    this.kernel = options.kernel ?? new RuntimeKernel()
+    this.persistMemories = options.persistMemories ?? true
+    this.stateless = options.stateless ?? false
   }
 
   abstract execute(packet: ContextPacket, broker: EventBroker): Promise<RuntimeResult>
@@ -30,6 +58,8 @@ export abstract class BaseRuntime implements IRuntime {
     interpreted: string
     futureRelevance: string
   }): void {
+    // Stateless workers (§31) must not accumulate memory across tasks.
+    if (!this.persistMemories) return
     void (async () => {
       try {
         const { createMemoryNote } = await import("../../memories/memories-gate.js")

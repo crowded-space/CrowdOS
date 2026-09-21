@@ -31,6 +31,13 @@ export interface ToolExecutionContext {
   authorityLevel?: number;
   abortSignal?: AbortSignal;
   runId?: string | null;
+  /**
+   * §31 stateless worker: true when this call runs inside a task-scoped worker
+   * that must not accumulate private memory between tasks. Memory WRITES are
+   * refused at the executor (the same place every other tool authorization is
+   * enforced) rather than only being suppressed at the reflection path.
+   */
+  stateless?: boolean;
   logger?: {
     info: (msg: string, meta?: unknown) => void;
     warn: (msg: string, meta?: unknown) => void;

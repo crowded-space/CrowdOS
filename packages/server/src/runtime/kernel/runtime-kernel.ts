@@ -31,8 +31,28 @@ interface StreamBufferEntry {
   coalescer: ChunkCoalescer
 }
 
+export interface RuntimeKernelOptions {
+  /**
+   * When false, `persistMessage` becomes a no-op (returns 0) while every live
+   * event still flows. This is how a swarm worker runs a full agentic loop
+   * WITHOUT writing its intermediate monologue, tool results and final answer
+   * into the channel: the worker's output belongs to the aggregation, not to
+   * the conversation. Without it, an N-task swarm would append O(N × iterations)
+   * messages to the channel and bury the orchestrator's report.
+   *
+   * Defaults to true — quiet mode is opt-in and must never leak into the
+   * ordinary chat path.
+   */
+  persistMessages?: boolean
+}
+
 export class RuntimeKernel {
   private readonly streamBuffers = new Map<string, StreamBufferEntry>()
+  private readonly persistMessages: boolean
+
+  constructor(options: RuntimeKernelOptions = {}) {
+    this.persistMessages = options.persistMessages ?? true
+  }
 
   private static streamKey(channelId: string, agentId: string, isThoughts?: boolean): string {
     return `${channelId}:${agentId}:${isThoughts ? 't' : 'c'}`
@@ -160,6 +180,12 @@ export class RuntimeKernel {
     toolCalls?: StructuredToolCall[] | undefined,
     workspaceId?: string | null | undefined
   ): Promise<number> {
+    // Quiet mode (swarm workers): the run still happens and still emits live
+    // events, but its transcript is not committed to the channel. Returning 0
+    // is the honest "no sequence allocated" answer — callers that checkpoint on
+    // this value (agentic tool loop) simply skip the checkpoint.
+    if (!this.persistMessages) return 0
+
     const start = performance.now()
     const runId = (metadata as Record<string, unknown> | undefined)?.runId as string | undefined ?? null
     const obsMod: typeof import("../../observability/observability-gate.js") | null = await import("../../observability/observability-gate.js").catch(() => null);

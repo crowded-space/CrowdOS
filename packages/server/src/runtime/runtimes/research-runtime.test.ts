@@ -277,14 +277,14 @@ describe("ResearchRuntime rollback flag", () => {
     const { RuntimeRouter } = await import("../runtime-router.js")
     const router = new RuntimeRouter()
     const agent: any = { id: "a1", name: "test", authorityLevel: 0 }
-    const chosen = router.route({ agent, channelTags: ["research"] })
+    const chosen = router.route({ agent, preferredRuntime: "research" })
     expect(chosen).toBe("agentic")
     // explicit research also pinned
     const chosen2 = router.route({ agent, explicitRuntime: "research" as any })
     expect(chosen2).toBe("agentic")
     process.env.RESEARCH_V1 = "true"
     const router2 = new RuntimeRouter()
-    const chosen3 = router2.route({ agent, channelTags: ["research"] })
+    const chosen3 = router2.route({ agent, preferredRuntime: "research" })
     expect(chosen3).toBe("research")
   })
 

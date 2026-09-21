@@ -191,6 +191,10 @@ export class AgenticRuntime extends BaseRuntime {
             abortSignal: packet.abortSignal,
             runId: packet.runId,
             broker,
+            // §31: a stateless worker's tool calls are refused memory writes
+            // at the executor — the guarantee has to travel with the call, not
+            // live only on the reflection path.
+            stateless: this.stateless,
           } as unknown as Record<string, unknown>
         ) : []
         const results: Array<{ success: boolean; output: string; error?: string; durationMs?: number }> = new Array(executableCalls.length)

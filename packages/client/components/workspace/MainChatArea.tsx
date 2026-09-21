@@ -169,13 +169,6 @@ export default function MainChatArea({ onOpenSearch }: MainChatAreaProps) {
     showInfo(reconnectDigest.message, 'Reconnected');
   }, [reconnectDigest?.message, reconnectDigest?.visible]);
 
-  // Auto-reset unpinned mode on channel switch
-  useEffect(() => {
-    if (activeChannelId && !isPinned) {
-      setMode('auto', activeChannelId);
-    }
-  }, [activeChannelId, isPinned, setMode]);
-
   // Attachment overlay states
   const [showAttachmentMenu, setShowAttachmentMenu] = useState(false);
   const attachmentMenuRef = useRef<HTMLDivElement>(null);

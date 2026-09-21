@@ -20,7 +20,7 @@ import {
   parseChannelRoom,
 } from "./room-keys.js";
 import { runtimeGate } from "../../runtime/runtime-gate.js";
-import { composerModeToRuntime } from "../../runtime/types.js";
+import { composerModeToRuntime, runtimeTypeFromString } from "../../runtime/types.js";
 import { IndexBuilder } from "../core/index-builder.js";
 import { getDb } from "../config/database.js";
 import { startHeartbeatSystem } from "../core/agent-heartbeat.js";
@@ -473,13 +473,17 @@ export function registerSocketServer(httpServer: HttpServer, broker: EventBroker
   // Setup periodic background indexing for stale channels (drift >= 10 messages) every 10 minutes
   const isBullMqMode = queueGate.mode() === "bullmq";
   if (!isBullMqMode) {
-    setInterval(async () => {
+    const reindexInterval = setInterval(async () => {
       try {
         await IndexBuilder.reindexStaleChannels(broker);
       } catch (err) {
         console.error("[IndexBuilder] Background reindexing task failed:", err);
       }
     }, 10 * 60 * 1000);
+    // Same rule as the snapshot timer below: a background maintenance tick
+    // must never hold the event loop open. Without unref the API refuses to
+    // exit on its own (and every test that builds a server leaks a timer).
+    reindexInterval.unref?.();
   }
 
   // Periodic snapshot broadcast to prevent drift (every 15 seconds).
@@ -684,6 +688,10 @@ export function registerSocketServer(httpServer: HttpServer, broker: EventBroker
       const { channelId, content } = payload as any;
       const rawMode = (payload as any).mode ?? (payload as any).runtimeMode;
       let explicitRuntime = composerModeToRuntime(rawMode);
+      // §6: the pin is a RUNTIME (validated against the runtime set on write),
+      // not a composer mode. It is resolved independently and handed to the
+      // Router as a preference, so tier rules and rollback flags still apply.
+      let preferredRuntime: ReturnType<typeof runtimeTypeFromString> = undefined;
       if (explicitRuntime) {
         console.log(`[Router] Override->${explicitRuntime} (from mode="${rawMode}") in #${channelId}`);
       } else {
@@ -693,12 +701,10 @@ export function registerSocketServer(httpServer: HttpServer, broker: EventBroker
           ? await channelGate.getSettings(channelId).catch(() => null)
           : null;
         const pinned = (settings as any)?.pinnedRuntime;
-        if (typeof pinned === "string" && composerModeToRuntime(pinned)) {
-          explicitRuntime = composerModeToRuntime(pinned);
-          console.log(`[Router] Pinned->${explicitRuntime} in #${channelId}`);
-        } else {
-          console.log(`[Router] Auto mode selected for message in #${channelId}`);
-        }
+        preferredRuntime = runtimeTypeFromString(typeof pinned === "string" ? pinned : null);
+        console.log(preferredRuntime
+          ? `[Router] Pinned->${preferredRuntime} (preference) in #${channelId}`
+          : `[Router] Auto mode selected for message in #${channelId}`);
       }
 
       // Owning channel row once per message: admission + workspace stamping +
@@ -771,6 +777,7 @@ export function registerSocketServer(httpServer: HttpServer, broker: EventBroker
               userInput: content,
               broker,
               explicitRuntime,
+              preferredRuntime,
               librarianAgentId: 'agent-librarian',
             });
           } catch (err: any) {
@@ -869,7 +876,10 @@ export function registerSocketServer(httpServer: HttpServer, broker: EventBroker
                 // so the executor would openRun() a phantom row per attempt (x3 retries).
                 // If persist fails (runs disabled / DB down), skip enqueue.
                 const { runsGate } = await import("../../runs/runs-gate.js");
-                const persisted = await runsGate.create({ agentId: agent.id, channelId, workspaceId: msgWorkspaceId, runtimeType: explicitRuntime ?? "agentic" }).catch(() => null);
+                // Honest label: this row is written BEFORE the Router decides,
+                // so it records what was REQUESTED. Claiming "agentic" here made
+                // every Auto run look like an explicit Agentic run.
+                const persisted = await runsGate.create({ agentId: agent.id, channelId, workspaceId: msgWorkspaceId, runtimeType: explicitRuntime ?? preferredRuntime ?? "auto" }).catch(() => null);
                 if (!persisted?.id) {
                   await triggerSystemWarning(broker, channelId, `System error queueing @${agent.name}: could not persist run.`);
                   return;
@@ -883,6 +893,7 @@ export function registerSocketServer(httpServer: HttpServer, broker: EventBroker
                   userInput: content,
                   workspaceId: msgWorkspaceId,
                   explicitRuntime: explicitRuntime ?? null,
+                  preferredRuntime: preferredRuntime ?? null,
                 });
                 broker.emit("run.queued" as never, { runId, channelId, agentId: agent.id } as never, { channelId });
                 console.log(`[Socket][Queue] Enqueued run ${runId} for @${agent.name} in #${channelId} (msg ${userMsg.id})`);

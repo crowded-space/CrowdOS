@@ -8,8 +8,9 @@
 // | 1  | crowdos_pin                      | ui-pref  | Zero-Auth PIN (src/config/pin.ts). MUST stay in localStorage |
 // | 2  | crowdos_active_channel           | ui-pref  | last open channel (store + src/config/socket.ts)             |
 // | 3  | crowdos_active_workspace         | ui-pref  | last open workspace                                          |
-// | 4  | crowdos_selected_mode            | ui-pref  | composer mode (only persisted when pinned)                   |
-// | 5  | crowdos_is_pinned                | ui-pref  | composer pin flag                                            |
+// | 4  | crowdos_pinned_modes             | ui-pref  | §6 per-channel runtime pin mirror { channelId: mode }        |
+// | 5  | crowdos_selected_mode            | legacy   | pre-§6 GLOBAL mode; superseded by crowdos_pinned_modes       |
+// | 5b | crowdos_is_pinned                | legacy   | pre-§6 GLOBAL pin flag; superseded by crowdos_pinned_modes   |
 // | 6  | crowdos_muted_channels           | ui-pref  | mute map JSON (store + MainChatArea.tsx)                     |
 // | 7  | crowdos_mute_<channelId>         | ui-pref  | legacy per-channel flag (`crowdos_mute_` prefix scan)        |
 // | 8  | crowdos_quick_access             | ui-pref  | capped (8) portal recents                                    |
@@ -43,6 +44,7 @@ export const UI_PREF_KEYS: readonly string[] = [
   'crowdos_pin',
   'crowdos_active_channel',
   'crowdos_active_workspace',
+  'crowdos_pinned_modes',
   'crowdos_selected_mode',
   'crowdos_is_pinned',
   'crowdos_muted_channels',

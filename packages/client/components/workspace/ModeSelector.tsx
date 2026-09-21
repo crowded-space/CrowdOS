@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Sparkles, MessageCircle, Bot, Terminal, Telescope, Pin, Check, ChevronDown } from 'lucide-react';
+import { Sparkles, MessageCircle, Bot, Terminal, Telescope, Network, Pin, Check, ChevronDown } from 'lucide-react';
 import type { ComposerMode } from '../../types/crowdOs';
 
 export interface ModeSelectorProps {
@@ -23,7 +23,10 @@ const MODE_OPTIONS: ModeOption[] = [
   { id: 'chat', label: 'Chat', description: 'Fast conversational', icon: MessageCircle, accentColor: 'text-sky-400' },
   { id: 'agentic', label: 'Agentic', description: 'Autonomous tool use', icon: Bot, accentColor: 'text-emerald-400' },
   { id: 'coding', label: 'Coding', description: 'Code execution and tools', icon: Terminal, accentColor: 'text-violet-400' },
-  { id: 'research', label: 'Research', description: 'Deep research and analysis', icon: Telescope, accentColor: 'text-fuchsia-400' }
+  { id: 'research', label: 'Research', description: 'Deep research and analysis', icon: Telescope, accentColor: 'text-fuchsia-400' },
+  // §22: Swarm is one of the five runtimes, so it is user-selectable — not
+  // reachable only through the Router.
+  { id: 'swarm', label: 'Swarm', description: 'Large data · L3 worker delegation', icon: Network, accentColor: 'text-rose-400' }
 ];
 
 export default function ModeSelector({ value, onChange, isPinned, onTogglePin, disabled = false }: ModeSelectorProps) {
@@ -103,7 +106,8 @@ export default function ModeSelector({ value, onChange, isPinned, onTogglePin, d
         onClick={onTogglePin}
         aria-pressed={isPinned}
         className={pinClass + ' w-11 h-11 sm:w-10 sm:h-[42px] flex items-center justify-center shrink-0'}
-        title={isPinned ? 'Mode pinned across channels. Click to unpin.' : 'Pin mode across channels'}
+        // §6: the pin belongs to THIS channel, not the browser.
+        title={isPinned ? 'Mode pinned for this channel. Click to unpin.' : 'Pin mode for this channel'}
       >
         <Pin size={14} className={isPinned ? 'fill-indigo-400' : ''} />
       </button>

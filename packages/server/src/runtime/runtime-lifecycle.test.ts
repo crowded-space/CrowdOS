@@ -80,13 +80,17 @@ describe("Agent Runtime, Routing, Tools & Lifecycle Integrated QA Suite", () => 
       expect(router.route({ agent, librarianAgentId: "agent-librarian" })).toBe("research");
     });
 
-    it("routes based on channel tags", () => {
-      const agent: any = { id: "ag-02", name: "Worker", authorityLevel: 3 };
-      expect(router.route({ agent, channelTags: ["coding", "frontend"] })).toBe("coding");
-      expect(router.route({ agent, channelTags: ["dev"] })).toBe("coding");
-      expect(router.route({ agent, channelTags: ["research"] })).toBe("research");
-      expect(router.route({ agent, channelTags: ["swarm"] })).toBe("swarm");
-      expect(router.route({ agent, channelTags: ["ops"] })).toBe("swarm");
+    it("routes based on the §6 channel runtime pin", () => {
+      const l1: any = { id: "ag-02", name: "Architect", authorityLevel: 1 };
+      expect(router.route({ agent: l1, preferredRuntime: "coding" })).toBe("coding");
+      expect(router.route({ agent: l1, preferredRuntime: "research" })).toBe("research");
+      // L2 owns the swarm engine, so a swarm pin is honored there.
+      const l2: any = { id: "ag-03", name: "Orchestrator", authorityLevel: 2 };
+      expect(router.route({ agent: l2, preferredRuntime: "swarm" })).toBe("swarm");
+      // A pin the tier forbids is NOT obeyed — it falls through to the tier
+      // default instead of inverting §25 authority-aware routing.
+      const l3: any = { id: "ag-04", name: "Worker", authorityLevel: 3 };
+      expect(router.route({ agent: l3, preferredRuntime: "swarm" })).toBe("agentic");
     });
 
     it("routes based on authority levels as default hierarchy", () => {
@@ -98,7 +102,9 @@ describe("Agent Runtime, Routing, Tools & Lifecycle Integrated QA Suite", () => 
       expect(router.route({ agent: l0 })).toBe("agentic");
       expect(router.route({ agent: l1 })).toBe("agentic");
       expect(router.route({ agent: l2 })).toBe("swarm");
-      expect(router.route({ agent: l3 })).toBe("conversational");
+      // §25: the mapping must not be inverted — the worker tier gets narrow
+      // EXECUTION, never the most limited runtime.
+      expect(router.route({ agent: l3 })).toBe("agentic");
     });
 
     it("runtimeGate.route delegates properly to router port", () => {
@@ -146,7 +152,7 @@ describe("Agent Runtime, Routing, Tools & Lifecycle Integrated QA Suite", () => 
         for (const agent of agents) {
           const routed = router.route({
             agent,
-            channelTags: ["dev", "swarm"], // Conflicting channel tags should NOT override explicit mode
+            preferredRuntime: "coding", // A channel pin must NOT override explicit mode
             explicitRuntime: runtimeOverride,
           });
           expect(routed).toBe(expected);

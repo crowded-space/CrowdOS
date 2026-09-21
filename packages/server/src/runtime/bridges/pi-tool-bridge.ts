@@ -1,6 +1,7 @@
 ﻿import type { AgentTool } from '@crowdspace/pi-core';
 import { toolsGate } from '../../tools/tools-gate.js';
 import type { EventBroker } from '../../event-broker/event-broker-gate.js';
+import { DEFERRED_TOOL_IDS } from '../kernel/middlewares/tool-schema-middleware.js';
 
 export interface PiToolBridgeContext {
   agentId: string;
@@ -105,6 +106,16 @@ export class PiToolBridge {
     for (const tool of tools) {
       // Exclude base coding tools if already provided
       if (['read_file', 'edit_file', 'write_file', 'execute_bash'].includes(tool.name)) {
+        continue;
+      }
+      // §21 conformance (§23): the Coding Runtime is a deliberate fork, but a
+      // fork must not change the tool contract. Every other runtime receives the
+      // DEFERRED set through open_detail discovery; injecting the FULL registry
+      // here would have given Coding a different, larger tool surface than the
+      // rest of the system — exactly the drift §23 calls a defect. The deferred
+      // tools stay reachable: open_detail is part of the injected context tools,
+      // and the base coding tools above are provided directly by this bridge.
+      if (DEFERRED_TOOL_IDS.has(tool.name)) {
         continue;
       }
 

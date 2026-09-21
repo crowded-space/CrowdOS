@@ -95,6 +95,9 @@ export class CodingRuntime extends BaseRuntime {
       };
 
       const adapter = ProviderRegistry.get(modelConfig.provider);
+      // §26 artifacts[]: durable outputs (diffs / written files) this run
+      // produced. Collected as the tools execute and reported on the result.
+      const producedArtifacts: Array<{ id: string; type: string; persisted: boolean }> = [];
 
       // Construct dynamic PiModelAdapter that invokes the registered ProviderAdapter.
       // The run's abortSignal rides through pi-core (CAN-1): loop boundaries,
@@ -239,7 +242,7 @@ export class CodingRuntime extends BaseRuntime {
               if (packet.runId) {
                 try {
                   const { artifactsGate } = await import('../../artifacts/artifacts-gate.js');
-                  await artifactsGate.create({
+                  const artifact = await artifactsGate.create({
                     runId: packet.runId as string,
                     workspaceId: packet.workspaceId,
                     producerAgent: packet.agentId,
@@ -250,7 +253,17 @@ export class CodingRuntime extends BaseRuntime {
                     patch,
                     contentRef: content.length > 20000 ? content.slice(0, 20000) : content,
                   });
-                } catch {}
+                  // §26: report what was produced so the caller does not have to
+                  // re-query artifacts by run to find out.
+                  producedArtifacts.push({
+                    id: (artifact as unknown as { id?: string })?.id ?? 'unpersisted',
+                    type: existed ? 'diff' : 'file',
+                    persisted: Boolean((artifact as unknown as { id?: string })?.id),
+                  });
+                } catch (err) {
+                  console.warn('[CodingRuntime] write_file artifact store failed:', (err as Error)?.message || err);
+                  producedArtifacts.push({ id: 'unpersisted', type: existed ? 'diff' : 'file', persisted: false });
+                }
               }
               try {
                 const { globalBroker } = await import('../../shared/sockets/register-socket-server.js');
@@ -341,7 +354,7 @@ export class CodingRuntime extends BaseRuntime {
               if (packet.runId) {
                 try {
                   const { artifactsGate } = await import('../../artifacts/artifacts-gate.js');
-                  await artifactsGate.create({
+                  const artifact = await artifactsGate.create({
                     runId: packet.runId as string,
                     workspaceId: packet.workspaceId,
                     producerAgent: packet.agentId,
@@ -352,7 +365,16 @@ export class CodingRuntime extends BaseRuntime {
                     patch: diffText,
                     contentRef: finalContent.length > 20000 ? finalContent.slice(0, 20000) : finalContent,
                   });
-                } catch {}
+                  // §26: report what was produced.
+                  producedArtifacts.push({
+                    id: (artifact as unknown as { id?: string })?.id ?? 'unpersisted',
+                    type: 'diff',
+                    persisted: Boolean((artifact as unknown as { id?: string })?.id),
+                  });
+                } catch (err) {
+                  console.warn('[CodingRuntime] edit_file artifact store failed:', (err as Error)?.message || err);
+                  producedArtifacts.push({ id: 'unpersisted', type: 'diff', persisted: false });
+                }
               }
               return { success: true, output: diffText || `Edited ${targetPath}: ${occurrences || 1} occurrence(s) replaced` };
             },
@@ -458,6 +480,9 @@ export class CodingRuntime extends BaseRuntime {
         channelId: packet.channelId,
         finalResponse: finalContent,
         toolCalls: bridge.toolCallRecords,
+        // §26: the files/diffs this run wrote, reported rather than left for
+        // the caller to re-discover by querying artifacts by run.
+        artifacts: producedArtifacts,
         runtimeEvents: bridge.runtimeEvents,
         usage,
         status: 'completed',

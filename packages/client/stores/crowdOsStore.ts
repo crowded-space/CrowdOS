@@ -43,7 +43,9 @@ import {
   Category,
   ConstraintsModule,
   CapabilitiesModule,
-  ComposerMode
+  ComposerMode,
+  composerModeToRuntime,
+  runtimeToComposerMode
 } from '../types/crowdOs';
 
 export interface ApprovalRequest {
@@ -309,9 +311,21 @@ interface CrowdOSState {
   // Composer Mode State
   selectedMode: ComposerMode;
   isPinned: boolean;
-  modeByChannel: Record<string, ComposerMode>;
+  /**
+   * §6 per-Channel pin. The pin belongs to the CHANNEL, not the browser: pinning
+   * Coding in #bug-fix must leave every other channel alone, and returning to
+   * #bug-fix must restore it.
+   *
+   * `pinnedModeByChannel` is the local mirror of `channel_settings.pinned_runtime`
+   * for instant UI feedback; the server row is the source of truth and is
+   * hydrated by `hydrateChannelPin`. `isPinned` remains as a DERIVED convenience
+   * for the ACTIVE channel only — it is never the stored truth.
+   */
+  pinnedModeByChannel: Record<string, ComposerMode>;
   setMode: (mode: ComposerMode, channelId?: string) => void;
   togglePin: () => void;
+  /** Read the channel's persisted pin and apply it to the composer. */
+  hydrateChannelPin: (channelId: string) => Promise<void>;
   resetOnChannelChange: (channelId?: string) => void;
 
   // Async indicators
@@ -495,9 +509,34 @@ export const useCrowdOSStore = create<CrowdOSState>((set, get) => {
   const storedMessages = typeof localStorage !== 'undefined' ? localStorage.getItem('crowdos_messages') : null;
   const storedInstructionModules = typeof localStorage !== 'undefined' ? localStorage.getItem('crowdos_instruction_modules') : null;
   const storedModelModules = typeof localStorage !== 'undefined' ? localStorage.getItem('crowdos_model_modules') : null;
-const storedIsPinned = typeof localStorage !== 'undefined' ? localStorage.getItem('crowdos_is_pinned') === 'true' : false;
-const storedSelectedMode = (typeof localStorage !== 'undefined' ? localStorage.getItem('crowdos_selected_mode') : null) as ComposerMode | null;
-const initialSelectedMode: ComposerMode = (storedIsPinned && storedSelectedMode) ? storedSelectedMode : 'auto';
+// §6 per-channel pin mirror. `crowdos_pinned_modes` is { channelId: ComposerMode }.
+//
+// The old GLOBAL keys (crowdos_is_pinned / crowdos_selected_mode) described the
+// pre-§6 design where one pin applied to every channel; they are deliberately
+// NOT migrated, because a single global value cannot be attributed to any one
+// channel. The server row (channel_settings.pinned_runtime) is the real source
+// of truth and is re-hydrated per channel by hydrateChannelPin, so a stale
+// browser mirror self-corrects on the next channel entry.
+const storedPinnedModes: Record<string, ComposerMode> = (() => {
+  if (typeof localStorage === 'undefined') return {};
+  try {
+    const raw = localStorage.getItem('crowdos_pinned_modes');
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      return parsed && typeof parsed === 'object' ? (parsed as Record<string, ComposerMode>) : {};
+    }
+  } catch {
+    // Malformed mirror is not fatal — the server row re-hydrates it.
+  }
+  return {};
+})();
+// §6 cold start: the restored channel's own pin decides the composer state.
+// `hydrateChannelPin` reconciles against the server row once the app is live;
+// this seeds the mirror so the first paint already reflects the pin.
+const initialSelectedMode: ComposerMode = (() => {
+  const restored = typeof localStorage !== 'undefined' ? localStorage.getItem('crowdos_active_channel') : null;
+  return restored && storedPinnedModes[restored] ? storedPinnedModes[restored] : 'auto';
+})();
   const storedToolkitModules = typeof localStorage !== 'undefined' ? localStorage.getItem('crowdos_toolkit_modules') : null;
 
   const parsedActiveId = storedWorkspaceId || (parsedWorkspaces.length > 0 ? parsedWorkspaces[0].id : null);
@@ -1477,8 +1516,9 @@ const initialSelectedMode: ComposerMode = (storedIsPinned && storedSelectedMode)
     // Search query
     chatSearchQuery: '',
     selectedMode: initialSelectedMode,
-    isPinned: storedIsPinned,
-    modeByChannel: {},
+    // Derived from the ACTIVE channel's pin, not a browser-global flag (§6).
+    isPinned: initialSelectedMode !== 'auto',
+    pinnedModeByChannel: storedPinnedModes,
 
     // PERF-5 pagination
     channelCursors: {},
@@ -1543,36 +1583,118 @@ const initialSelectedMode: ComposerMode = (storedIsPinned && storedSelectedMode)
 
     setMode: (mode, channelId) => {
       set(s => {
-        const nextModeByChannel = channelId
-          ? { ...s.modeByChannel, [channelId]: mode }
-          : s.modeByChannel;
-        if (s.isPinned && typeof localStorage !== 'undefined') {
-          localStorage.setItem('crowdos_selected_mode', mode);
+        // §6: changing the mode WHILE pinned re-pins the channel to the new mode.
+        // The pin is per channel, so only the active channel's pin moves.
+        const pinChannel = channelId || s.activeChannelId;
+        const isPinnedHere = !!pinChannel && s.isPinned;
+        if (isPinnedHere && pinChannel) {
+          void apiClient
+            .updateChannelSettings(pinChannel, { pinnedRuntime: composerModeToRuntime(mode) })
+            .catch((err) => console.warn('[Pin] failed to persist channel runtime pin:', err));
         }
-        return { selectedMode: mode, modeByChannel: nextModeByChannel };
+        const nextPinned = isPinnedHere && pinChannel
+          ? { ...s.pinnedModeByChannel, [pinChannel]: mode }
+          : s.pinnedModeByChannel;
+        return {
+          selectedMode: mode,
+          pinnedModeByChannel: nextPinned,
+          isPinned: isPinnedHere,
+        };
       });
     },
 
+    // §6: pinning writes to the SERVER (channel_settings.pinned_runtime) so the
+    // pin survives a reload, follows the channel across devices, and is visible
+    // to the Router. Previously the pin lived only in localStorage under a
+    // single global key — so it was per-browser, not per-channel, and the
+    // server never learned about it. localStorage remains a write-through cache
+    // for instant UI feedback; the server is the source of truth.
     togglePin: () => {
       set(s => {
+        const channelId = s.activeChannelId;
+        if (!channelId) return {};
         const nextIsPinned = !s.isPinned;
+        const nextPinnedModes = { ...s.pinnedModeByChannel };
+        if (nextIsPinned) nextPinnedModes[channelId] = s.selectedMode;
+        else delete nextPinnedModes[channelId];
+
         if (typeof localStorage !== 'undefined') {
-          localStorage.setItem('crowdos_is_pinned', String(nextIsPinned));
-          if (nextIsPinned) {
-            localStorage.setItem('crowdos_selected_mode', s.selectedMode);
-          } else {
-            localStorage.removeItem('crowdos_selected_mode');
+          try {
+            localStorage.setItem('crowdos_pinned_modes', JSON.stringify(nextPinnedModes));
+          } catch {
+            // Mirror only; the server row below is the source of truth.
           }
         }
-        return { isPinned: nextIsPinned };
+
+        // Fire-and-forget: the local UI must not block on the round trip, and a
+        // failed write degrades to the local mirror rather than trapping the
+        // user. §22: the value sent is a RUNTIME name (chat → conversational),
+        // never the composer mode, and `auto` clears the pin (null).
+        void apiClient
+          .updateChannelSettings(channelId, {
+            pinnedRuntime: nextIsPinned ? composerModeToRuntime(s.selectedMode) : null,
+          })
+          .catch((err) => console.warn('[Pin] failed to persist channel runtime pin:', err));
+
+        return { isPinned: nextIsPinned, pinnedModeByChannel: nextPinnedModes };
       });
+    },
+
+    // §6: the pin is per CHANNEL, so entering a channel must apply THAT
+    // channel's pin. The local mirror gives instant feedback; the server row is
+    // authoritative and is fetched to reconcile (another device may have
+    // changed it). A failed read leaves the local mirror in place rather than
+    // clearing a pin the user set.
+    hydrateChannelPin: async (channelId) => {
+      if (!channelId) return;
+      try {
+        const settings = await apiClient.getChannelSettings(channelId);
+        const mode = runtimeToComposerMode(settings?.pinnedRuntime);
+        set(s => {
+          const nextPinnedModes = { ...s.pinnedModeByChannel };
+          if (mode === 'auto') delete nextPinnedModes[channelId];
+          else nextPinnedModes[channelId] = mode;
+          if (typeof localStorage !== 'undefined') {
+            try {
+              localStorage.setItem('crowdos_pinned_modes', JSON.stringify(nextPinnedModes));
+            } catch {}
+          }
+          const isActive = s.activeChannelId === channelId;
+          if (!isActive) return { pinnedModeByChannel: nextPinnedModes };
+          // The server row is authoritative for the ACTIVE channel, in both
+          // directions: a pin it knows about is applied, and a pin it does NOT
+          // have clears the composer back to Auto. Only applying the positive
+          // case would leave a stale local mirror showing a mode the server had
+          // already dropped — pinned-looking UI over an unpinned channel.
+          return {
+            pinnedModeByChannel: nextPinnedModes,
+            isPinned: mode !== 'auto',
+            selectedMode: mode,
+          };
+        });
+      } catch (err) {
+        console.warn('[Pin] failed to read channel runtime pin:', err);
+      }
     },
 
     resetOnChannelChange: (channelId) => {
       set(s => {
-        if (s.isPinned) return {};
-        const channelMode = channelId ? s.modeByChannel[channelId] || 'auto' : 'auto';
-        return { selectedMode: channelMode };
+        // §6, verbatim: "An unpinned runtime selection is temporary. When the
+        // user switches away from the Channel, the Channel returns to Auto."
+        //
+        // So the arriving channel's OWN pin decides, and nothing else:
+        //   pinned   → that channel's pinned mode
+        //   unpinned → Auto
+        //
+        // A pin from another channel must never leak in (the global-flag
+        // defect), and a TEMPORARY selection must not survive either — the old
+        // `modeByChannel` lookup restored the stale temporary mode, which §6
+        // explicitly says is discarded on leaving the channel.
+        const pinnedMode = channelId ? s.pinnedModeByChannel[channelId] : undefined;
+        if (pinnedMode) {
+          return { selectedMode: pinnedMode, isPinned: true };
+        }
+        return { selectedMode: 'auto', isPinned: false };
       });
     },
 
@@ -2260,6 +2382,9 @@ const initialSelectedMode: ComposerMode = (storedIsPinned && storedSelectedMode)
 
       await get().fetchWorkspaces();
       await get().fetchDbSync(id).catch(() => {});
+      // §6: apply the entered channel's OWN pin before the composer is used.
+      get().resetOnChannelChange(chId ?? undefined);
+      if (chId) void get().hydrateChannelPin(chId);
     },
 
     leaveWorkspace: () => {
@@ -2320,10 +2445,6 @@ const initialSelectedMode: ComposerMode = (storedIsPinned && storedSelectedMode)
         localStorage.setItem('crowdos_workspaces', JSON.stringify(updatedWorkspaces));
       }
 
-      if (!get().isPinned) {
-        get().resetOnChannelChange(id);
-      }
-
       persistActiveChannel(id);
       pushChannelHistory(get().activeWorkspaceId, id, false);
 
@@ -2332,6 +2453,14 @@ const initialSelectedMode: ComposerMode = (storedIsPinned && storedSelectedMode)
         workspaces: updatedWorkspaces,
         mobileDrawerLeft: false
       });
+
+      // §6: the ARRIVING channel's own pin decides the composer state. This is
+      // unconditional — a pin in the channel we just left must not leak here,
+      // and a pin in the channel we just entered must be restored.
+      get().resetOnChannelChange(id);
+      // ...then reconcile against the server row, which is the source of truth
+      // (another device or session may have changed the pin).
+      void get().hydrateChannelPin(id);
 
       emitChannelJoinDebounced(id);
 

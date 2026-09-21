@@ -303,6 +303,30 @@ export const apiClient = {
   async getChannelMessages(channelId: string) {
     return fetchJsonOrThrow(`${BACKEND_URL}/api/channels/${encodeURIComponent(channelId)}/messages`, { method: 'GET' }, 'Failed to fetch messages');
   },
+  // §6/§8 per-channel pins. These are the server-side truth for pinned runtime
+  // and pinned/default agent; localStorage is only a cache of them.
+  async getChannelSettings(channelId: string) {
+    return fetchJsonOrThrow<{
+      channelId: string;
+      pinnedRuntime: string | null;
+      activeAgentId: string | null;
+      defaultAgentId: string | null;
+    }>(
+      `${BACKEND_URL}/api/channels/${encodeURIComponent(channelId)}/settings`,
+      { method: 'GET' },
+      'Failed to fetch channel settings',
+    );
+  },
+  async updateChannelSettings(
+    channelId: string,
+    patch: { pinnedRuntime?: string | null; activeAgentId?: string | null; defaultAgentId?: string | null },
+  ) {
+    return fetchJsonOrThrow(
+      `${BACKEND_URL}/api/channels/${encodeURIComponent(channelId)}/settings`,
+      { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(patch) },
+      'Failed to update channel settings',
+    );
+  },
   async getChannelMessagesBefore(channelId: string, before: string) {
     return fetchJsonOrThrow(
       `${BACKEND_URL}/api/channels/${encodeURIComponent(channelId)}/messages?before=${encodeURIComponent(before)}`,

@@ -35,6 +35,10 @@ const NON_BROKER_SOCKET_EVENTS = new Set([
   "close",
   "SIGTERM",
   "SIGINT",
+  // Node process-level events (process-guards.ts). Not broker contract events:
+  // nothing in the app emits them, the runtime does.
+  "unhandledRejection",
+  "uncaughtException",
   "completed",
   "failed",
   "stalled",

@@ -15,6 +15,8 @@ export interface EnqueueRunInput {
   workspaceId?: string | null;
   /** Manual runtime choice at send time — worker forwards it instead of re-routing Auto. */
   explicitRuntime?: string | null;
+  /** §6 channel pin forwarded so the worker's Router resolves it identically. */
+  preferredRuntime?: string | null;
 }
 
 export interface EnqueueResult {

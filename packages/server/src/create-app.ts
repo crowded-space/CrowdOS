@@ -22,6 +22,7 @@ import { runsGate } from "./runs/runs-gate.js";
 import { startApprovalSweeper } from "./approvals/approval-sweeper.js";
 import { queueGate } from "./queue/queue-gate.js";
 import { eventsGate } from "./events/events-gate.js";
+import { installProcessGuards } from "./shared/core/process-guards.js";
 
 export interface BuildServerOptions {
   host?: string;
@@ -84,6 +85,15 @@ async function bootstrapWorkspaces(logger: any, workspaceDir: string) {
 }
 
 export async function buildServer(opts?: BuildServerOptions): Promise<BuiltServer> {
+  // ── Process crash guards (installed by EVERY boot path) ────────────────
+  // index.ts and worker.ts install these at their own entry points, but the
+  // desktop shell and any other embedder import THIS factory directly and
+  // never touch those files — so the guard belongs here too. Idempotent, and
+  // skipped under test so vitest keeps ownership of rejection reporting.
+  if (process.env.NODE_ENV !== "test" && !process.env.VITEST) {
+    installProcessGuards({ role: process.env.DESKTOP_MODE === "1" ? "desktop" : "server" });
+  }
+
   // Resolve queue mode first so downstream readers (queueGate/socket timers
   // which read process.env.QUEUE_MODE) agree with the factory choice.
   const rawQueueMode =

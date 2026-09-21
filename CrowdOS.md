@@ -55,6 +55,85 @@ history belong to that Workspace.
 An identically configured agent in another Workspace is a separate
 instance.
 
+## Design Lineage
+
+CrowdOS borrows its organizational model from two established ideas:
+
+1.  **Hierarchical authority** — the multi-role authority model of a
+    community platform such as Discord. A role is a capability tier, not
+    merely a label: it determines what an entity may do and which other
+    entities it may direct.
+2.  **Intuitive, visual-first workspace** — the spatial model of a
+    community platform (Discord, Slack, and similar). Structure is meant
+    to be seen and navigated, not configured through abstraction.
+
+The first idea produces the **authority hierarchy** (§31). The second
+produces the **Workspace → Category → Channel** structure and the
+Workspace-first flow (§2).
+
+Together they define the product's posture: CrowdOS should feel like
+organizing a community of specialists, not like wiring up a pipeline.
+
+## Naming and Thematic Design
+
+The name **CrowdOS** is a deliberate semantic play on **Crow** and
+**Crowd**:
+
+``` text
+Crow  +  d  +  OS
+  │       │
+  │       └── the collective: many agents acting as one intelligence
+  └────────── the individual: the Corvid agent that does the work
+```
+
+This is not decoration applied after the fact. The theme is the
+organizing metaphor for the whole system, and it is expressed in the two
+**core labels** (§31):
+
+### Raven — The Flagship Intelligence
+
+-   **Expensive and deliberate.** Ravens are the heavy-reasoning model
+    tier: fewer calls, longer thought, higher cost per call.
+-   **Solitary.** Ravens live in small, uncrowded colonies. A Raven is a
+    flagship individual, not a unit of volume.
+-   **Used for what deserves the cost:** strategy, architecture,
+    judgment, deep analysis.
+
+### Crow — The Generalist Intelligence Army
+
+-   **Cheaper and plentiful.** Crows are the general-task tier: lower
+    cost per call, chosen for volume rather than depth.
+-   **Overwhelming quantity.** Crows live in huge, crowded colonies. The
+    Crow is the unit; the Crowd is what the unit becomes at scale.
+-   **Used for what needs breadth:** scraping, summarization,
+    classification, distribution, parallel processing.
+
+### The Thematic Features
+
+Each label has a collective noun, and each collective noun names a
+thematic feature:
+
+-   **Conspiracy** — a council of Ravens. Heavy-reasoning debate.
+-   **Murder** — a swarm of Crows. Distributed execution at volume.
+
+Both are **prestige features**: part of the intended identity, but
+**non-priority** — implemented only after a bare minimum of working
+CrowdOS exists (§34).
+
+Both are **L0-activated**. They cannot be triggered by an ordinary agent
+or by routing alone — only by the highest Workspace authority, through an
+explicit thematic activation (§31).
+
+``` text
+Start a Murder
+
+Start a Conspiracy
+```
+
+The theme should be reflected consistently in naming, grouping, and
+presentation — while never being allowed to obscure what a component
+actually does.
+
 ------------------------------------------------------------------------
 
 # 2. Workspace Flow
@@ -173,7 +252,7 @@ Corresponding Agent Response
 Example:
 
 ``` text
-@Example Raven Please check your memory
+@Raven Please check your memory
 ```
 
 Expected routing behavior:
@@ -197,16 +276,22 @@ The UI currently exposes runtime choices such as:
 -   Agentic
 -   Coding
 -   Research
+-   Swarm
 
 ## Auto
 
-When `Auto` is selected, the **Router** determines the appropriate
-runtime.
+`Auto` is the default selection, and it is **not** a runtime of its own.
+
+It is the **Router / Interpreter selection path** (§24, §25): the
+Interpreter stabilizes the input, and the **Router** determines which of
+the five runtimes handles the message.
 
 Auto routing is already implemented.
 
 The Router is the orchestration switchboard responsible for runtime
 routing rather than a heavy reasoning layer.
+
+The five runtimes `Auto` may select between are defined in §22.
 
 ## Manual Runtime
 
@@ -350,16 +435,16 @@ Agent.
 Example:
 
 ``` text
-@Owl @Raven @Crow
+@Raven @Crow @Owl
 Review this architecture.
 ```
 
 Conceptually:
 
 ``` text
-                 ┌──→ Owl
-Same Message ────┼──→ Raven
-                 └──→ Crow
+                 ┌──→ Raven
+Same Message ────┼──→ Crow
+                 └──→ Owl
 ```
 
 The Agents respond independently.
@@ -553,15 +638,15 @@ participant in Channel conversations.
 
 # 15. L0
 
-L0 is the **highest-authority entity inside a Workspace**.
+L0 is the **highest-authority entity inside a Workspace**, and it is the
+user's **personal assistant**.
 
-It has a distinct tool and capability set compared with normal Agents.
+It can operate across the whole Workspace rather than being confined to
+a single channel or task domain.
 
-L0 is responsible for privileged Workspace-level coordination and
+It has a distinct tool and capability set compared with normal Agents,
+and it is responsible for privileged Workspace-level coordination and
 operations.
-
-The L0 system is not yet fully completed and is currently a non-priority
-area.
 
 The important architectural distinction is:
 
@@ -576,6 +661,27 @@ Highest Workspace authority
     ↓
 Privileged tools / capabilities
 ```
+
+L0 also serves as the final fallback in default agent resolution (§8).
+
+L0 is the **only** tier that can activate the thematic prestige features
+(§31):
+
+``` text
+Start a Murder
+
+Start a Conspiracy
+```
+
+Because L0 is the user's personal assistant, it is also the agent
+expected to carry a light personality — including in how it announces
+these activations.
+
+The complete authority model — L0 personal assistant, L1 specialist, L2
+sub-specialist/orchestrator, L3 stateless worker — is defined in §31.
+
+The L0 system is not yet fully completed and is currently a non-priority
+area.
 
 ------------------------------------------------------------------------
 
@@ -915,14 +1021,21 @@ This reduces token usage, context pollution, and tool confusion.
 
 CrowdOS is runtime-centric rather than agent-centric.
 
-Core runtimes:
+CrowdOS defines **five runtimes**. Together with `Auto` (§6), they form
+the complete runtime surface:
 
 1.  Conversational Runtime
-2.  Planning Runtime
-3.  Agentic Runtime
-4.  Swarm Runtime
-5.  Observer Runtime
-6.  Orchestrator Runtime
+2.  Agentic Runtime
+3.  Coding Runtime
+4.  Research Runtime
+5.  Swarm Runtime
+
+`Auto` is not a sixth runtime. It is the Router / Interpreter selection
+path (§6, §24, §25) that chooses among these five.
+
+These five are the **decided** runtime set. The names map to the user's
+runtime selector one-to-one: Chat → Conversational, Agentic → Agentic,
+Coding → Coding, Research → Research, Swarm → Swarm.
 
 ## Conversational Runtime
 
@@ -939,114 +1052,124 @@ Characteristics:
 -   fast response
 -   minimal tools
 
-## Planning Runtime
-
-Purpose:
-
--   architecture
--   strategy
--   decomposition
--   reasoning-heavy tasks
-
-Characteristics:
-
--   long reasoning loops
--   structured scratchpad
--   semantic memory assistance
--   low execution
-
 ## Agentic Runtime
 
 Purpose:
 
 -   active execution
--   coding
 -   tool usage
 -   iterative workflows
+-   general task completion
 
 Characteristics:
 
 -   ReAct-style execution
--   sandbox-heavy operation
+-   sandbox-aware operation
 -   dynamic capability discovery
 -   artifact generation
+-   structured planning happens inside the loop rather than as a
+    separate runtime
+
+## Coding Runtime
+
+Purpose:
+
+-   coding
+-   repository work
+-   refactoring
+-   file-level editing and diffs
+
+Characteristics:
+
+-   **deliberately forks a mature, battle-tested coding engine rather
+    than building one from scratch**
+-   full filesystem read/write/edit tool surface
+-   diff-oriented output
+-   sandbox-heavy operation
+
+The Coding Runtime is an intentional exception to "build it as a
+composition" (§23): maturity and reliability of the coding loop are
+worth more than implementation uniformity.
+
+## Research Runtime
+
+Purpose:
+
+-   investigation
+-   evidence gathering
+-   source comparison
+-   synthesis
 
 ## Swarm Runtime
 
 Purpose:
 
--   distributed tasks
--   parallel workloads
+-   **large / big data workloads**
+-   distributed task processing
 -   multi-agent execution
 
 Characteristics:
 
+-   **decomposition of a large workload into narrow, surgical subtasks**
+-   **delegation to multiple L3 Worker Agents** (§31)
 -   task sharding
--   concurrency
--   aggregation
--   lightweight agents
+-   bounded concurrency
+-   aggregation of partial results
+-   lightweight, stateless workers
 
-## Observer Runtime
+The Swarm Runtime is the dedicated engine for workloads that are too
+large for a single agent pass. Its purpose is not merely to run several
+agents, but to **shard the work so each worker holds a smaller and more
+precise scope than the requesting agent would have.**
 
-Nitehunter-style passive analysis.
+The orchestrating agent for a swarm is an **L2 sub-specialist** (§31),
+which delegates to L3 workers and returns a consolidated report upward.
 
-Purpose:
+The Swarm Runtime is also the engine behind the **Murder** prestige
+feature (§31). A Murder is not a different engine — it is this runtime
+entered through its own L0-activated gateway rather than through ordinary
+routing.
 
--   monitoring
--   anomaly detection
--   passive analysis
--   selective escalation
-
-Characteristics:
-
--   deterministic-first
--   low token usage
--   reasoning invoked only when necessary
-
-## Orchestrator Runtime
-
-Highest-level runtime infrastructure.
-
-Purpose:
-
--   Workspace management
--   runtime routing
--   context assembly
--   policy enforcement
-
-Characteristics:
-
--   state-aware
--   registry-aware
--   governance-oriented
--   not itself a heavy execution layer
+> **Multiple Mention is not a Swarm.** See §10.
 
 ------------------------------------------------------------------------
 
 # 23. Runtime Composition
 
-CrowdOS favors a small number of fundamentally distinct runtimes and a
-large amount of runtime composition.
+CrowdOS favors a **small number of fundamentally distinct runtimes**
+(§22) and, where practical, runtime composition over new runtimes.
 
-Specialized modes should generally be compositions rather than entirely
-new runtimes.
+Specialized behavior should **prefer** composition. It is a preference,
+not an absolute rule.
 
-Examples:
+Where composition is a poor fit, a dedicated runtime is acceptable — but
+the reason must be explicit. The Coding Runtime is the standing example:
+it deliberately forks a mature, battle-tested coding engine because
+reliability of the coding loop outweighs implementation uniformity.
 
 ``` text
-Coding Runtime
-= Agentic + Sandbox
-
-Research Runtime
-= Planning + Swarm
-
-Security Runtime
-= Observer + Parliament
+Coding Runtime   = dedicated engine (deliberate fork, mature engine)
+Swarm Runtime    = decomposition + sharding + L3 worker delegation
 ```
 
 Core principle:
 
-> **Few runtimes, many compositions.**
+> **Few runtimes. Compose when it is honest to do so.**
+
+### Conformance Requirement
+
+Composition and forking are both allowed. **Contract drift is not.**
+
+Every runtime — composed, forked, or dedicated — must honor the same
+runtime contract (§26) and the same cross-cutting behaviors:
+
+-   the same `RuntimeResult` shape
+-   the same tool authorization and capability-deferral rules (§21)
+-   the same cancellation/abort semantics
+-   the same usage accounting, so budget enforcement (§27) sees real
+    numbers
+
+A runtime that behaves differently is a defect, not a design choice.
 
 ------------------------------------------------------------------------
 
@@ -1080,6 +1203,10 @@ The Interpreter should not:
 This keeps semantic interpretation separate from cognition and
 orchestration.
 
+The Interpreter's output is **not decorative**: it is the input the
+Router uses to choose a runtime in `Auto` mode (§6, §25). An
+interpretation that no decision consumes is a defect.
+
 ------------------------------------------------------------------------
 
 # 25. Router
@@ -1110,6 +1237,38 @@ Runtime
 ```
 
 Runtime selection through Auto routing is already implemented.
+
+## Auto Selection
+
+`Auto` is the default mode and the Router's primary job (§6).
+
+When the user selects `Auto`, the Router must be able to select **any
+of the five runtimes** (§22). An `Auto` that can only ever reach a
+subset is not a working selection path.
+
+The Router may use, among others:
+
+-   the Interpreter's stabilized mode and execution hints
+-   explicit channel or category signals
+-   the authority level of the target agent (§31)
+-   runtime policies and availability
+
+The Router decides; the Interpreter only stabilizes (§24).
+
+## Authority-Aware Routing
+
+Authority level is a routing input, and its mapping should reflect the
+tier model (§31):
+
+``` text
+L0–L1   reasoning / specialist work   → Research, Agentic, or Conversational
+L2      orchestration                  → Swarm
+L3      narrow execution               → Agentic (or Conversational)
+```
+
+The Router must not invert this relationship: the highest-authority
+agents should not receive the most limited runtime while workers receive
+execution-heavy ones.
 
 ------------------------------------------------------------------------
 
@@ -1153,6 +1312,36 @@ The standardized contract enables:
 -   replayability
 -   provider abstraction
 -   runtime substitution
+
+### Contract Status
+
+The contract is enforced, not aspirational. Every runtime is required to
+return the same shape, and the requirement is checked by a conformance
+suite (§34) rather than left to review.
+
+``` text
+events[]            runtimeEvents[]     all five runtimes
+artifacts[]         artifacts[]         reported by Coding, Research, Swarm
+tool_calls[]        toolCalls[]         reported by Agentic and Coding
+final_output        finalResponse       all five runtimes
+```
+
+Two entries are named honestly rather than assumed to hold:
+
+-   **`memory_candidates[]`** is typed on the result but produced by no
+    runtime. Memory writes currently happen through the memory tools and the
+    reflection path, not by a runtime proposing candidates for a caller to
+    accept. It is a contract slot awaiting a producer.
+-   **`tool_calls[]`** is absent from Conversational, Research, and Swarm.
+    That is correct for Conversational, which has no tool surface. For
+    Research and Swarm the tool work happens in sub-runs — research
+    sub-queries and worker agents — whose calls are not flattened into the
+    parent result. That is a real gap, not a design choice.
+
+`state_updates[]` is deliberately **not** part of the current shape. State
+transitions belong to the sole mutator (§28), which runtimes reach through
+`stateGate` rather than by returning mutations for the caller to apply. A
+runtime that could return arbitrary state updates would be a second writer.
 
 ------------------------------------------------------------------------
 
@@ -1274,48 +1463,252 @@ A Workspace therefore acts as the primary isolation boundary for:
 
 # 31. CrowdOS Agent Hierarchy
 
-CrowdOS currently defines distinct classes of intelligence.
+CrowdOS organizes agents along **two axes** that must not be confused:
 
-## Raven --- Lv0--1
+1.  **Authority level (L0–L3)** — what an agent *may do*. This is the
+    functional axis: capability, permissions, delegation rights.
+2.  **Label (Raven / Crow)** — what an agent *is*, thematically. This is
+    the identity axis: the Corvid class that carries the theme (§1).
 
-High-level reasoning Agents designed for:
+Authority decides behavior. Labels carry identity. The two are
+correlated by design but remain separate concepts.
 
--   strategic thinking
--   planning
--   complex cognitive tasks
+## The Two Labels
 
-Ravens may operate in coordinated reasoning groups known as a
-**Conspiracy**.
+``` text
+Raven   The Flagship Intelligence      expensive, deliberate, solitary
+Crow    The Generalist Intelligence Army  cheaper, plentiful, crowded
+```
 
-### Conspiracy
+**Raven** is the flagship intelligence. Ravens carry the heavy-reasoning
+models: they are expensive, deliberate, and few. A Raven is a flagship
+individual, not a unit of volume. They live in small, uncrowded colonies,
+which is why a group of Ravens is a **Conspiracy** — a rare, intentional
+gathering rather than a standing crowd.
 
-A Conspiracy is a focused reasoning council for:
+**Crow** is the generalist intelligence army. Crows run the cheaper,
+general-purpose models: plentiful, fast, and optimized for volume. They
+live in huge, crowded colonies, which is why a group of Crows is a
+**Murder** — the natural state of a colony that is already dense.
 
--   deep analysis
--   strategic planning
--   brainstorming
--   architecture decisions
--   high-context deliberation
+The CrowdOS name plays on exactly this pair: the **Crow** (individual
+worker) and the **Crowd** (the collective it forms). One label is the
+unit; the other is what the unit becomes at scale.
 
-Conspiracies are intentionally intelligence-dense and deliberate.
+The cost asymmetry is the point. A Workspace should spend Ravens on
+problems that deserve deliberation and spend Crows on problems that need
+breadth — and should not confuse the two.
 
-## Crow --- Lv2--3
+## Authority Levels
 
-Lightweight execution-oriented Agents optimized for:
+Authority is a capability tier: it determines what an agent may do, which
+agents it may direct, and how much responsibility it carries.
 
--   scraping
--   summarization
--   processing
--   classification
--   distributed workloads
--   parallel execution
+The model is intentionally hierarchical, in the same spirit as roles in a
+community platform: a higher tier delegates downward and owns the
+outcome, while a lower tier owns only a narrow scope.
 
-Crow orchestration groups are called a **Murder**.
+``` text
+L0  Highest authority   Personal Assistant      whole Workspace      Raven
+        ↓
+L1  Specialist          user-defined role       a specific domain    Raven
+        ↓
+L2  Sub-Specialist      helper / orchestrator   a bounded task       Crow
+        ↓
+L3  Worker              stateless executor      one narrow subtask   Crow
+```
 
-### Murder
+The label boundary falls between L1 and L2: **the top half reasons, the
+bottom half executes.** This is the same boundary that separates a
+Conspiracy from a Murder.
 
-A Murder is a distributed operational swarm for large execution
-workloads through coordinated lightweight Agents.
+## L0 — Personal Assistant (Raven)
+
+L0 is the highest authority in the Workspace and acts as the user's
+**personal assistant**.
+
+It is a Raven: the highest reasoning authority in the Workspace.
+
+Responsibilities:
+
+-   handle the whole Workspace rather than a single domain
+-   privileged Workspace-level coordination and operations
+-   access a distinct tool and capability set (§15)
+-   serve as the final fallback in default agent resolution (§8)
+
+There is normally **one L0 per Workspace**, representing the user's own
+assistant.
+
+## L1 — Specialist (Raven)
+
+L1 agents are **specialists**: agents the user configures for a specific
+role or domain. They are Ravens: reasoning agents with a defined
+specialization.
+
+Each L1 is a distinct combination of:
+
+-   instructions (what the agent is and how it should behave)
+-   model / provider choice (user preference per role)
+-   tools and skills
+-   private memory
+
+The user may configure **as many L1 agents as needed**, each with its own
+defined role. This is the primary tier where the user expresses intent
+about *what kind of work* exists in their Workspace.
+
+Examples: a frontend specialist, a security reviewer, a research lead.
+
+## L2 — Sub-Specialist / Orchestrator (Crow)
+
+L2 agents are **sub-specialists** that act as helpers to an L1.
+
+They are Crows: the first tier on the execution side of the boundary, and
+the tier where coordination begins.
+
+An L2 is the tier responsible for **orchestration**:
+
+-   receiving a bounded task from its L1
+-   calling sub-agents — this is the **swarm orchestrator** role
+-   delegating work to L3 workers
+-   aggregating and verifying their results
+-   **returning a consolidated report to the L1**
+
+L2 does not hold the user's intent directly; it exists to turn an L1's
+intent into executed work. It is the natural owner of the Swarm Runtime
+(§22).
+
+## L3 — Stateless Worker (Crow)
+
+L3 agents are **stateless general workers**. They are Crows in the
+plainest sense: the unit of work itself.
+
+Characteristics:
+
+-   no persistent identity beyond the task they were given
+-   no private memory carried between tasks
+-   narrow, surgical scope: one subtask at a time
+-   optimized for volume, parallelism, and low cost
+
+An L3 is the unit of work the Swarm Runtime fans out to (§22). A worker's
+scope should always be **smaller and more precise** than the task its L2
+received — that narrowing is the point of the tier.
+
+## Tier Summary
+
+  Tier   Label   Role                Scope              Memory      Orchestrates
+  ------ ------- ------------------- ------------------ ----------- --------------
+  L0     Raven   Personal Assistant  Whole Workspace    Private     Yes
+  L1     Raven   Specialist          A defined domain   Private     Via L2
+  L2     Crow    Sub-Specialist      A bounded task     Private     Yes (swarm)
+  L3     Crow    Worker              One narrow subtask Stateless   No
+
+## Naming Groups
+
+Each label has its own collective noun. These are the thematic
+coordination groups.
+
+### Conspiracy — a council of Ravens
+
+A **Conspiracy** is a focused reasoning council: a deliberate debate
+between multiple Ravens, convened to attack a problem from several
+independent angles.
+
+Purpose:
+
+-   heavy reasoning on a problem worth the cost
+-   challenging each other's conclusions and finding flaws
+-   deep analysis and architectural judgment
+-   strategic planning and high-context deliberation
+
+A Conspiracy convenes **2–5 Raven agents**. They are not a fan-out: they
+are a debate. The value comes from disagreement, not throughput.
+
+A Conspiracy belongs to the reasoning tiers (L0–L1) and is intentionally
+intelligence-dense and slow.
+
+Unlike a Murder, a Conspiracy has **no existing runtime equivalent**
+(§22). The five runtimes cover chat, execution, coding, research, and
+distributed work — none of them is a debate between flagship agents.
+Conspiracy therefore needs its own orchestration pattern when it is
+built, rather than being a gateway onto an existing runtime.
+
+### Murder — a swarm of Crows
+
+A **Murder** is a distributed operational swarm. Mechanically, it is the
+**Swarm Runtime** (§22) — the same sharding, delegation, and aggregation
+engine — but it is entered through its own activation gateway rather than
+through ordinary routing.
+
+Purpose:
+
+-   large execution workloads
+-   distributed processing
+-   parallel task sharding
+-   high-volume, low-scope work
+
+A Murder is the coordinated execution group of the Swarm Runtime (§22)
+and belongs to the execution tiers (L2–L3).
+
+## Prestige Features
+
+Conspiracy and Murder are **prestige features**.
+
+They are part of the intended identity of CrowdOS, but they are
+**non-priority**: they will only start to be implemented after a bare
+minimum of working CrowdOS exists. They are not prerequisites for the
+core product, and their absence does not indicate a defect.
+
+### Activation
+
+Both are triggered **only by L0** — the highest Workspace authority
+(§15) — through an explicit thematic activation. They are not reachable
+by ordinary agent mention, by `Auto` routing, or by any lower tier.
+
+``` text
+Start a Murder
+
+Start a Conspiracy
+```
+
+This restriction is deliberate. A Conspiracy spends flagship intelligence
+and a Murder spends an army of workers; both are expensive enough that
+they should require the user's own assistant to authorize them, not an
+incidental routing decision.
+
+### Personality
+
+Because L0 is the user's **personal assistant** (§15), the activation is
+also a moment of character. L0 is expected to carry a light personality
+in how it announces and frames these activations — a deliberate,
+thematic flourish when convening a Conspiracy or loosing a Murder.
+
+This is presentation, not mechanism: the personality must never change
+what the feature does, and must never obscure what is actually running.
+
+### Implementation Bar
+
+When implemented, both must be genuine coordination structures — a
+Conspiracy that actually debates and finds flaws, a Murder that actually
+shards and distributes work — not decorative labels on ordinary
+multi-agent execution.
+
+## On Agent Names
+
+**Raven** and **Crow** are the two **labels**. They are part of the
+product's identity and are expected to appear in the interface.
+
+Individual agent names — Owl, and any name a user chooses — are
+**user-facing identity**, not tiers.
+
+``` text
+Label   (Raven / Crow)   fixed, thematic, tied to the reasoning/execution split
+Name    (Owl, …)         free, user-chosen, carries no authority
+Level   (L0–L3)          functional authority, determines capability
+```
+
+Authority always comes from the **level**, never from the name. An
+identically named agent in another Workspace is a separate instance
+(§30).
 
 ------------------------------------------------------------------------
 
@@ -1326,6 +1719,11 @@ Nitehunter is CrowdOS's precision review subsystem.
 Its philosophy is:
 
 > **Observe first. Invoke intelligence only when necessary.**
+
+Nitehunter is a **separate complementary system**, not one of the five
+CrowdOS runtimes (§22). It is documented here because it shares the
+authority hierarchy (§31) and may be invoked as a specialized service
+over a Workspace.
 
 Nitehunter focuses on:
 
@@ -1424,6 +1822,69 @@ The following reflects the current calibration state.
 -   Workspace-level Librarian/Owl concept
 -   Local-first persistence direction
 -   Workspace / Category / Channel filesystem mount model
+-   Five-runtime set: Conversational, Agentic, Coding, Research, Swarm
+-   Coding Runtime on a mature, forked coding engine
+
+### Runtime selection and routing
+
+-   `Auto` consumes the Interpreter's stabilized intent: the Router reads
+    the interpretation rather than recomputing it, so an interpretation is
+    never produced and discarded (§24, §25)
+-   `Auto` can reach all five runtimes; the reachable set is asserted in
+    the runtime contract conformance suite. That suite enables
+    `RESEARCH_V1` and `SWARM_V1` to observe them, because **both flags
+    default to `false`**: with the shipped configuration, Research and
+    Swarm roll back to Agentic and the reachable set is three. The
+    default is a deliberate narrower set, not a broken selection path —
+    and the rollback is reported as `rolledBackFrom` rather than hidden
+-   Authority-aware routing is enforced: reasoning tiers receive reasoning
+    runtimes, L2 owns the swarm engine, and L3 receives narrow execution.
+    The mapping cannot invert (§25, §31)
+-   Routing decisions are logged as structured records carrying the chosen
+    runtime, the reason, and any rollback — "why did this go to Swarm?" is
+    answerable from the log alone
+-   The channel runtime pin is persisted server-side in
+    `channel_settings.pinned_runtime`, resolved as a **runtime** (not a
+    composer mode), and treated by the Router as a preference that tier
+    rules and rollback flags still apply to (§6)
+-   The pin is scoped to its **own Channel** in the UI as well as the
+    server row: pinning Coding in one channel leaves every other channel
+    unpinned, and returning to a pinned channel restores it. The client
+    translates its composer vocabulary into runtime names before writing
+    (`chat` → `conversational`), so a pin can never be rejected by the
+    server while the UI still shows it as set
+-   A pin is **read back** from the server when a channel is entered, and
+    the server row is authoritative in both directions: a pin it holds is
+    applied, and a pin it does not hold clears the composer to `Auto`
+    rather than leaving a stale local mirror showing a mode the server
+    already dropped
+-   `Swarm` is user-selectable in the Runtime Selector, matching §22's
+    five-runtime set rather than being reachable only through the Router
+
+### Swarm worker delegation
+
+-   Plan `assigneeTemplate` is resolved to a **real agent**; the resolved
+    worker is named in the report, and every substitution states its reason
+-   Work is assigned to the worker tier (L3). A plan that names the
+    orchestrator, or any non-worker, does not get its own work handed back
+-   Workers run the full agentic loop through their **own** assembled
+    context — their instructions, their model module, their capabilities —
+    in quiet mode, so an N-task swarm does not flood the channel transcript
+-   Workers are stateless: they write no private memory (§31). The rule is
+    enforced at the tool executor, not only on the reflection path, so a
+    worker cannot call `remember` and leave a durable note behind
+-   Worker token usage accumulates into the run's usage instead of being
+    hard-zeroed, so swarm cost is visible to budget enforcement (§27). The
+    supervisor's planning call and the verifier's verdict call are counted
+    too — a swarm that hides three of its four paid calls under-reports what
+    it spent
+-   Fan-out is bounded by `SWARM_MAX_CONCURRENCY` and each task has a
+    wall-clock ceiling (`SWARM_TASK_TIMEOUT_MS`); a hung worker fails its
+    own task instead of holding the run open
+-   A worker that fails fails its task — failure text is never counted as
+    successful output
+-   A worker is never invented: with no eligible L3 the task fails with a
+    stated reason rather than silently re-running the orchestrator
 
 ## Implemented but still evolving
 
@@ -1431,17 +1892,84 @@ The following reflects the current calibration state.
 -   Global Skills triggering/access model
 -   Agent configuration details
 -   Memory/RAG infrastructure
+-   Authority-level tiers L1/L2/L3 as distinct, enforced roles (§31)
+    — tiers are enforced by the Router today; their broader behavioural
+    rights are still being filled in
+-   Auto routing quality — the selection path is wired and observable, but
+    the intent vocabulary is deliberately lexical and will need to grow
+    (§6, §24, §25)
+-   Swarm large-data sharding — decomposition and delegation are real, but
+    work is not yet partitioned by data range or file batch (§22)
+-   Worker context slicing — workers receive the assembled channel context;
+    narrower per-subtask context would sharpen their scope further (§31)
 
 ## Planned / Pending
 
 -   Event-by-event Channel History persistence (**priority**)
 -   MCP / Connector Mounts (**pending**)
 -   Variables
--   Artifact system
+-   Artifact system — artifact rows, the gate, and `artifacts[]` reporting
+    on `RuntimeResult` exist; retention policy, browsing UI, and the full
+    producer set are still pending
 -   Media support
+-   Nitehunter (§32, §33) — the precision review subsystem has **no
+    implementation** in the current codebase. It is documented as a
+    complementary system rather than one of the five runtimes, so its
+    absence is not a gap in the runtime set, but it is a gap in §34 that
+    this entry closes
 -   Full L0 implementation (**non-priority**)
 -   Global Skills trigger implementation (**future / non-priority**)
 -   Workspace import/export portability (**later**)
+-   Large-data sharding for the Swarm Runtime (**priority**)
+-   L2 orchestration as a first-class, enforced role (**pending**)
+
+## Runtime Contract Conformance
+
+§23 requires every runtime to honor the same contract. The current state:
+
+-   All five runtimes return the same `RuntimeResult` shape, including
+    the `artifacts[]` slot (§26). Coding, Research, and Swarm populate it; a
+    failed artifact write is reported as `persisted: false` rather than
+    omitted, so a gap is never silent
+-   The full result contract is pinned by a compile-time exhaustiveness
+    check, so a field cannot be dropped from the contract silently
+-   Tool authorization and capability deferral apply uniformly: the Coding
+    Runtime is a deliberate fork, but it receives the same deferred tool
+    surface as every other runtime rather than the whole registry (§21)
+-   Cancellation/abort semantics are shared across runtimes
+
+## Operational Safety
+
+-   Process-level guards for unhandled rejections and uncaught exceptions
+    are installed by every boot path (server, worker, embedded desktop).
+    They log with redaction and a monotonic counter and keep serving — a
+    detached background failure must not kill a single-user local app
+    mid-conversation
+-   Background maintenance timers are unref'd so they never hold the
+    process open
+
+## Prestige Features
+
+Prestige features are part of the intended identity of CrowdOS, but they
+are **non-priority**: they will only start to be implemented after a bare
+minimum of working CrowdOS exists. Their absence is not a defect.
+
+-   **Conspiracy** — a council of Ravens. Heavy-reasoning debate between
+    2–5 Raven agents, challenging each other to find flaws (§31)
+-   **Murder** — a swarm of Crows. The Swarm Runtime, entered through its
+    own activation gateway (§22, §31)
+
+Both are **L0-activated only**, through explicit thematic activation:
+
+``` text
+Start a Murder
+
+Start a Conspiracy
+```
+
+Neither is reachable by ordinary mention, by `Auto` routing, or by any
+tier below L0. Both must eventually be genuine coordination structures,
+not decorative labels on ordinary multi-agent execution.
 
 ------------------------------------------------------------------------
 
@@ -1476,7 +2004,8 @@ Runtimes represent fundamentally different execution behaviors.
 
 ### 7. Router-driven Auto execution
 
-The Router determines the runtime when the user selects Auto.
+The Router determines the runtime when the user selects Auto. Auto is a
+selection path, not a runtime.
 
 ### 8. Explicit Agent routing
 
@@ -1491,13 +2020,36 @@ Agents can switch between shared and focused context using `lock_in` /
 
 Agent instances maintain isolated memory.
 
-### 11. Few runtimes, many compositions
+### 11. Few runtimes; compose when honest
 
-Specialized behavior should generally emerge from runtime composition.
+Five runtimes, not many. Specialized behavior should prefer runtime
+composition. A dedicated runtime is acceptable when the reason is
+explicit (the Coding Runtime's deliberate fork). Contract conformance is
+mandatory either way.
 
 ### 12. State-driven architecture
 
 Events drive state transitions, and state remains authoritative.
+
+### 13. Hierarchical authority
+
+Agents are organized by authority tier — L0 personal assistant, L1
+specialist, L2 sub-specialist/orchestrator, L3 stateless worker. Higher
+tiers delegate downward and own the outcome; lower tiers own a narrow
+scope.
+
+### 14. Narrow scope per unit of work
+
+Work is decomposed until each unit is small enough to be executed
+precisely. This applies to swarm workers, sub-tasks, and capability
+expansion alike.
+
+### 15. Thematic coherence
+
+The Corvid theme — Raven (reasoning) and Crow (execution), and their
+collective nouns Conspiracy and Murder — is the system's identity layer
+(§1, §31). Naming and presentation should reflect it consistently, while
+never being allowed to obscure what a component actually does.
 
 ------------------------------------------------------------------------
 

@@ -25,7 +25,8 @@ export interface ExecuteRequest {
   workspaceId: string
   userInput: string
   broker: EventBroker
-  channelTags?: string[]
+  /** §6 channel pin, already resolved from channel_settings by the caller. */
+  preferredRuntime?: RuntimeType
   explicitRuntime?: RuntimeType
   librarianAgentId?: string
   /** User-initiated cancellation signal (never tied to socket disconnect). */
@@ -54,7 +55,7 @@ export class RuntimeExecutor {
   }
 
   async execute(req: ExecuteRequest): Promise<RuntimeResult> {
-    const { agent, channelId, workspaceId, userInput, broker, channelTags, explicitRuntime, librarianAgentId, abortSignal, runId: requestedRunId, resumeContext } = req
+    const { agent, channelId, workspaceId, userInput, broker, preferredRuntime, explicitRuntime, librarianAgentId, abortSignal, runId: requestedRunId, resumeContext } = req
 
     let run: RunRow | null = null
     let isResume = false
@@ -64,9 +65,13 @@ export class RuntimeExecutor {
       const interpreterOutput = interpret({ content: userInput, explicitRuntime })
       const runtimeType = this.router.route({
         agent,
-        channelTags,
+        preferredRuntime,
         explicitRuntime,
         librarianAgentId,
+        // §24: the Interpreter's stabilized intent is the Router's primary
+        // Auto input. Passing it here is what closes the loop — without it the
+        // interpretation is computed, attached to the packet, and never read.
+        interpreterOutput,
       })
 
       let resolvedType = runtimeType

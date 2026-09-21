@@ -3,6 +3,11 @@ import { runtimeGate } from "./runtime/runtime-gate.js";
 import { agentGate } from "./agents/agent-gate.js";
 import { memoriesGate } from "./memories/memories-gate.js";
 import { getDb, closeDatabaseConnection } from "./shared/config/database.js";
+import { installProcessGuards } from "./shared/core/process-guards.js";
+
+// Before boot: a rejected job promise or a stray timer callback must be
+// recorded, never fatal. The drain handlers below still own real shutdown.
+installProcessGuards({ role: "worker" });
 
 async function main() {
   console.log("[worker] booting — QUEUE_MODE=", process.env.QUEUE_MODE ?? "inline");

@@ -51,6 +51,8 @@ export interface SwarmVerificationResult {
   reason: string;
   confidence?: number;
   rawContent?: string | null;
+  /** Tokens spent producing this verdict (§23: budget must see real numbers). */
+  usage?: { promptTokens: number; completionTokens: number; totalTokens: number };
 }
 
 export interface SwarmReport {

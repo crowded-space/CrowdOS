@@ -233,7 +233,11 @@ export interface Tool {
   usageCount: number;
 }
 
-export type ComposerMode = 'auto' | 'chat' | 'agentic' | 'coding' | 'research'
+// §6: Auto + the five runtimes. `chat` is the UI name for the Conversational
+// Runtime. Swarm belongs here because §22 makes it one of the five — the
+// selector previously offered four, so a Swarm run could only be reached by
+// the Router, never chosen by the user.
+export type ComposerMode = 'auto' | 'chat' | 'agentic' | 'coding' | 'research' | 'swarm'
 
 export const COMPOSER_MODE_META: Record<ComposerMode, { label: string; hint: string }> = {
   auto: { label: 'Auto', hint: 'Router decides' },
@@ -241,7 +245,53 @@ export const COMPOSER_MODE_META: Record<ComposerMode, { label: string; hint: str
   agentic: { label: 'Agentic', hint: 'Tool-capable agent' },
   coding: { label: 'Coding', hint: 'Code + Pi tools' },
   research: { label: 'Research', hint: 'Deep research' },
+  swarm: { label: 'Swarm', hint: 'Large data · L3 worker delegation' },
 };
+
+/**
+ * §22 runtime names. These are what the SERVER stores and validates —
+ * `channel_settings.pinned_runtime` accepts exactly this set (routes/channels.ts
+ * + channel-service.ts PINNED_RUNTIMES).
+ */
+export type RuntimeType = 'conversational' | 'agentic' | 'coding' | 'research' | 'swarm';
+
+/**
+ * Composer vocabulary → runtime vocabulary. `auto` has no runtime (it is the
+ * Router path, §6) and maps to `null`, which is what CLEARS a server pin.
+ *
+ * This mapping is load-bearing: the UI speaks in composer modes (`chat`) while
+ * the server validates in runtime names (`conversational`). Sending the composer
+ * name straight to the pin endpoint was a real defect — pinning Chat produced a
+ * 400, and because the write is fire-and-forget the UI showed a pin that the
+ * server had rejected.
+ */
+export const COMPOSER_MODE_TO_RUNTIME: Record<Exclude<ComposerMode, 'auto'>, RuntimeType> = {
+  chat: 'conversational',
+  agentic: 'agentic',
+  coding: 'coding',
+  research: 'research',
+  swarm: 'swarm',
+};
+
+/** Runtime name → composer mode (the reverse direction, for hydrating the UI). */
+export const RUNTIME_TO_COMPOSER_MODE: Record<RuntimeType, ComposerMode> = {
+  conversational: 'chat',
+  agentic: 'agentic',
+  coding: 'coding',
+  research: 'research',
+  swarm: 'swarm',
+};
+
+/** Translate a composer mode to the runtime the server stores; null clears a pin. */
+export function composerModeToRuntime(mode: ComposerMode): RuntimeType | null {
+  return mode === 'auto' ? null : COMPOSER_MODE_TO_RUNTIME[mode];
+}
+
+/** Translate a stored runtime name back to the mode the selector renders. */
+export function runtimeToComposerMode(runtime: string | null | undefined): ComposerMode {
+  if (!runtime) return 'auto';
+  return RUNTIME_TO_COMPOSER_MODE[runtime as RuntimeType] ?? 'auto';
+}
 
 export interface Role {
   id: string;

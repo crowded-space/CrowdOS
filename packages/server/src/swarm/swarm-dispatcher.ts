@@ -10,6 +10,83 @@ export type WorkerExecutor = (
   ctx: { packet: ContextPacket; broker: EventBroker; runId: string }
 ) => Promise<string>;
 
+/**
+ * Default fan-out width. Every worker is a full LLM call plus tool loop, so an
+ * unbounded batch is an unbounded provider bill and an unbounded number of
+ * concurrent tool subprocesses. Override with SWARM_MAX_CONCURRENCY.
+ */
+export const DEFAULT_SWARM_CONCURRENCY = 4;
+
+export function resolveSwarmConcurrency(): number {
+  const raw = process.env.SWARM_MAX_CONCURRENCY?.trim();
+  if (!raw) return DEFAULT_SWARM_CONCURRENCY;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n < 1) return DEFAULT_SWARM_CONCURRENCY;
+  return Math.floor(n);
+}
+
+/** Per-task wall-clock ceiling. A hung worker must not stall the whole DAG. */
+export const DEFAULT_TASK_TIMEOUT_MS = 5 * 60 * 1000;
+
+export function resolveTaskTimeoutMs(): number {
+  const raw = process.env.SWARM_TASK_TIMEOUT_MS?.trim();
+  if (!raw) return DEFAULT_TASK_TIMEOUT_MS;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n <= 0) return DEFAULT_TASK_TIMEOUT_MS;
+  return Math.floor(n);
+}
+
+/**
+ * Run `worker` over `items` with at most `limit` in flight, preserving order.
+ * A rejected item resolves to { ok: false } instead of rejecting the batch, so
+ * one dead worker can never cancel its siblings.
+ */
+async function mapWithConcurrency<T, R>(
+  items: readonly T[],
+  limit: number,
+  worker: (item: T, index: number) => Promise<R>,
+): Promise<Array<{ ok: true; value: R } | { ok: false; error: unknown }>> {
+  const results: Array<{ ok: true; value: R } | { ok: false; error: unknown }> = new Array(items.length);
+  let cursor = 0;
+  const width = Math.max(1, Math.min(limit, items.length));
+  const runners = Array.from({ length: width }, async () => {
+    while (true) {
+      const index = cursor++;
+      if (index >= items.length) return;
+      try {
+        results[index] = { ok: true, value: await worker(items[index], index) };
+      } catch (error) {
+        results[index] = { ok: false, error };
+      }
+    }
+  });
+  await Promise.all(runners);
+  return results;
+}
+
+/**
+ * Race a worker against a wall-clock ceiling.
+ *
+ * The abandoned promise is NOT cancelled — it has no signal of its own, and
+ * faking cancellation would be a lie. It is left to settle into nothing while
+ * its task is reported as failed. The timer is unref'd so a fast worker does
+ * not keep the process alive.
+ */
+async function withTimeout<R>(work: () => Promise<R>, ms: number, label: string): Promise<R> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      work(),
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`${label} after ${ms}ms`)), ms);
+        timer.unref?.();
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 export interface DispatchInput {
   plan: SwarmPlan;
   runId: string;
@@ -17,6 +94,10 @@ export interface DispatchInput {
   broker: EventBroker;
   workerExecutor?: WorkerExecutor;
   abortSignal?: AbortSignal;
+  /** Max workers in flight (default SWARM_MAX_CONCURRENCY ?? 4). */
+  maxConcurrency?: number;
+  /** Per-task ceiling in ms (default SWARM_TASK_TIMEOUT_MS ?? 5min). */
+  taskTimeoutMs?: number;
 }
 
 function validateDag(tasks: SwarmPlanTask[]): string | null {
@@ -57,6 +138,8 @@ async function defaultWorkerExecutor(
 export async function dispatchSwarmTasks(input: DispatchInput): Promise<Map<string, SwarmWorkerResult>> {
   const { plan, runId, packet, broker, abortSignal } = input;
   const workerExecutor = input.workerExecutor ?? defaultWorkerExecutor;
+  const maxConcurrency = input.maxConcurrency ?? resolveSwarmConcurrency();
+  const taskTimeoutMs = input.taskTimeoutMs ?? resolveTaskTimeoutMs();
 
   const dagError = validateDag(plan.tasks);
   if (dagError) {
@@ -132,8 +215,12 @@ export async function dispatchSwarmTasks(input: DispatchInput): Promise<Map<stri
       await updateSwarmTaskStatus(t.id, "running").catch(() => {});
     }
 
-    const batchResults = await Promise.allSettled(
-      batch.map(async (task) => {
+    // Bounded fan-out (P2): every worker is a full LLM call plus tool loop.
+    // Promise.allSettled over the whole batch made concurrency a function of
+    // plan size — 40 tasks meant 40 simultaneous provider calls and 40
+    // concurrent tool subprocesses. mapWithConcurrency caps in-flight work
+    // while keeping per-task isolation (one failure never cancels siblings).
+    const batchResults = await mapWithConcurrency(batch, maxConcurrency, async (task) => {
         if (isAborted()) throw new Error(`aborted before worker ${task.id} start`);
         const start = Date.now();
         // SW-2 central dispatcher: enforce depth≤2 + visited-set cycle before enqueue
@@ -162,7 +249,13 @@ export async function dispatchSwarmTasks(input: DispatchInput): Promise<Map<stri
           }
         }
         try {
-          const output = await workerExecutor(task, { packet, broker, runId });
+          // Per-task ceiling: a hung worker fails its OWN task honestly instead
+          // of holding the batch (and the run) open forever.
+          const output = await withTimeout(
+            () => workerExecutor(task, { packet, broker, runId }),
+            taskTimeoutMs,
+            `swarm worker ${task.id} timed out`,
+          );
           const durationMs = Date.now() - start;
           // SW-2: summarize child result (≤500 tokens + artifact pointer)
           if (delegated && childRunId) {
@@ -185,13 +278,12 @@ export async function dispatchSwarmTasks(input: DispatchInput): Promise<Map<stri
           const durationMs = Date.now() - start;
           throw { task, error: err instanceof Error ? err.message : String(err), durationMs } as unknown as Error;
         }
-      })
-    );
+      });
 
     for (let i = 0; i < batch.length; i++) {
       const task = batch[i];
       const settled = batchResults[i];
-      if (settled.status === "fulfilled") {
+      if (settled.ok) {
         const { output, durationMs } = settled.value as { task: SwarmPlanTask; output: string; durationMs: number };
         const outStr = typeof output === "string" ? output : String(output ?? "");
         status.set(task.id, "completed");
@@ -206,7 +298,7 @@ export async function dispatchSwarmTasks(input: DispatchInput): Promise<Map<stri
           }
         } catch {}
       } else {
-        const reason = settled.reason as unknown as { task?: SwarmPlanTask; error?: string; durationMs?: number };
+        const reason = settled.error as unknown as { task?: SwarmPlanTask; error?: string; durationMs?: number };
         const errMsg = typeof reason === "object" && reason && "error" in reason
           ? String((reason as { error: string }).error)
           : reason instanceof Error ? reason.message : String(reason);
