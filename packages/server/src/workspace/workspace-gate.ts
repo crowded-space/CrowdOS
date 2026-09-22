@@ -25,6 +25,8 @@ import {
   saveWorkspaceRecord,
   removeWorkspaceRecord,
   tierContextFor,
+  resolveSandboxBase,
+  resolveWorkspaceLocalRoot,
 } from "./workspace-registry.js";
 import {
   getScreenLockStatus,
@@ -78,6 +80,8 @@ export {
   saveWorkspaceRecord,
   removeWorkspaceRecord,
   tierContextFor,
+  resolveSandboxBase,
+  resolveWorkspaceLocalRoot,
   getScreenLockStatus,
   getWorkspacePinHash,
   setScreenLockPin,

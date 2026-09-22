@@ -102,12 +102,26 @@ export class Guard {
       return false;
     }
   }
+  /**
+   * Resolve a workspace's Zone A directory.
+   *
+   * `customRoot` may be either an absolute workspace root (the registry's
+   * `rootPath`) or a bare workspace id, in which case the conventional
+   * `<sandbox>/<id>` layout is tried.
+   *
+   * There is deliberately **no `process.cwd()` fallback**. That fallback made
+   * an unresolvable workspace silently resolve to the CrowdOS installation
+   * itself, so an agent with no configured root could read and write the
+   * running server's own source tree. An unresolvable root is a configuration
+   * error and must fail loudly instead of quietly widening the jail.
+   */
   static async getWorkspaceDir(customRoot?: string): Promise<string> {
     if (customRoot) {
       if (await Guard.cachedExists(customRoot)) {
         return path.resolve(customRoot);
       }
-      const sandboxPath = path.join(process.cwd(), "sandbox", customRoot);
+      const sandboxBase = process.env.WORKSPACE_DIR?.trim() || path.join(process.cwd(), "sandbox");
+      const sandboxPath = path.join(sandboxBase, customRoot);
       if (await Guard.cachedExists(sandboxPath)) {
         return path.resolve(sandboxPath);
       }
@@ -115,7 +129,10 @@ export class Guard {
     if (process.env.WORKSPACE_DIR && (await Guard.cachedExists(process.env.WORKSPACE_DIR))) {
       return path.resolve(process.env.WORKSPACE_DIR);
     }
-    return process.cwd();
+    throw new Error(
+      `Access Denied: no resolvable workspace root for ${customRoot ? `"${customRoot}"` : "this agent"}. ` +
+        "Configure the workspace root (Zone A) or attach a repository mount before using file tools."
+    );
   }
 
   // Shared anchored containment check — single impl lives in the Filesystem domain

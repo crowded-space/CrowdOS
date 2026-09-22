@@ -135,7 +135,13 @@ export const envSchema = z.object({
     .min(1)
     .default("system")
     .describe("Actor id attributed to system-generated messages and fallback ownership."),
-  WORKSPACE_DIR: optionalTextSchema("Overrides the sandbox workspace root directory for spawned agent workspaces."),
+  WORKSPACE_DIR: optionalTextSchema(
+    "Zone A base directory: where each workspace's own state lives (config, roster, skills, " +
+      "instructions, channel history, runtime state). A workspace with a registry `rootPath` " +
+      "uses that instead; otherwise the root is <WORKSPACE_DIR>/<workspaceId>. Defaults to " +
+      "<cwd>/sandbox. This is NOT the repository root — a mounted repository is Zone B, set " +
+      "per channel/category/workspace from the Repo panel."
+  ),
 
   WORKSPACE_ADMIN_TOKEN: optionalTextSchema("Admin bearer token gating privileged admin routes (/metrics hardening, DB config mutations)."),
 

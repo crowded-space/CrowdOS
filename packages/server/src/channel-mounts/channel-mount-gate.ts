@@ -8,15 +8,19 @@ import {
   browseFs,
   validateMountPath,
   getAllowedRootsList,
+  resolveEffectiveRoot,
+  resolveMountScope,
 } from "./channel-mount-service.js";
-import type { MountInfo, WorkspaceMountRecord } from "./channel-mount-types.js";
+import type { EffectiveRoot, MountInfo, MountScope, WorkspaceMountRecord } from "./channel-mount-types.js";
 
-export type { MountInfo, WorkspaceMountRecord };
+export type { EffectiveRoot, MountInfo, MountScope, WorkspaceMountRecord };
 
 export const channelMountGate = {
   resolve: resolveChannelMount,
   resolveCategory: resolveCategoryMount,
   resolveWorkspace: resolveWorkspaceMount,
+  effectiveRoot: resolveEffectiveRoot,
+  scope: resolveMountScope,
   attachChannel: attachChannelMount,
   attachCategory: attachCategoryMount,
   attachWorkspace: attachWorkspaceMount,

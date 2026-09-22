@@ -13,18 +13,21 @@ function sha256Hex(content: string): string {
   return createHash('sha256').update(content, 'utf8').digest('hex');
 }
 
-// Channel-mount-aware root: channel → category → workspace → workspace dir.
+// Channel-mount-aware root: Zone B mount when one resolves, else Zone A
+// workspace-local. Same resolver the Repo panel and file tools use.
 // Dynamic import keeps the Runtime → ChannelMounts gate edge lazy (no module cycle).
 async function resolveRuntimeRoot(packet: { channelId?: string; workspaceId?: string }): Promise<string> {
-  if (packet?.channelId) {
-    try {
-      const { channelMountGate } = await import('../../channel-mounts/channel-mount-gate.js');
-      const mount = await channelMountGate.resolve(packet.channelId);
-      if (mount?.effectivePath) return mount.effectivePath;
-    } catch {}
+  try {
+    const { channelMountGate } = await import('../../channel-mounts/channel-mount-gate.js');
+    const root = await channelMountGate.effectiveRoot({
+      channelId: packet?.channelId ?? null,
+      workspaceId: packet?.workspaceId ?? null,
+    });
+    return root.path;
+  } catch {
+    const { Guard } = await import('../../tools/safety/guard.js');
+    return Guard.getWorkspaceDir(packet?.workspaceId);
   }
-  const { Guard } = await import('../../tools/safety/guard.js');
-  return Guard.getWorkspaceDir(packet?.workspaceId);
 }
 
 function generateNaivePatch(filePath: string, before: string, after: string): string {

@@ -3,7 +3,13 @@ import { z } from "zod";
 import { channelMountGate } from "../channel-mounts/channel-mount-gate.js";
 
 const mountSchema = z.object({ folderPath: z.string().nullable() });
-const browseQuery = z.object({ path: z.string().optional() });
+// workspaceId scopes the mount jail to that workspace's registry record — the
+// jail is per-workspace policy, so browsing without it falls back to the
+// default policy rather than the workspace's own `allowedMountRoots`.
+const browseQuery = z.object({
+  path: z.string().optional(),
+  workspaceId: z.string().optional(),
+});
 const pickFolderSchema = z.object({ initialPath: z.string().nullable().optional() }).optional();
 
 // DEPRECATED (desktop): server-spawned GUI — use Electron main dialog.showOpenDialog → validate/attach.
@@ -12,16 +18,17 @@ export async function channelMountRoutes(app: FastifyInstance) {
   // GET /api/fs/browse
   app.get<{ Querystring: z.infer<typeof browseQuery> }>("/api/fs/browse", { schema: { querystring: browseQuery } }, async (request, reply) => {
     try {
-      const res = await channelMountGate.browse(request.query.path);
-      return { ...res, allowedRoots: channelMountGate.allowedRoots() };
+      // `browse` already returns the jail it enforced; awaiting it is what makes
+      // the response a JSON object instead of a Promise serialized to `{}`.
+      return await channelMountGate.browse(request.query.path, request.query.workspaceId ?? null);
     } catch (e: any) {
       return reply.status(400).send({ error: "Browse failed", message: e?.message });
     }
   });
 
   // GET /api/fs/allowed-roots
-  app.get("/api/fs/allowed-roots", async () => {
-    return { roots: channelMountGate.allowedRoots() };
+  app.get<{ Querystring: { workspaceId?: string } }>("/api/fs/allowed-roots", async (request) => {
+    return { roots: await channelMountGate.allowedRoots(request.query.workspaceId ?? null) };
   });
 
   // DEPRECATED (desktop): server-spawned GUI — use Electron main dialog.showOpenDialog → validate/attach.

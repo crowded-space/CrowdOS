@@ -91,10 +91,22 @@ function buildHeaders(initHeaders?: HeadersInit, hasBody = false): Headers {
 async function readApiError(response: Response, fallback: string): Promise<Error> {
   try {
     const body = (await response.json()) as { message?: string; error?: string };
-    return new Error(body.message || body.error || fallback);
+    const error = new Error(body.message || body.error || fallback) as Error & { status: number };
+    // Carry the status so callers can tell not-found from not-allowed without
+    // string-matching the message; the repository panel branches on it.
+    error.status = response.status;
+    return error;
   } catch {
-    return new Error(fallback);
+    const error = new Error(fallback) as Error & { status: number };
+    error.status = response.status;
+    return error;
   }
+}
+
+/** HTTP status of a failed fetchJsonOrThrow / fetchNoContentOrThrow call. */
+export function apiErrorStatus(error: unknown): number | null {
+  const status = (error as { status?: unknown } | null | undefined)?.status;
+  return typeof status === 'number' ? status : null;
 }
 
 export async function fetchJsonOrThrow<T>(url: string, init: RequestInit = {}, fallback: string): Promise<T> {
@@ -155,6 +167,54 @@ export interface DbSyncStatusDto {
 export interface ScreenLockStatusDto {
   workspaceId: string;
   enabled: boolean;
+}
+
+// ─── Filesystem / Repo panel ──────────────────────────────────────────
+// The panel and the agent file tools must resolve the same directory, so these
+// call the same routes the tools' resolver feeds. `root` picks which of the two
+// zones to list: `effective` is the mounted repo when there is one, otherwise the
+// workspace sandbox; `workspace-local` is always the workspace sandbox (Zone A).
+
+export type FileNodeDto = {
+  name: string;
+  path: string;
+  type: 'file' | 'directory';
+  size?: number;
+  mimeType?: string;
+};
+
+export type MountRootDto = 'effective' | 'workspace-local';
+
+/** `MountScope` as the route serializes it, plus the root that was listed. */
+export interface MountScopeDto {
+  path: string;
+  zone: 'mounted' | 'workspace-local';
+  source: 'channel' | 'category' | 'workspace' | 'workspace-local';
+  reason: string | null;
+  workspaceRoot: string;
+  displayName: string;
+  root: MountRootDto;
+  nodes: FileNodeDto[];
+}
+
+export type MountInfoDto = {
+  workspaceId: string | null;
+  mountedPath: string | null;
+  source: 'channel' | 'category' | 'workspace' | 'none';
+  reason?: string | null;
+};
+
+export type FsBrowseDto = {
+  path: string;
+  parent: string | null;
+  entries: Array<{ name: string; isDirectory: boolean; isFile: boolean; path: string }>;
+  allowedRoots: string[];
+};
+
+function mountQuery(workspaceId: string, channelId: string | null | undefined, root: MountRootDto): string {
+  const params = new URLSearchParams({ workspaceId, root });
+  if (channelId) params.set('channelId', channelId);
+  return params.toString();
 }
 
 export const apiClient = {
@@ -383,7 +443,101 @@ export const apiClient = {
       'Failed to delete file'
     );
   },
+
+  /** Root listing: carries the scope so the panel can name the folder and its source. */
+  async getWorkspaceRoot(
+    workspaceId: string,
+    channelId?: string | null,
+    root: MountRootDto = 'effective',
+  ): Promise<MountScopeDto> {
+    return fetchJsonOrThrow<MountScopeDto>(
+      `${BACKEND_URL}/api/workspace/files?path=/&${mountQuery(workspaceId, channelId, root)}`,
+      { method: 'GET' },
+      'Failed to list the workspace root'
+    );
+  },
+
+  /** Nested listing. The route returns a bare array below the root. */
+  async getWorkspaceDirectory(
+    path: string,
+    workspaceId: string,
+    channelId?: string | null,
+    root: MountRootDto = 'effective',
+  ): Promise<FileNodeDto[]> {
+    return fetchJsonOrThrow<FileNodeDto[]>(
+      `${BACKEND_URL}/api/workspace/files?path=${encodeURIComponent(path)}&${mountQuery(workspaceId, channelId, root)}`,
+      { method: 'GET' },
+      'Failed to list the directory'
+    );
+  },
+
+  async getWorkspaceFileContent(
+    path: string,
+    workspaceId: string,
+    channelId?: string | null,
+    root: MountRootDto = 'effective',
+  ): Promise<string> {
+    const data = await fetchJsonOrThrow<{ content: string }>(
+      `${BACKEND_URL}/api/workspace/files/content?path=${encodeURIComponent(path)}&${mountQuery(workspaceId, channelId, root)}`,
+      { method: 'GET' },
+      'Failed to read the file'
+    );
+    return data.content;
+  },
+
+  async saveWorkspaceFileContent(
+    path: string,
+    content: string,
+    workspaceId: string,
+    channelId?: string | null,
+    root: MountRootDto = 'effective',
+  ): Promise<void> {
+    await fetchNoContentOrThrow(
+      `${BACKEND_URL}/api/workspace/files/content`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path, content, workspaceId, channelId: channelId ?? undefined, root }),
+      },
+      'Failed to save the file'
+    );
+  },
+
+  /** The raw mount chain for one channel — what the mount control reads and writes. */
+  async getChannelMount(channelId: string): Promise<MountInfoDto> {
+    return fetchJsonOrThrow<MountInfoDto>(
+      `${BACKEND_URL}/api/channels/${encodeURIComponent(channelId)}/mount`,
+      { method: 'GET' },
+      'Failed to read the channel mount'
+    );
+  },
+
+  /** Attach or clear a mount at any of the three levels (§16). null clears it. */
+  async setMount(
+    target: 'channel' | 'category' | 'workspace',
+    targetId: string,
+    folderPath: string | null,
+  ): Promise<MountInfoDto> {
+    const segment = target === 'category' ? 'categories' : target === 'workspace' ? 'workspaces' : 'channels';
+    return fetchJsonOrThrow<MountInfoDto>(
+      `${BACKEND_URL}/api/${segment}/${encodeURIComponent(targetId)}/mount`,
+      { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ folderPath }) },
+      'Failed to update the mount'
+    );
+  },
+
+  /** Browse the host filesystem inside the mount jail (the in-app fallback picker). */
+  async browseFilesystem(path?: string | null, workspaceId?: string | null): Promise<FsBrowseDto> {
+    const params = new URLSearchParams();
+    if (path) params.set('path', path);
+    if (workspaceId) params.set('workspaceId', workspaceId);
+    const qs = params.toString();
+    return fetchJsonOrThrow<FsBrowseDto>(
+      `${BACKEND_URL}/api/fs/browse${qs ? `?${qs}` : ''}`,
+      { method: 'GET' },
+      'Failed to browse the filesystem'
+    );
+  },
 };
 
 export { readApiError };
-

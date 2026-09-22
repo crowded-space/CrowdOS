@@ -57,28 +57,22 @@ async function undoCompensation(runId: string, compId: string): Promise<{ ok: bo
   if (!row) return { ok: false, error: "compensation not found" };
   const inverse = row.inverseOp as CompensationInverseOp;
   try {
-    const { getDb } = await import("../shared/config/database.js");
-    const db = getDb();
     let workspaceRoot: string | null = null;
-    // Channel-mount-aware root: channel → category → workspace → workspace row.
+    // Channel-mount-aware root: Zone B mount when one resolves, else Zone A
+    // workspace-local. Same resolver the Repo panel and file tools use.
     try {
       const run = await getRunById(runId);
-      if (run?.channelId) {
-        try {
-          const { channelMountGate } = await import("../channel-mounts/channel-mount-gate.js");
-          const mount = await channelMountGate.resolve(run.channelId);
-          if (mount?.effectivePath) workspaceRoot = mount.effectivePath;
-        } catch {}
-      }
-      if (!workspaceRoot) {
-        const wsId = run?.workspaceId ?? "default";
-        const ws = await (db.query as unknown as { workspaces: { findFirst: (opts: unknown) => Promise<{ rootPath: string } | null> } }).workspaces.findFirst({ where: (await import("drizzle-orm")).eq((await import("../db/schema.js")).workspaces.id, wsId) });
-        workspaceRoot = ws?.rootPath ?? null;
-      }
+      const { channelMountGate } = await import("../channel-mounts/channel-mount-gate.js");
+      const root = await channelMountGate.effectiveRoot({
+        channelId: run?.channelId ?? null,
+        workspaceId: run?.workspaceId ?? "default",
+      });
+      workspaceRoot = root.path;
     } catch {}
     if (!workspaceRoot) {
-      const pathMod = await import("node:path");
-      workspaceRoot = pathMod.join(process.cwd(), "sandbox", row.runId ? "default" : "default");
+      // No resolvable root is a configuration error, not a licence to write
+      // into the server's own tree. Fail loudly.
+      return { ok: false, error: "no resolvable workspace root for compensation undo" };
     }
     const { Guard } = await import("../tools/safety/guard.js");
     const fs = await import("node:fs/promises");

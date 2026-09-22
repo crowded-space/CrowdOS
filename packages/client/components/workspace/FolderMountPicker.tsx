@@ -13,6 +13,8 @@ import {
   Compass,
   RefreshCw
 } from 'lucide-react';
+import { apiClient } from '@/src/api/client';
+import { canPickDirectoryNative, pickDirectoryNative } from './desktop-bridge';
 
 interface Props {
   targetType: 'channel' | 'category' | 'workspace';
@@ -47,25 +49,15 @@ export default function FolderMountPicker({ targetType, targetId, initialPath, o
     setPath(initialPath ?? '');
   }, [initialPath]);
 
-  const getTargetUrl = useCallback(() => {
-    if (targetType === 'channel') return `/api/channels/${targetId}/mount`;
-    if (targetType === 'category') return `/api/categories/${targetId}/mount`;
-    return `/api/workspaces/${targetId}/mount`;
-  }, [targetType, targetId]);
 
   async function handleSave(pathOverride?: string | null) {
     const pathToSave = ((pathOverride !== undefined ? pathOverride : path) ?? '').trim();
     setSaving(true);
     setError(null);
     try {
-      const url = getTargetUrl();
-      const res = await fetch(url, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ folderPath: pathToSave || null }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.message || 'Save failed');
+      // Through the API client so the route's own message reaches the panel
+      // (`readApiError` surfaces `message`, not a bare status).
+      await apiClient.setMount(targetType, targetId, pathToSave || null);
       onSaved?.(pathToSave || null);
       onClose?.();
     } catch (e: any) {
@@ -80,14 +72,7 @@ export default function FolderMountPicker({ targetType, targetId, initialPath, o
     setSaving(true);
     setError(null);
     try {
-      const url = getTargetUrl();
-      const res = await fetch(url, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ folderPath: null }),
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.message || 'Clear mount failed');
+      await apiClient.setMount(targetType, targetId, null);
       onSaved?.(null);
       onClose?.();
     } catch (e: any) {
@@ -101,36 +86,22 @@ export default function FolderMountPicker({ targetType, targetId, initialPath, o
     setPickingNative(true);
     setError(null);
     try {
-      const useDesktopDialog = typeof (window as any)?.crowdos?.pickDirectory === 'function';
-      if (useDesktopDialog) {
-        const picked = await (window as any).crowdos.pickDirectory({ initialPath: path || undefined });
-        const desktopPath: string | null =
-          typeof picked === 'string' ? picked || null : (picked?.path ?? picked?.filePaths?.[0] ?? null);
-        const desktopCanceled =
-          typeof picked === 'string' ? !picked : (picked?.canceled ?? !desktopPath);
-        if (desktopCanceled || !desktopPath) {
+      if (canPickDirectoryNative()) {
+        const outcome = await pickDirectoryNative(path || null);
+        if (outcome.canceled || !outcome.path) {
           setPickingNative(false);
           return;
         }
-        setPath(desktopPath);
+        setPath(outcome.path);
         // Auto-save on desktop selection (validated server-side via attach)
-        await handleSave(desktopPath);
+        await handleSave(outcome.path);
         return;
       }
-      const res = await fetch('/api/fs/pick-folder', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ initialPath: path || undefined }),
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.message || 'Native picker failed');
-      if (data.canceled || !data.path) {
-        setPickingNative(false);
-        return;
-      }
-      setPath(data.path);
-      // Auto-save on native selection
-      await handleSave(data.path);
+      // No desktop bridge (plain browser): the OS-dialog route is gone —
+      // `POST /api/fs/pick-folder` answers 410 — so hand the user the in-app
+      // navigator instead of a call that can only fail.
+      setBrowserOpen(true);
+      await loadDirectory(path || undefined);
     } catch (e: any) {
       setError(`Native picker error: ${e.message}`);
       setBrowserOpen(true);
@@ -143,10 +114,7 @@ export default function FolderMountPicker({ targetType, targetId, initialPath, o
     setBrowserLoading(true);
     setError(null);
     try {
-      const qs = targetDir ? `?path=${encodeURIComponent(targetDir)}` : '';
-      const res = await fetch(`/api/fs/browse${qs}`);
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.message || 'Failed to browse directory');
+      const data = await apiClient.browseFilesystem(targetDir ?? null, null);
       setBrowsingPath(data.path);
       setParentPath(data.parent);
       setEntries(data.entries || []);

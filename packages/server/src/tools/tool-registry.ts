@@ -133,16 +133,18 @@ async function honestSchedulerEmit(
 }
 
 // Channel-mount-aware root: channel → category → workspace → workspace dir.
-// Falls back to workspace dir when no channel or mount is unresolvable.
+// Delegates to the ChannelMounts resolver so the agent file tools and the Repo
+// panel can never disagree about which directory is the root.
 // Dynamic import keeps the Tools → ChannelMounts gate edge lazy (no module cycle).
 export async function resolveToolRoot(ctx?: { channelId?: string; workspaceId?: string }): Promise<string> {
-  if (ctx?.channelId) {
-    try {
-      const { channelMountGate } = await import("../channel-mounts/channel-mount-gate.js");
-      const mount = await channelMountGate.resolve(ctx.channelId);
-      if (mount?.effectivePath) return mount.effectivePath;
-    } catch {}
-  }
+  try {
+    const { channelMountGate } = await import("../channel-mounts/channel-mount-gate.js");
+    const root = await channelMountGate.effectiveRoot({
+      channelId: ctx?.channelId,
+      workspaceId: ctx?.workspaceId,
+    });
+    if (root?.path) return root.path;
+  } catch {}
   return Guard.getWorkspaceDir(ctx?.workspaceId);
 }
 
@@ -1209,6 +1211,100 @@ export class ToolRegistry {
           }
           const note = composed.missing.length > 0 ? `\n\n(skipped unknown skills: ${composed.missing.join(", ")})` : "";
           return { success: true, output: composed.body + note };
+        } catch (err: any) {
+          return { success: false, output: "", error: err?.message || String(err) };
+        }
+      },
+    });
+
+    // 18. Workspace Local (Zone A): read_workspace_local — L0 only.
+    //
+    // §15 gives L0 "a distinct tool and capability set compared with normal
+    // Agents", and decision D4 renders that as a CAPABILITY boundary rather than
+    // a wider path jail. Ordinary read_file / list_directory resolve through
+    // resolveToolRoot() to the channel's EFFECTIVE root — Zone B, the mounted
+    // repository — so they never reach Zone A at all. This tool is the one door
+    // to Zone A, and `authLevelRequired: 0` closes it to every other tier:
+    // ToolExecutor compares `agent.authorityLevel > authLevelRequired`, so 0 is
+    // L0-only — the same shape as search_all_channels.
+    //
+    // Read-only on purpose. D5's safety argument is that authority-bearing config
+    // lives in the workspace registry, OUTSIDE every root; an agent-writable Zone A
+    // would move that boundary back inside a tree an agent can reach.
+    this.register({
+      id: "read_workspace_local",
+      name: "read_workspace_local",
+      displayName: "Read Workspace Local",
+      description:
+        "Inspect the Workspace Local zone: the workspace's own directory, holding workspace " +
+        "configuration, agent and roster state, skills, instructions and channel history. Pass a " +
+        "path to list a directory or read a file; omit it to list the zone root. Read-only. " +
+        "(Restricted to Level 0 / Omniscient agents.)",
+      category: "filesystem",
+      sourceType: "native",
+      parameters: {
+        type: "object",
+        properties: {
+          path: { type: "string", description: "Path inside the Workspace Local zone. Omit to list the zone root." },
+        },
+        required: [],
+      },
+      dangerLevel: "safe",
+      effectClass: "read",
+      authLevelRequired: 0,
+      handler: async (args, ctx) => {
+        try {
+          const rawPath = typeof args?.path === "string" ? args.path.trim() : "";
+          const relPath = rawPath || ".";
+
+          const [{ resolveWorkspaceLocalRoot }, { isVisibleEntryName }] = await Promise.all([
+            import("../workspace/workspace-gate.js"),
+            import("../Filesystem/filesystem-gate.js"),
+          ]);
+          const zoneARoot = await resolveWorkspaceLocalRoot(ctx?.workspaceId ?? null);
+
+          // Fail loudly when Zone A is absent. Guard.getWorkspaceDir() falls back to
+          // WORKSPACE_DIR when the root it was handed does not exist, so this
+          // existence check is what stops the tool from reading a DIFFERENT
+          // directory than the one it resolved.
+          const rootStat = await fs.stat(zoneARoot).catch(() => null);
+          if (!rootStat?.isDirectory()) {
+            return { success: false, output: "", error: `Workspace Local zone does not exist: ${zoneARoot}` };
+          }
+
+          const resolved = await Guard.validatePath(relPath, zoneARoot);
+          const targetStat = await fs.stat(resolved).catch(() => null);
+          if (!targetStat) {
+            return { success: false, output: "", error: `Path does not exist in the Workspace Local zone: ${relPath}` };
+          }
+
+          if (targetStat.isDirectory()) {
+            const entries = await fs.readdir(resolved, { withFileTypes: true });
+            const listed = entries
+              .filter((entry) => isVisibleEntryName(entry.name))
+              .map((entry) => ({ name: entry.name, type: entry.isDirectory() ? "directory" : "file" }))
+              .sort((a, b) =>
+                a.type === b.type ? a.name.localeCompare(b.name) : a.type === "directory" ? -1 : 1,
+              );
+            return {
+              success: true,
+              output: JSON.stringify({ zone: "workspace-local", root: zoneARoot, path: relPath, entries: listed }, null, 2),
+            };
+          }
+
+          const MAX_READ_BYTES = 1_048_576; // 1MB — same cap the other file tools use
+          if (targetStat.size > MAX_READ_BYTES) {
+            return {
+              success: false,
+              output: "",
+              error: `File is ${targetStat.size} bytes, over the ${MAX_READ_BYTES}-byte read cap: ${relPath}`,
+            };
+          }
+          const content = await fs.readFile(resolved, "utf8");
+          return {
+            success: true,
+            output: JSON.stringify({ zone: "workspace-local", root: zoneARoot, path: relPath, content }, null, 2),
+          };
         } catch (err: any) {
           return { success: false, output: "", error: err?.message || String(err) };
         }

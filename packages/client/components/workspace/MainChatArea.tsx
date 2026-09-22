@@ -15,41 +15,52 @@ import { Attachment, Agent, Message, ToolExecution } from '@/types/crowdOs';
 import { useToast } from '@/components/ui/ToastProvider';
 import ConfirmDialog from '@/components/ui/ConfirmDialog';
 import EmojiPickerPopover from './EmojiPickerPopover';
+import { apiClient } from '@/src/api/client';
 import ModeSelector from './ModeSelector';
 import ApprovalCard from './messages/ApprovalCard';
 const DiffViewer = React.lazy(() => import('./DiffViewer'));
 
-const BACKEND_URL = '';
-
-function SandboxCodeViewer({ path, workspaceId }: { path: string; workspaceId?: string | null }) {
+function SandboxCodeViewer({ path, workspaceId, channelId }: { path: string; workspaceId?: string | null; channelId?: string | null }) {
   const [content, setContent] = useState('');
   const [originalContent, setOriginalContent] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [saveError, setSaveError] = useState<string | null>(null);
 
+  // `channelId` matters: the panel resolves the mount through the channel chain
+  // (§16), so reading without it can open a different root than the tree showed.
   useEffect(() => {
+    let cancelled = false;
     setIsLoading(true);
-    fetch(`${BACKEND_URL}/api/workspace/files/content?path=${encodeURIComponent(path)}&workspaceId=${workspaceId || 'default'}`)
-      .then(res => res.ok ? res.json() : { content: '// File not found or unreadable' })
-      .then(data => {
-        setContent(data.content || '');
-        setOriginalContent(data.content || '');
+    setLoadError(null);
+    apiClient
+      .getWorkspaceFileContent(path, workspaceId || 'default', channelId)
+      .then((text) => {
+        if (cancelled) return;
+        setContent(text);
+        setOriginalContent(text);
       })
-      .catch(() => setContent('// Failed to load file'))
-      .finally(() => setIsLoading(false));
-  }, [path, workspaceId]);
+      // The viewer used to swallow this into a fake "// File not found" comment,
+      // which reads as file content. Report the failure instead.
+      .catch((error: any) => {
+        if (cancelled) return;
+        setContent('');
+        setOriginalContent('');
+        setLoadError(error?.message || 'Could not read this file');
+      })
+      .finally(() => { if (!cancelled) setIsLoading(false); });
+    return () => { cancelled = true; };
+  }, [path, workspaceId, channelId]);
 
   const handleSave = async () => {
     setIsSaving(true);
+    setSaveError(null);
     try {
-      await fetch(`${BACKEND_URL}/api/workspace/files/content`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ path, content, workspaceId: workspaceId || 'default' })
-      });
+      await apiClient.saveWorkspaceFileContent(path, content, workspaceId || 'default', channelId);
       setOriginalContent(content);
-    } catch (err) {
-      console.error('Save failed', err);
+    } catch (error: any) {
+      setSaveError(error?.message || 'Could not save this file');
     } finally {
       setIsSaving(false);
     }
@@ -62,6 +73,12 @@ function SandboxCodeViewer({ path, workspaceId }: { path: string; workspaceId?: 
       <div className="flex-1 overflow-hidden py-3">
         {isLoading ? (
           <div className="text-zinc-500 text-xs p-4 font-mono">Loading content...</div>
+        ) : loadError ? (
+          <div className="p-4 text-xs font-mono text-rose-300/90 break-words">
+            <div className="text-rose-400 font-semibold mb-1">Could not open this file</div>
+            <div className="text-zinc-500 break-all">{path}</div>
+            <div className="mt-1 text-zinc-400">{loadError}</div>
+          </div>
         ) : (
           <textarea
             className="w-full h-full bg-transparent text-zinc-300 font-mono text-xs resize-none focus:outline-none p-2 px-4"
@@ -72,16 +89,19 @@ function SandboxCodeViewer({ path, workspaceId }: { path: string; workspaceId?: 
         )}
       </div>
       <div className="flex items-center justify-end gap-2 px-3 py-2 border-t border-zinc-900 bg-zinc-950/50 shrink-0">
+        {saveError && (
+          <span className="mr-auto text-[11px] text-rose-400 truncate" title={saveError}>{saveError}</span>
+        )}
         <button
           onClick={() => setContent(originalContent)}
-          disabled={!isDirty}
+          disabled={!isDirty || !!loadError}
           className="px-3 py-1.5 min-h-[32px] text-[11px] font-medium text-zinc-400 hover:text-zinc-200 disabled:opacity-50 border border-transparent hover:bg-zinc-800 rounded transition cursor-pointer"
         >
           Revert
         </button>
         <button
           onClick={handleSave}
-          disabled={!isDirty || isSaving}
+          disabled={!isDirty || isSaving || !!loadError}
           className="px-3.5 py-1.5 min-h-[32px] text-[11px] font-medium bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 disabled:hover:bg-indigo-600 text-white rounded transition cursor-pointer shadow-sm"
         >
           {isSaving ? 'Saving...' : 'Save'}
@@ -965,7 +985,7 @@ export default function MainChatArea({ onOpenSearch }: MainChatAreaProps) {
               </div>
             </div>
             {!isSandboxMinimized && (
-              <SandboxCodeViewer path={selectedSandboxFile} workspaceId={activeWorkspaceId} />
+              <SandboxCodeViewer path={selectedSandboxFile} workspaceId={activeWorkspaceId} channelId={activeChannelId} />
             )}
           </div>
         )}

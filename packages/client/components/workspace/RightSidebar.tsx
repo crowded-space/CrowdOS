@@ -124,7 +124,7 @@ export default function RightSidebar() {
     if (!rightSidebarOpen) {
       return (
         <div className="w-[260px] flex flex-col h-full overflow-hidden shrink-0 border-l border-zinc-900 border-x-0">
-          <Suspense fallback={<div className="p-4 text-xs text-zinc-500 animate-pulse">Loading sandbox…</div>}>
+          <Suspense fallback={<div className="p-4 text-xs text-zinc-500 animate-pulse">Loading repository…</div>}>
             <FileExplorer />
           </Suspense>
         </div>
@@ -148,7 +148,7 @@ export default function RightSidebar() {
           transition={{ duration: 0.15 }}
           className="w-[260px] flex flex-col h-full overflow-hidden shrink-0 border-l border-zinc-900 border-x-0"
         >
-          <Suspense fallback={<div className="p-4 text-xs text-zinc-500 animate-pulse">Loading sandbox…</div>}>
+          <Suspense fallback={<div className="p-4 text-xs text-zinc-500 animate-pulse">Loading repository…</div>}>
             <FileExplorer />
           </Suspense>
         </motion.div>

@@ -30,7 +30,27 @@ export interface WorkspaceRecord {
   name: string;
   icon: string;
   databaseUrl: string;
+  /**
+   * Zone A — workspace-local state (config, agent/roster ids, skills,
+   * instructions, channel history, runtime state). Authority: L0 only.
+   * `LocalFilesystem.initialize()` creates the workspace sectors here, so this
+   * path must NEVER point at a user repository.
+   */
   rootPath: string;
+  /**
+   * Zone B — the user's mounted repository, set from the mount picker.
+   * Deliberately separate from `rootPath`: conflating the two made mounting a
+   * repository write `.crowdos/` into the user's working tree, and made
+   * workspace deletion `rm -rf` that repository.
+   * null/absent = nothing mounted at this level (fall through to the parent).
+   */
+  mountPath?: string | null;
+  /**
+   * Per-workspace mount jail. Absent = default policy (workspace sandbox +
+   * user home), so a real repository is mountable with no undocumented env var.
+   * Present = this workspace accepts mounts only inside these roots.
+   */
+  allowedMountRoots?: string[];
   screenLockPinHash: string | null;
   storagePreference?: StoragePreference;
   dbSync?: DbSyncInfo | null;
@@ -78,6 +98,32 @@ export function resolveRegistryFilePath(): string {
   }
   cachedRegistryPath = resolve(process.cwd(), "sandbox", "workspaces.json");
   return cachedRegistryPath;
+}
+
+/**
+ * Zone A base directory — where workspace-local state lives.
+ *
+ * Single source for the `WORKSPACE_DIR`-or-`<cwd>/sandbox` decision. It used to
+ * be re-derived in the workspace route, the mount jail, and the tool guard, so
+ * the three could disagree about which directory was "the sandbox".
+ */
+export function resolveSandboxBase(): string {
+  const configured = process.env.WORKSPACE_DIR?.trim();
+  return configured ? resolve(configured) : resolve(process.cwd(), "sandbox");
+}
+
+/**
+ * Zone A root for one workspace: its registry `rootPath` when it has one,
+ * else `<sandboxBase>/<workspaceId>`. Never a mount target — `LocalFilesystem
+ * .initialize()` creates the workspace sectors here.
+ */
+export async function resolveWorkspaceLocalRoot(workspaceId?: string | null): Promise<string> {
+  const sandboxBase = resolveSandboxBase();
+  if (!workspaceId) return sandboxBase;
+  const record = await getWorkspaceRecord(workspaceId).catch(() => null);
+  const rootPath = record?.rootPath?.trim();
+  if (rootPath) return resolve(rootPath);
+  return join(sandboxBase, workspaceId);
 }
 
 export function setRegistryFilePathForTests(filePath: string | null): void {

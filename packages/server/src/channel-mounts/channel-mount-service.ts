@@ -5,9 +5,10 @@ import { eq } from "drizzle-orm";
 import { getDb, isDatabaseConfigured, isConnectionError } from "../shared/config/database.js";
 import { channels, categories, workspaces } from "../db/schema.js";
 import { channelGate } from "../channels/channel-gate.js";
-import { getWorkspaceRecord } from "../workspace/workspace-gate.js";
+import { getWorkspaceRecord, resolveSandboxBase, resolveWorkspaceLocalRoot } from "../workspace/workspace-gate.js";
+import { isVisibleEntryName } from "../Filesystem/filesystem-gate.js";
 import { TtlCache } from "../shared/core/ttl-cache.js";
-import type { MountInfo } from "./channel-mount-types.js";
+import type { EffectiveRoot, MountInfo, MountScope } from "./channel-mount-types.js";
 
 // ponytail: mount realpath cached 60s — validate/browse hit the same roots repeatedly.
 const mountRealCache = new TtlCache<string>(60_000, 200);
@@ -20,15 +21,39 @@ async function cachedRealpath(p: string): Promise<string> {
   return real;
 }
 
-function getAllowedRoots(): string[] {
-  const envRoots = process.env.ALLOWED_MOUNT_ROOTS?.split(",").map((s) => s.trim()).filter(Boolean) ?? [];
-  if (envRoots.length > 0) return envRoots.map((p) => path.resolve(p));
-  // Deny by default: sandbox only. Operator opts in via ALLOWED_MOUNT_ROOTS.
-  // ponytail: single sandbox root; per-workspace roots when multi-tenant matters.
-  const sandbox = process.env.WORKSPACE_DIR?.trim()
-    ? path.resolve(process.env.WORKSPACE_DIR.trim())
-    : path.resolve(path.join(process.cwd(), "sandbox"));
-  return [sandbox];
+/**
+ * Mount jail for a workspace (Zone B scope).
+ *
+ * Order: per-workspace registry field → default policy. There is deliberately
+ * no env read here: `ALLOWED_MOUNT_ROOTS` appeared in neither `env.ts` nor
+ * `.env.example`, so mounting a real repository failed with
+ * "Path outside allowed roots" until the operator discovered an undocumented
+ * variable. The jail now lives on the workspace record, which already sits
+ * outside every root.
+ *
+ * Default policy = the workspace sandbox + the user's home directory, which is
+ * where user repositories actually live. A workspace needing a different scope
+ * sets `allowedMountRoots` on its registry record.
+ */
+async function getAllowedRoots(workspaceId?: string | null): Promise<string[]> {
+  const defaultRoots = (): string[] => {
+    const sandbox = resolveSandboxBase();
+    const home = os.homedir();
+    const resolvedHome = home ? path.resolve(home) : "";
+    if (!resolvedHome || resolvedHome === sandbox) return [sandbox];
+    return [sandbox, resolvedHome];
+  };
+
+  if (!workspaceId) return defaultRoots();
+  const record = await getWorkspaceRecord(workspaceId).catch(() => null);
+  const configured = record?.allowedMountRoots;
+  if (Array.isArray(configured) && configured.length > 0) {
+    const resolved = configured
+      .filter((r): r is string => typeof r === "string" && r.trim().length > 0)
+      .map((r) => path.resolve(r.trim()));
+    if (resolved.length > 0) return resolved;
+  }
+  return defaultRoots();
 }
 
 function isInsideAllowedRoots(candidate: string, roots: string[]): boolean {
@@ -49,7 +74,10 @@ function isInsideAllowedRoots(candidate: string, roots: string[]): boolean {
   });
 }
 
-export async function validateMountPath(absPath: string): Promise<{ valid: boolean; resolved?: string; error?: string }> {
+export async function validateMountPath(
+  absPath: string,
+  workspaceId?: string | null,
+): Promise<{ valid: boolean; resolved?: string; error?: string }> {
   if (!absPath || typeof absPath !== "string") return { valid: false, error: "Path required" };
   const trimmed = absPath.trim();
   if (!trimmed) return { valid: false, error: "Path required" };
@@ -78,7 +106,7 @@ export async function validateMountPath(absPath: string): Promise<{ valid: boole
   if (process.platform === "win32") {
     real = real.replace(/^\\\\\?\\/, "");
   }
-  const allowedRoots = getAllowedRoots();
+  const allowedRoots = await getAllowedRoots(workspaceId);
   if (!isInsideAllowedRoots(real, allowedRoots)) {
     return { valid: false, error: `Path outside allowed roots: ${allowedRoots.join(", ")}` };
   }
@@ -88,13 +116,22 @@ export async function validateMountPath(absPath: string): Promise<{ valid: boole
 async function resolveWorkspaceMountFromRecord(workspaceId: string): Promise<MountInfo | null> {
   const record = await getWorkspaceRecord(workspaceId).catch(() => null);
   if (!record) return null;
-  if (record.rootPath) {
-    const v = await validateMountPath(record.rootPath);
+  // Zone B only. `rootPath` is Zone A (workspace-local state) and is NEVER a
+  // mount — reading it here is what made the panel and the agent tools resolve
+  // different roots the moment a mount was set.
+  if (record.mountPath) {
+    const v = await validateMountPath(record.mountPath, record.id);
     if (v.valid) {
-      return { workspaceId: record.id, mountedPath: v.resolved!, source: "workspace", effectivePath: v.resolved! };
+      return { workspaceId: record.id, mountedPath: v.resolved!, source: "workspace" };
     }
+    return {
+      workspaceId: record.id,
+      mountedPath: null,
+      source: "none",
+      reason: v.error ?? "Mount path is unusable",
+    };
   }
-  return { workspaceId: record.id, mountedPath: null, source: "none", effectivePath: record.rootPath ?? null };
+  return { workspaceId: record.id, mountedPath: null, source: "none" };
 }
 
 export async function resolveWorkspaceMount(workspaceId: string): Promise<MountInfo> {
@@ -102,75 +139,131 @@ export async function resolveWorkspaceMount(workspaceId: string): Promise<MountI
   // record fallback when the PG path dies mid-outage.
   if (!isDatabaseConfigured()) {
     return (await resolveWorkspaceMountFromRecord(workspaceId)) ??
-      { workspaceId: null, mountedPath: null, source: "none", effectivePath: null };
+      { workspaceId: null, mountedPath: null, source: "none" };
   }
   try {
     const db = getDb();
     const ws = await db.query.workspaces.findFirst({ where: eq(workspaces.id, workspaceId) });
-    if (!ws) return { workspaceId: null, mountedPath: null, source: "none", effectivePath: null };
+    if (!ws) return { workspaceId: null, mountedPath: null, source: "none" };
 
     const customPath = (ws.metadata as Record<string, unknown>)?.customMountPath as string | undefined;
     if (customPath) {
-      const v = await validateMountPath(customPath);
+      const v = await validateMountPath(customPath, ws.id);
       if (v.valid) {
         return {
           workspaceId: ws.id,
           mountedPath: v.resolved!,
           source: "workspace",
-          effectivePath: v.resolved!,
         };
       }
+      // Configured but unusable — report why rather than silently falling back.
+      return {
+        workspaceId: ws.id,
+        mountedPath: null,
+        source: "none",
+        reason: v.error ?? "Mount path is unusable",
+      };
     }
 
-    // Also check if rootPath itself is a valid native directory outside default sandbox
-    if (ws.rootPath) {
-      const defaultSandboxRoot = process.env.WORKSPACE_DIR?.trim()
-        ? path.resolve(process.env.WORKSPACE_DIR.trim())
-        : path.resolve(path.join(process.cwd(), "sandbox"));
-      const wsResolved = path.resolve(ws.rootPath);
-      if (!wsResolved.toLowerCase().startsWith(defaultSandboxRoot.toLowerCase())) {
-        const v = await validateMountPath(wsResolved);
-        if (v.valid) {
-          return {
-            workspaceId: ws.id,
-            mountedPath: v.resolved!,
-            source: "workspace",
-            effectivePath: v.resolved!,
-          };
-        }
-      }
-    }
-
-    return {
-      workspaceId: ws.id,
-      mountedPath: null,
-      source: "none",
-      effectivePath: ws.rootPath ?? null,
-    };
+    // No Zone B mount. `rootPath` (Zone A) is not a mount; the resolver returns
+    // "none" and the caller falls back to the workspace-local root explicitly.
+    return { workspaceId: ws.id, mountedPath: null, source: "none" };
   } catch (err) {
     if (!isConnectionError(err)) throw err;
     return (await resolveWorkspaceMountFromRecord(workspaceId)) ??
-      { workspaceId: null, mountedPath: null, source: "none", effectivePath: null };
+      { workspaceId: null, mountedPath: null, source: "none" };
   }
 }
 
+/**
+ * THE resolver. Every consumer that needs "which directory do I work in for
+ * this (workspace, channel)" must call this, or the Repo panel and the agent
+ * file tools silently disagree the moment a mount is set.
+ *
+ * Zone B (a mounted repository) wins when one resolves; otherwise the answer is
+ * Zone A (the workspace's own directory) with `zone: "workspace-local"`. The
+ * caller therefore never has to re-derive the fallback — which is exactly how
+ * the panel and the tools drifted apart before.
+ */
+export async function resolveEffectiveRoot(input: {
+  workspaceId?: string | null;
+  channelId?: string | null;
+}): Promise<EffectiveRoot> {
+  const { workspaceId, channelId } = input;
+
+  if (channelId) {
+    const mount = await resolveChannelMount(channelId);
+    if (mount.mountedPath) {
+      // `mountedPath` non-null implies a real level supplied it; `none` never
+      // carries a path, so the narrowing is a formality for the type.
+      const source = mount.source === "none" ? "workspace" : mount.source;
+      return { path: mount.mountedPath, zone: "mounted", source, reason: null };
+    }
+    // A channel can name a workspace we were not told about; trust the channel.
+    const effectiveWorkspaceId = workspaceId ?? mount.workspaceId;
+    return {
+      path: await resolveWorkspaceLocalRoot(effectiveWorkspaceId),
+      zone: "workspace-local",
+      source: "workspace-local",
+      reason: mount.reason ?? null,
+    };
+  }
+
+  if (workspaceId) {
+    const mount = await resolveWorkspaceMount(workspaceId);
+    if (mount.mountedPath) {
+      return { path: mount.mountedPath, zone: "mounted", source: "workspace", reason: null };
+    }
+    return {
+      path: await resolveWorkspaceLocalRoot(workspaceId),
+      zone: "workspace-local",
+      source: "workspace-local",
+      reason: mount.reason ?? null,
+    };
+  }
+
+  return {
+    path: await resolveWorkspaceLocalRoot(null),
+    zone: "workspace-local",
+    source: "workspace-local",
+    reason: null,
+  };
+}
+
+/** `resolveEffectiveRoot` plus the panel-facing extras (Zone A sibling, label). */
+export async function resolveMountScope(input: {
+  workspaceId?: string | null;
+  channelId?: string | null;
+}): Promise<MountScope> {
+  const [effective, workspaceRoot] = await Promise.all([
+    resolveEffectiveRoot(input),
+    resolveWorkspaceLocalRoot(input.workspaceId),
+  ]);
+  return {
+    ...effective,
+    workspaceRoot,
+    displayName: path.basename(effective.path) || effective.path,
+  };
+}
+
 export async function attachWorkspaceMount(workspaceId: string, folderPath: string | null): Promise<{ ok: true } | { ok: false; error: string }> {
-  // C3 local-first: registry rootPath is truth when no DATABASE_URL.
+  // C3 local-first: the registry is truth when no DATABASE_URL.
   if (!isDatabaseConfigured()) {
     const { saveWorkspaceRecord } = await import("../workspace/workspace-gate.js");
     const record = await getWorkspaceRecord(workspaceId).catch(() => null);
     if (!record) return { ok: false, error: "Workspace not found" };
     if (folderPath === null || folderPath.trim() === "") {
-      const defaultSandboxRoot = process.env.WORKSPACE_DIR?.trim()
-        ? path.resolve(process.env.WORKSPACE_DIR.trim())
-        : path.resolve(path.join(process.cwd(), "sandbox"));
-      record.rootPath = path.join(defaultSandboxRoot, record.id).replace(/\\/g, "/");
+      // Clear = no Zone B mount. Zone A (`rootPath`) is untouched: it is the
+      // workspace's own directory and was never a mount target.
+      record.mountPath = null;
       await saveWorkspaceRecord(record);
       return { ok: true };
     }
-    const v = await validateMountPath(folderPath);
+    const v = await validateMountPath(folderPath, record.id);
     if (!v.valid) return { ok: false, error: v.error! };
-    record.rootPath = v.resolved!.replace(/\\/g, "/");
+    // Zone B only — writing this into `rootPath` made `initialize()` create the
+    // CrowdOS workspace sectors inside the user's repository.
+    record.mountPath = v.resolved!.replace(/\\/g, "/");
     await saveWorkspaceRecord(record);
     return { ok: true };
   }
@@ -178,27 +271,21 @@ export async function attachWorkspaceMount(workspaceId: string, folderPath: stri
   const ws = await db.query.workspaces.findFirst({ where: eq(workspaces.id, workspaceId) });
   if (!ws) return { ok: false, error: "Workspace not found" };
 
-  const defaultSandboxRoot = process.env.WORKSPACE_DIR?.trim()
-    ? path.resolve(process.env.WORKSPACE_DIR.trim())
-    : path.resolve(path.join(process.cwd(), "sandbox"));
-  const defaultWsRoot = path.join(defaultSandboxRoot, ws.id).replace(/\\/g, "/");
-
   const currentMeta = (ws.metadata as Record<string, unknown>) || {};
 
   if (folderPath === null || folderPath.trim() === "") {
+    // Clear the Zone B mount only. `rootPath` stays whatever Zone A already is.
     await db.update(workspaces).set({
-      rootPath: defaultWsRoot,
       metadata: { ...currentMeta, customMountPath: null },
       updatedAt: new Date(),
     }).where(eq(workspaces.id, workspaceId));
     return { ok: true };
   }
 
-  const v = await validateMountPath(folderPath);
+  const v = await validateMountPath(folderPath, ws.id);
   if (!v.valid) return { ok: false, error: v.error! };
 
   await db.update(workspaces).set({
-    rootPath: v.resolved!.replace(/\\/g, "/"),
     metadata: { ...currentMeta, customMountPath: v.resolved! },
     updatedAt: new Date(),
   }).where(eq(workspaces.id, workspaceId));
@@ -208,7 +295,11 @@ export async function attachWorkspaceMount(workspaceId: string, folderPath: stri
 export async function resolveChannelMount(channelId: string): Promise<MountInfo> {
   // C3 local-first: channelGate branches to files when no DATABASE_URL.
   const channel = await channelGate.get(channelId).catch(() => null);
-  if (!channel) return { workspaceId: null, mountedPath: null, source: "none", effectivePath: null };
+  if (!channel) return { workspaceId: null, mountedPath: null, source: "none" };
+
+  // A configured-but-unusable path at any level is reported when nothing
+  // resolves, so the panel can explain why it is empty.
+  let channelMountReason: string | null = null;
 
   // Start category + workspace lookups early so they run alongside the channel fs check.
   const catPromise = channel.categoryId
@@ -220,29 +311,29 @@ export async function resolveChannelMount(channelId: string): Promise<MountInfo>
 
   // 1. Channel-level mount
   if (channel.folderPath) {
-    const v = await validateMountPath(channel.folderPath);
+    const v = await validateMountPath(channel.folderPath, channel.workspaceId);
     if (v.valid) {
       return {
         workspaceId: channel.workspaceId ?? null,
         mountedPath: v.resolved!,
         source: "channel",
-        effectivePath: v.resolved!,
       };
     }
+    channelMountReason = v.error ?? "Channel mount path is unusable";
   }
 
   // 2. Category-level mount
   const [cat, wsMount] = await Promise.all([catPromise, wsPromise]);
   if (cat?.folderPath) {
-    const v = await validateMountPath(cat.folderPath);
+    const v = await validateMountPath(cat.folderPath, cat.workspaceId);
     if (v.valid) {
       return {
         workspaceId: channel.workspaceId ?? cat.workspaceId ?? null,
         mountedPath: v.resolved!,
         source: "category",
-        effectivePath: v.resolved!,
       };
     }
+    if (!channelMountReason) channelMountReason = v.error ?? "Category mount path is unusable";
   }
 
   // 3. Workspace-level mount
@@ -251,7 +342,6 @@ export async function resolveChannelMount(channelId: string): Promise<MountInfo>
       workspaceId: channel.workspaceId ?? null,
       mountedPath: wsMount.mountedPath,
       source: "workspace",
-      effectivePath: wsMount.mountedPath,
     };
   }
 
@@ -259,24 +349,25 @@ export async function resolveChannelMount(channelId: string): Promise<MountInfo>
     workspaceId: channel.workspaceId ?? null,
     mountedPath: null,
     source: "none",
-    effectivePath: null,
+    reason: channelMountReason ?? wsMount?.reason ?? null,
   };
 }
 
 export async function resolveCategoryMount(categoryId: string): Promise<MountInfo> {
   // C3 local-first: channelGate branches to files when no DATABASE_URL.
   const cat = await channelGate.getCategory(categoryId).catch(() => null);
-  if (!cat) return { workspaceId: null, mountedPath: null, source: "none", effectivePath: null };
+  if (!cat) return { workspaceId: null, mountedPath: null, source: "none" };
+  let categoryMountReason: string | null = null;
   if (cat.folderPath) {
-    const v = await validateMountPath(cat.folderPath);
+    const v = await validateMountPath(cat.folderPath, cat.workspaceId);
     if (v.valid) {
       return {
         workspaceId: cat.workspaceId ?? null,
         mountedPath: v.resolved!,
         source: "category",
-        effectivePath: v.resolved!,
       };
     }
+    categoryMountReason = v.error ?? "Category mount path is unusable";
   }
   // Inherit workspace-level mount if category has no folder
   if (cat.workspaceId) {
@@ -286,11 +377,16 @@ export async function resolveCategoryMount(categoryId: string): Promise<MountInf
         workspaceId: cat.workspaceId,
         mountedPath: wsMount.mountedPath,
         source: "workspace",
-        effectivePath: wsMount.mountedPath,
       };
     }
+    if (!categoryMountReason) categoryMountReason = wsMount.reason ?? null;
   }
-  return { workspaceId: cat.workspaceId ?? null, mountedPath: null, source: "none", effectivePath: null };
+  return {
+    workspaceId: cat.workspaceId ?? null,
+    mountedPath: null,
+    source: "none",
+    reason: categoryMountReason,
+  };
 }
 
 export async function attachChannelMount(channelId: string, folderPath: string | null): Promise<{ ok: true } | { ok: false; error: string }> {
@@ -300,7 +396,7 @@ export async function attachChannelMount(channelId: string, folderPath: string |
     await channelGate.update(channelId, { folderPath: null } as any).catch(() => null);
     return { ok: true };
   }
-  const v = await validateMountPath(folderPath);
+  const v = await validateMountPath(folderPath, channel.workspaceId);
   if (!v.valid) return { ok: false, error: v.error! };
   await channelGate.update(channelId, { folderPath: v.resolved! } as any).catch(() => null);
   return { ok: true };
@@ -313,19 +409,19 @@ export async function attachCategoryMount(categoryId: string, folderPath: string
     await channelGate.updateCategory(categoryId, { folderPath: null }).catch(() => null);
     return { ok: true };
   }
-  const v = await validateMountPath(folderPath);
+  const v = await validateMountPath(folderPath, cat.workspaceId);
   if (!v.valid) return { ok: false, error: v.error! };
   await channelGate.updateCategory(categoryId, { folderPath: v.resolved! }).catch(() => null);
   return { ok: true };
 }
 
-export async function browseFs(targetPath?: string): Promise<{
+export async function browseFs(targetPath?: string, workspaceId?: string | null): Promise<{
   path: string;
   parent: string | null;
   entries: Array<{ name: string; isDirectory: boolean; isFile: boolean; path: string }>;
   allowedRoots: string[];
 }> {
-  const allowedRoots = getAllowedRoots();
+  const allowedRoots = await getAllowedRoots(workspaceId);
   let dir = targetPath?.trim() ? path.resolve(targetPath.trim()) : allowedRoots[0] ?? os.homedir();
   // Clamp to allowed roots if outside
   let realDir: string;
@@ -357,11 +453,10 @@ export async function browseFs(targetPath?: string): Promise<{
   }
   const entries = await fsp.readdir(realDir, { withFileTypes: true });
   const filtered = entries
-    .filter((e) => {
-      // Show .ThisCrowd and .crowdos for repo switching, hide other dotfiles
-      if (e.name === '.ThisCrowd' || e.name === '.crowdos' || e.name === '.crowdosrc') return true;
-      return !e.name.startsWith('.');
-    })
+    // Same rule the Repo tree uses (Filesystem/entry-visibility.ts): repo
+    // markers stay visible, other dotfiles stay hidden. Previously each
+    // surface had its own answer for the same directory.
+    .filter((e) => isVisibleEntryName(e.name))
     .map((e) => ({
       name: e.name,
       isDirectory: e.isDirectory(),
@@ -380,6 +475,7 @@ export async function browseFs(targetPath?: string): Promise<{
   return { path: realDir, parent, entries: filtered.slice(0, 300), allowedRoots };
 }
 
-export function getAllowedRootsList(): string[] {
-  return getAllowedRoots();
+/** The jail this workspace actually enforces — one policy, one source. */
+export async function getAllowedRootsList(workspaceId?: string | null): Promise<string[]> {
+  return getAllowedRoots(workspaceId);
 }

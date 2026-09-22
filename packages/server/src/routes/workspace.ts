@@ -27,6 +27,19 @@ import {
   clearScreenLockPin,
   type WorkspaceRecord,
 } from "../workspace/workspace-gate.js";
+import { isInsideRoot } from "../Filesystem/filesystem-gate.js";
+
+/**
+ * Zone A base directory. The desktop shell sets WORKSPACE_DIR to roaming
+ * app-data because `process.cwd()` may point at a tree where file creation
+ * stalls for the host process; the fallback keeps dev/test boots working.
+ *
+ * Single definition: the create route provisions under it, and the delete
+ * route only removes directories that live inside it.
+ */
+function resolveSandboxBase(): string {
+  return process.env.WORKSPACE_DIR?.trim() || path.join(process.cwd(), "sandbox");
+}
 
 const updateSettingsSchema = z.object({
   globalSoftCap: z.number().int().min(0).optional(),
@@ -166,10 +179,7 @@ export async function workspaceRoutes(app: FastifyInstance) {
 
       // 4. Generate workspace ID and sandbox directory
       const id = "ws_" + randomUUID().replace(/-/g, "").slice(0, 12);
-      // ponytail: sandbox defaults under WORKSPACE_DIR (desktop: roaming app-data —
-      // process.cwd() may point at a tree where file creation stalls for the host
-      // process, which wedged creation with zero error and zero DB trace).
-      const sandboxBase = process.env.WORKSPACE_DIR?.trim() || path.join(process.cwd(), "sandbox");
+      const sandboxBase = resolveSandboxBase();
       const resolvedSandbox = rootPath || path.join(sandboxBase, id);
 
       // 5. Save to local workspaces.json registry FIRST so getWorkspaceDb(id)
@@ -433,13 +443,23 @@ export async function workspaceRoutes(app: FastifyInstance) {
 
       await closeWorkspaceDatabase(id);
       await removeWorkspaceRecord(id);
-      // ponytail: best-effort sandbox rm; remote PG untouched unless ?flush=true above.
-      if (record?.rootPath) {
+      // Zone A cleanup only. `rootPath` is normally the auto-provisioned
+      // sandbox directory, but a workspace can be created against an explicit
+      // path — deleting the record must never `rm -rf` a directory the user
+      // pointed us at, and must never touch a Zone B mount.
+      const sandboxBase = resolveSandboxBase();
+      const rootPath = record?.rootPath;
+      if (rootPath && isInsideRoot(rootPath, sandboxBase)) {
         try {
-          await fs.rm(record.rootPath, { recursive: true, force: true });
+          await fs.rm(rootPath, { recursive: true, force: true });
         } catch (err: any) {
           request.log.warn({ err }, "Notice: sandbox cleanup skipped");
         }
+      } else if (rootPath) {
+        request.log.info(
+          { rootPath, sandboxBase },
+          "Workspace record removed; directory left in place because it is outside the workspace sandbox (not owned by CrowdOS).",
+        );
       }
 
       try {

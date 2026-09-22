@@ -5,6 +5,7 @@
 import fs from "node:fs/promises";
 import { join } from "node:path";
 import { resolveWorkspacePath, normalizePath, extractName, guessMimeType } from "./path-guard.js";
+import { isVisibleEntryName } from "./entry-visibility.js";
 import type { FileNode, FileStat } from "./filesystem-types.js";
 
 export interface LocalFilesystemOptions {
@@ -137,7 +138,10 @@ export class LocalFilesystem {
     const absPath = await this.resolve(path);
     const entries = await fs.readdir(absPath, { withFileTypes: true });
 
-    const filtered = entries.filter((entry) => entry.name !== ".crowdos");
+    // One visibility rule, shared with the mount picker (entry-visibility.ts).
+    // This used to hide only .crowdos, so a mounted repository’s own markers
+    // showed up in the picker but vanished from the tree.
+    const filtered = entries.filter((entry) => isVisibleEntryName(entry.name));
     const nodes: FileNode[] = [];
     const BOUNDED_CONCURRENCY = 32;
     for (let i = 0; i < filtered.length; i += BOUNDED_CONCURRENCY) {
