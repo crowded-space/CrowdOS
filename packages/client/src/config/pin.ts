@@ -6,7 +6,15 @@
 // VITE_LOCAL_PIN env override. Plaintext lives only in renderer memory /
 // localStorage (desktop has no safeStorage wiring today — main-process
 // persistence in plaintext config.json is intentionally NOT used).
-// All call sites must use headers via withPinHeaders / pinHeaders / mergePinHeaders.
+//
+// ─── CREDENTIAL CHANNEL (do not re-merge) ────────────────────────────
+// The PIN travels on `x-pin` ONLY. `Authorization` belongs to the API key
+// (SEC-1 `crowd_…`), and the mounted auth gate reads `Authorization` first.
+// Sending the PIN there made the gate try to verify it as a key, fail, and
+// answer 401 "Missing or invalid API key." on every /api call — a lockout for
+// any user who had enabled screenlock. The reverse collision exists too: the
+// PIN gate used to read `Authorization`/`x-api-key` as a PIN, so an API-key
+// client was misread as presenting a wrong PIN. One credential per header.
 const STORAGE_KEY = 'crowdos_pin';
 
 // In-memory session copy: the source of truth once loaded, so the PIN can
@@ -55,35 +63,43 @@ export function clearPin(): void {
 export function pinHeaders(): Record<string, string> {
   const pin = getPin();
   if (!pin) return {};
-  return { 'x-pin': pin, Authorization: `Bearer ${pin}` };
+  return { 'x-pin': pin };
 }
 
+/**
+ * Attach the PIN to an init object WITHOUT discarding the caller's headers.
+ *
+ * `HeadersInit` is a union (Headers | string[][] | Record<string,string>), and
+ * `Object.entries()` only enumerates the plain-object arm: a `Headers` instance
+ * yields `[]`. The previous merge therefore returned an EMPTY header set for
+ * every `apiClient` call (it passes `new Headers(...)`), silently dropping
+ * `x-workspace-id` and `Content-Type`. The global patch below is what invokes
+ * this, so the loss hit every `/api/*` fetch. Normalizing through
+ * `new Headers()` handles all three arms and keeps caller headers intact.
+ *
+ * The PIN goes on `x-pin` and NOTHING else — see the credential-channel note at
+ * the top of this file. `Authorization` is reserved for the API key, and
+ * overwriting it here is what caused the 401 lockout.
+ */
 export function withPinHeaders(init?: RequestInit): RequestInit {
+  const headers = new Headers(init?.headers);
   const pin = getPin();
-  const headers: Record<string, string> = pin ? { 'x-pin': pin, Authorization: `Bearer ${pin}` } : {};
-  if (init?.headers) {
-    const existing = init.headers as Record<string, string>;
-    for (const [k, v] of Object.entries(existing)) headers[k] = v as string;
-  }
+  if (pin && !headers.has('x-pin')) headers.set('x-pin', pin);
   return { ...init, headers };
 }
 
 // For fetch wrappers that use HeadersInit
 export function mergePinHeaders(headers?: HeadersInit): HeadersInit {
   const pin = getPin();
-  const base: Record<string, string> = pin ? { 'x-pin': pin, Authorization: `Bearer ${pin}` } : {};
-  if (!headers) return base;
+  if (!headers) return pin ? { 'x-pin': pin } : {};
   if (headers instanceof Headers) {
-    if (pin) {
-      headers.set('x-pin', pin);
-      headers.set('Authorization', `Bearer ${pin}`);
-    }
+    if (pin && !headers.has('x-pin')) headers.set('x-pin', pin);
     return headers;
   }
   if (Array.isArray(headers)) {
-    return pin ? [...headers, ['x-pin', pin], ['Authorization', `Bearer ${pin}`]] : headers;
+    return pin ? [...headers, ['x-pin', pin]] : headers;
   }
-  return { ...base, ...(headers as Record<string, string>) };
+  return pin ? { ...(headers as Record<string, string>), 'x-pin': pin } : headers;
 }
 
 /** Auth headers for call sites that build header objects manually. */

@@ -3,12 +3,12 @@
 //
 // These tests exercise the real files on disk (no mocks): the log's whole point
 // is that it survives a process, so an in-memory fake would prove nothing.
-import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync, existsSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { setLocalStoreDirForTests } from "../shared/core/local-file.js";
+import { localStoreDirsForTests, setLocalStoreDirForTests } from "../shared/core/local-file.js";
 import { EventBroker } from "../event-broker/event-broker-gate.js";
 import { eventsGate, resetEventSeqFloorForTests, resetEventLogStatsForTests } from "./events-gate.js";
 import { isEphemeralEventType, shouldLogEvent } from "./event-classification.js";
@@ -31,7 +31,11 @@ afterEach(() => {
   setLocalStoreDirForTests(null);
 });
 
-const eventFile = (channelId: string) => join(dir, "events", `${channelId}.jsonl`);
+// Canon: the log lives at <workspaceFolder>/vfs/.crowdos/events/<channelId>.jsonl.
+// These tests write unscoped events, so the default workspace folder holds them.
+const eventsDir = (workspaceId = "default") => join(localStoreDirsForTests(workspaceId).crowdos, "events");
+const eventFile = (channelId: string, workspaceId = "default") =>
+  join(eventsDir(workspaceId), `${channelId}.jsonl`);
 
 /**
  * Emit through the real broker so the append path under test is the wired one.
@@ -215,8 +219,10 @@ describe("§30 workspace isolation · channel logs never cross", () => {
     // Each channel owns an independent seq space: both start at 1.
     expect(one.events[0].seq).toBe(1);
     expect(two.events[0].seq).toBe(1);
-    expect(existsSync(eventFile("ch-ws-one"))).toBe(true);
-    expect(existsSync(eventFile("ch-ws-two"))).toBe(true);
+    // Each channel's log sits inside ITS workspace folder — the isolation is
+    // the folder boundary, not a filter applied after reading one shared file.
+    expect(existsSync(eventFile("ch-ws-one", "ws-1"))).toBe(true);
+    expect(existsSync(eventFile("ch-ws-two", "ws-2"))).toBe(true);
   });
 
   it("sanitizes hostile channel ids to one file instead of escaping the events dir", async () => {
@@ -231,7 +237,7 @@ describe("§30 workspace isolation · channel logs never cross", () => {
     expect(rows.events).toHaveLength(1);
     expect(rows.events[0].seq).toBe(1);
     // One sanitized file inside events/, and nothing written outside it.
-    const written = readdirSync(join(dir, "events"));
+    const written = readdirSync(eventsDir());
     expect(written).toHaveLength(1);
     expect(written[0]).toMatch(/^[A-Za-z0-9_-]+\.jsonl$/);
     expect(existsSync(join(dir, "..", "..", "etc", "passwd"))).toBe(false);
@@ -269,9 +275,12 @@ describe("ephemeral classification", () => {
   it("keeps a failed append from throwing into the emit path", async () => {
     const broker = new EventBroker();
     broker.onAny((event) => eventsGate.recordDetached(event));
-    // Point the store at a root whose `events` entry is a FILE, so mkdir fails.
+    // Point the store at a base whose canon `events` PARENT is a file, so the
+    // mkdir for the log directory fails (ENOTDIR) and the append reports it.
     const blockedRoot = mkdtempSync(join(tmpdir(), "crowdos-eventlog-blocked-"));
-    writeFileSync(join(blockedRoot, "events"), "blocker", "utf8");
+    const blockedCrowdos = join(blockedRoot, "default", "vfs");
+    mkdirSync(blockedCrowdos, { recursive: true });
+    writeFileSync(join(blockedCrowdos, ".crowdos"), "blocker", "utf8");
     setLocalStoreDirForTests(blockedRoot);
     await emitAndSettle(broker, "agent:status", { agentId: "agent-1", status: "working" }, "ch-fail", 1);
     expect(eventsGate.stats.failed).toBeGreaterThanOrEqual(1);

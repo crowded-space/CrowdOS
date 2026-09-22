@@ -6,9 +6,18 @@ import { getDb, isDatabaseConfigured, isConnectionError } from "../shared/config
 import { channels, categories, workspaces } from "../db/schema.js";
 import { channelGate } from "../channels/channel-gate.js";
 import { getWorkspaceRecord, resolveSandboxBase, resolveWorkspaceLocalRoot } from "../workspace/workspace-gate.js";
+import { readWorkspaceRuntimeConfig, writeWorkspaceRuntimeConfig } from "../workspace/workspace-gate.js";
 import { isVisibleEntryName } from "../Filesystem/filesystem-gate.js";
 import { TtlCache } from "../shared/core/ttl-cache.js";
-import type { EffectiveRoot, MountInfo, MountScope } from "./channel-mount-types.js";
+import type {
+  EffectiveMounts,
+  EffectiveRoot,
+  FsMount,
+  FsMounts,
+  MountInfo,
+  MountScope,
+} from "./channel-mount-types.js";
+import type { UpdateChannelBody } from "../channels/channel-gate.js";
 
 // ponytail: mount realpath cached 60s — validate/browse hit the same roots repeatedly.
 const mountRealCache = new TtlCache<string>(60_000, 200);
@@ -89,6 +98,12 @@ export async function validateMountPath(
   } catch {
     return { valid: false, error: "Invalid path" };
   }
+  // Canon: `vfs/` is the workspace's own config sandbox, not user content. It
+  // is refused even when it sits inside the jail, so a mount can never point at
+  // (or inside) the workspace's runtime state — a mount there would let a user
+  // repository and the workspace config overwrite each other.
+  const vfsError = await refuseWorkspaceVfs(resolved);
+  if (vfsError) return { valid: false, error: vfsError };
   try {
     const stat = await fsp.stat(resolved);
     if (!stat.isDirectory()) return { valid: false, error: "Path is not a directory" };
@@ -106,11 +121,41 @@ export async function validateMountPath(
   if (process.platform === "win32") {
     real = real.replace(/^\\\\\?\\/, "");
   }
+  // Re-check after realpath: a symlink inside the jail can still land in vfs/.
+  const realVfsError = await refuseWorkspaceVfs(real);
+  if (realVfsError) return { valid: false, error: realVfsError };
   const allowedRoots = await getAllowedRoots(workspaceId);
   if (!isInsideAllowedRoots(real, allowedRoots)) {
     return { valid: false, error: `Path outside allowed roots: ${allowedRoots.join(", ")}` };
   }
   return { valid: true, resolved: real };
+}
+
+/**
+ * Refuse a path that is (or lives inside) a workspace's canon `vfs/` sandbox.
+ *
+ * Walks up from the candidate looking for the `<folder>/vfs` shape, so mounting
+ * `.../CrowdOS Nightly/vfs/artifacts` is refused just like mounting `vfs` itself.
+ * Returns the reason, or null when the path is mountable.
+ */
+async function refuseWorkspaceVfs(candidate: string): Promise<string | null> {
+  let current = path.resolve(candidate);
+  for (let depth = 0; depth < 4; depth += 1) {
+    if (path.basename(current).toLowerCase() === "vfs") {
+      const parent = path.dirname(current);
+      // Only a workspace folder (it carries our own layout) is off limits.
+      const marker = await fsp.stat(path.join(current, ".crowdos")).then(() => true).catch(() => false);
+      const copy = await fsp.stat(path.join(parent, "workspace.json")).then(() => true).catch(() => false);
+      if (marker || copy) {
+        return "Path is inside the workspace config sandbox (vfs/), which is never a mount target";
+      }
+      return null;
+    }
+    const next = path.dirname(current);
+    if (next === current) return null;
+    current = next;
+  }
+  return null;
 }
 
 async function resolveWorkspaceMountFromRecord(workspaceId: string): Promise<MountInfo | null> {
@@ -478,4 +523,132 @@ export async function browseFs(targetPath?: string, workspaceId?: string | null)
 /** The jail this workspace actually enforces — one policy, one source. */
 export async function getAllowedRootsList(workspaceId?: string | null): Promise<string[]> {
   return getAllowedRoots(workspaceId);
+}
+
+// ─── Canon virtual mounts (mock-structure-polished) ───────────────────
+// A mount set is declared in virtual paths and resolved by walking
+// channel → category → workspace: the FIRST level that says "override" wins,
+// and "inherit" means "ask my parent". With no override anywhere, the
+// workspace's "default" set applies. This is the same chain the Repo panel and
+// the agent file tools must agree on — one resolver, one answer.
+
+function normalizeMounts(input: unknown): FsMounts | null {
+  if (!input || typeof input !== "object" || Array.isArray(input)) return null;
+  const raw = input as { mode?: unknown; mounts?: unknown };
+  const mode = raw.mode === "override" || raw.mode === "inherit" || raw.mode === "default"
+    ? raw.mode
+    : null;
+  if (!mode) return null;
+  const mounts: FsMount[] = Array.isArray(raw.mounts)
+    ? raw.mounts
+        .filter((m): m is Record<string, unknown> => Boolean(m) && typeof m === "object" && !Array.isArray(m))
+        .map((m) => ({
+          id: typeof m.id === "string" ? m.id : "",
+          source: typeof m.source === "string" ? m.source : "",
+          target: typeof m.target === "string" ? m.target : "",
+          type: typeof m.type === "string" ? m.type : "local",
+          readOnly: m.readOnly === true,
+        }))
+        // A mount with no source or target cannot be resolved, so it is dropped
+        // rather than surfaced as a phantom entry the panel would render empty.
+        .filter((m) => m.source.trim().length > 0 && m.target.trim().length > 0)
+    : [];
+  return {
+    scope: mode === "default" ? "workspace" : (input as { scope?: FsMounts["scope"] }).scope ?? "channel",
+    mode,
+    mounts,
+  };
+}
+
+function isOverride(mounts: FsMounts | null | undefined): mounts is FsMounts {
+  return Boolean(mounts && mounts.mode === "override");
+}
+
+/**
+ * Resolve the virtual mount set for a (workspace, channel) pair.
+ *
+ * Precedence: channel override → category override → workspace default. A level
+ * that says "inherit" is skipped by definition; a level with no mount set at all
+ * is skipped too. The returned `source` names the level that won, so a caller
+ * can label the mounts honestly instead of implying the workspace declared them.
+ */
+export async function resolveEffectiveMounts(input: {
+  workspaceId?: string | null;
+  channelId?: string | null;
+}): Promise<EffectiveMounts> {
+  const channel = input.channelId ? await channelGate.get(input.channelId).catch(() => null) : null;
+  const workspaceId = input.workspaceId ?? channel?.workspaceId ?? null;
+
+  const channelMounts = normalizeMounts((channel as { fsMounts?: unknown } | null)?.fsMounts);
+  if (isOverride(channelMounts)) {
+    return { workspaceId, source: "channel", mounts: channelMounts.mounts, reason: null };
+  }
+
+  const category = channel?.categoryId
+    ? await channelGate.getCategory(channel.categoryId).catch(() => null)
+    : null;
+  const categoryMounts = normalizeMounts((category as { fsMounts?: unknown } | null)?.fsMounts);
+  if (isOverride(categoryMounts)) {
+    return { workspaceId, source: "category", mounts: categoryMounts.mounts, reason: null };
+  }
+
+  if (workspaceId) {
+    // Canon: the workspace-level set lives in its runtime object
+    // (vfs/.crowdos/workspace.json). The registry record is the fallback so a
+    // record written before the runtime object existed still resolves.
+    const record = await getWorkspaceRecord(workspaceId).catch(() => null);
+    const runtime = await readWorkspaceRuntimeConfig(workspaceId, record?.name).catch(() => null);
+    const workspaceMounts =
+      normalizeMounts(runtime?.fsMounts) ?? normalizeMounts((record as { fsMounts?: unknown } | null)?.fsMounts);
+    // An empty set is "nothing mounted", not "mounted with zero entries": the
+    // panel and the tools both read `source` to label the tree, and calling an
+    // empty list a workspace mount would imply a mount that is not there.
+    if (workspaceMounts && workspaceMounts.mounts.length > 0) {
+      return { workspaceId, source: "workspace", mounts: workspaceMounts.mounts, reason: null };
+    }
+  }
+
+  return { workspaceId, source: "none", mounts: [], reason: null };
+}
+
+/**
+ * Replace the canon virtual mount set for one level (workspace, category, or
+ * channel). The mode is validated, mounts are normalized (a mount with no
+ * source/target is dropped), and the write goes through the owning domain's
+ * gate: Workspace runtime object for the workspace level, Channels rows for
+ * category/channel. Returns the stored set so a caller can echo it back.
+ */
+export async function setEffectiveMounts(input: {
+  workspaceId?: string | null;
+  channelId?: string | null;
+  categoryId?: string | null;
+  mounts: FsMount[];
+  mode?: "default" | "inherit" | "override";
+}): Promise<{ ok: true; mounts: FsMounts } | { ok: false; error: string }> {
+  const channel = input.channelId ? await channelGate.get(input.channelId).catch(() => null) : null;
+  const categoryId = input.categoryId ?? channel?.categoryId ?? null;
+  const category = categoryId ? await channelGate.getCategory(categoryId).catch(() => null) : null;
+  const workspaceId = input.workspaceId ?? channel?.workspaceId ?? category?.workspaceId ?? null;
+  const scope: FsMounts["scope"] = channel ? "channel" : category ? "category" : "workspace";
+  const mode = input.mode ?? "override";
+  const normalized = normalizeMounts({ scope, mode, mounts: input.mounts });
+  if (!normalized) return { ok: false, error: `Invalid mount set (mode: ${String(input.mode)})` };
+
+  if (channel) {
+    const res = await channelGate.update(input.channelId!, { fsMounts: normalized } as UpdateChannelBody).catch(() => null);
+    if (!res || (res as { notFound?: true }).notFound) return { ok: false, error: "Channel not found" };
+    return { ok: true, mounts: normalized };
+  }
+
+  if (category && categoryId) {
+    const updated = await channelGate.updateCategory(categoryId, { fsMounts: normalized }).catch(() => null);
+    if (!updated) return { ok: false, error: "Category not found" };
+    return { ok: true, mounts: normalized };
+  }
+
+  if (!workspaceId) return { ok: false, error: "workspaceId or channelId is required" };
+  const runtime = await readWorkspaceRuntimeConfig(workspaceId).catch(() => null);
+  const workspaceSet: FsMounts = { scope: "workspace", mode: "default", mounts: normalized.mounts };
+  await writeWorkspaceRuntimeConfig(workspaceId, { fsMounts: workspaceSet }, runtime?.name).catch(() => null);
+  return { ok: true, mounts: workspaceSet };
 }

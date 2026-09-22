@@ -16,6 +16,8 @@ import type {
   UpdateChannelBody,
   ChannelParams
 } from "./channel-validators.js";
+import { fsMountSchema, fsMountsSchema } from "./channel-validators.js";
+import type { FsMountBody, FsMountsBody } from "./channel-validators.js";
 import {
   categoryExists,
   getCategoryById,
@@ -36,6 +38,8 @@ import type { ChannelSettingsPatch } from "./channel-service.js";
 export type { Category, ChannelType, Channel, ChannelIndex, CompressedSummary, ChannelSettingsPatch };
 export { channelTypeSchema, createChannelSchema, updateChannelSchema, paramIdSchema };
 export type { CreateChannelBody, UpdateChannelBody, ChannelParams };
+export { fsMountSchema, fsMountsSchema };
+export type { FsMountBody, FsMountsBody };
 export {
   categoryExists,
   getCategoryById,

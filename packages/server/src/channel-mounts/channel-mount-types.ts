@@ -53,6 +53,8 @@ export interface ChannelMountRecord {
   categoryId: string | null;
   name: string;
   folderPath: string | null;
+  /** Canon virtual mount set (inherit/override chain). */
+  fsMounts?: FsMounts;
 }
 
 export interface CategoryMountRecord {
@@ -60,6 +62,8 @@ export interface CategoryMountRecord {
   workspaceId: string | null;
   name: string;
   folderPath: string | null;
+  /** Canon virtual mount set (inherit/override chain). */
+  fsMounts?: FsMounts;
 }
 
 export interface WorkspaceMountRecord {
@@ -70,6 +74,8 @@ export interface WorkspaceMountRecord {
   /** Zone B — the mounted repository, or null when nothing is mounted. */
   mountPath: string | null;
   folderPath: string | null;
+  /** Canon virtual mount set for this workspace (mode "default"). */
+  fsMounts?: FsMounts;
 }
 
 export interface FsBrowseEntry {
@@ -77,4 +83,50 @@ export interface FsBrowseEntry {
   isDirectory: boolean;
   isFile: boolean;
   path: string;
+}
+
+// ─── Canon virtual mounts (mock-structure-polished) ──────────────────
+// Mounts are described in VIRTUAL paths (what the agent sees inside its
+// sandbox), not host paths: a workspace declares them with mode "default", and
+// each category/channel either "inherit"s the parent level or "override"s it
+// with its own list. Resolution walks channel → category → workspace and the
+// FIRST override wins; with no override anywhere, the workspace default applies.
+// Host paths are a separate concern: they still pass validateMountPath's jail.
+
+/** Which level declared a mount set. */
+export type FsMountScope = "workspace" | "category" | "channel";
+
+/** "default" = the workspace's own set; "inherit" = follow the parent; "override" = use these. */
+export type FsMountMode = "default" | "inherit" | "override";
+
+export interface FsMount {
+  id: string;
+  /** Virtual path the mount is read from (e.g. "/workspace/repository"). */
+  source: string;
+  /** Virtual path the mount appears at (e.g. "/mnt/repository"). */
+  target: string;
+  /** Free-form kind: repository, local, artifact, ... */
+  type: string;
+  readOnly: boolean;
+}
+
+export interface FsMounts {
+  scope: FsMountScope;
+  mode: FsMountMode;
+  mounts: FsMount[];
+}
+
+/**
+ * The resolved mount set for one (workspace, channel) pair, plus the level that
+ * supplied it — the panel labels mounts by origin, and an agent inherits the
+ * same answer the panel shows.
+ */
+export interface EffectiveMounts {
+  workspaceId: string | null;
+  /** Level whose mounts won: channel > category > workspace (first override).
+   *  "none" when nothing declared any mounts. */
+  source: "channel" | "category" | "workspace" | "none";
+  mounts: FsMount[];
+  /** Why no mounts resolved, when a level declared an unusable set. */
+  reason: string | null;
 }

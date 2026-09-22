@@ -4,6 +4,8 @@ import { getDb, dualWrite } from "../shared/config/database.js";
 import { tierContextFor } from "../workspace/workspace-gate.js";
 import { categories, channels, channelSettings } from "../db/schema.js";
 import type { CreateChannelBody, UpdateChannelBody } from "./channel-validators.js";
+import { fsMountsSchema } from "./channel-validators.js";
+import type { FsMountsBody } from "./channel-validators.js";
 import {
   localGetChannelSettings,
   localUpsertChannelSettings,
@@ -129,7 +131,15 @@ export async function createCategory(
 
 export async function updateCategory(
   id: string,
-  patch: { name?: string; ownedByAgentId?: string | null; embeddingProfileId?: string | null; position?: number; folderPath?: string | null },
+  patch: {
+    name?: string;
+    ownedByAgentId?: string | null;
+    embeddingProfileId?: string | null;
+    position?: number;
+    folderPath?: string | null;
+    /** Canon virtual mount set (inherit/override chain). */
+    fsMounts?: FsMountsBody;
+  },
   dbOverride?: any,
 ) {
   if (dbOverride) {
@@ -324,7 +334,16 @@ export async function createChannel(body: CreateChannelBody, dbOverride?: any, w
   }
 
   const id = randomUUID();
-  const ws = workspaceId ?? "default";
+  // Canon: categories and channels live inside one workspace folder, so a
+  // channel created under a category belongs to that category's workspace
+  // unless the caller named one explicitly. Deriving it here keeps the two
+  // rows in the same folder instead of splitting them across scopes.
+  let ws = workspaceId ?? null;
+  if (!ws && categoryId) {
+    const parent = await getCategoryById(categoryId).catch(() => null);
+    ws = (parent as { workspaceId?: string | null } | null)?.workspaceId ?? null;
+  }
+  ws = ws ?? "default";
   const ctx = await tierContextFor(ws);
   const pgValues = {
     id,

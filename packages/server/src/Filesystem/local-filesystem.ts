@@ -1,6 +1,11 @@
 // ─── Local Filesystem Implementation ───────────────────────────────────
 // CrowdOS §16 + §35.5: direct clamped fs, no DB mirror.
 // Reads/writes hit disk only via the path-guard jail.
+//
+// Canon (mock-structure-polished): initialize() materializes the workspace
+// folder layout — a per-folder workspace.json plus vfs/{.crowdos,agents,
+// artifacts,src}. `vfs/` is a local config sandbox: never a mount target for
+// user repositories.
 
 import fs from "node:fs/promises";
 import { join } from "node:path";
@@ -12,6 +17,11 @@ export interface LocalFilesystemOptions {
   workspaceId: string;
   workspaceRoot: string;
   actorId: string;
+  /**
+   * Display name written into the per-folder workspace.json copy. Absent = the
+   * workspace id (the copy is a mirror; the global index stays truth).
+   */
+  workspaceName?: string;
   onEvent?: (type: string, path: string, metadata?: Record<string, unknown>) => void;
 }
 
@@ -19,41 +29,50 @@ export class LocalFilesystem {
   private readonly workspaceId: string;
   private readonly workspaceRoot: string;
   private readonly actorId: string;
+  private readonly workspaceName: string;
   private readonly onEvent?: LocalFilesystemOptions["onEvent"];
 
   constructor(options: LocalFilesystemOptions) {
     this.workspaceId = options.workspaceId;
     this.workspaceRoot = options.workspaceRoot;
     this.actorId = options.actorId;
+    this.workspaceName = options.workspaceName?.trim() || options.workspaceId;
     this.onEvent = options.onEvent;
   }
 
   async initialize(): Promise<void> {
-    // Pure fs: ensure root + standard sectors + workspace.json. No DB.
+    // Pure fs: ensure the canon folder layout. No DB.
     await fs.mkdir(this.workspaceRoot, { recursive: true });
 
     const standardDirs = [
-      "/src",
-      "/artifacts",
-      "/agents",
-      "/.crowdos",
-      "/.crowdos/runtime",
-      "/.crowdos/cache",
-      "/.crowdos/snapshots",
+      "/vfs",
+      "/vfs/src",
+      "/vfs/artifacts",
+      "/vfs/agents",
+      "/vfs/.crowdos",
+      "/vfs/.crowdos/runtime",
+      "/vfs/.crowdos/cache",
+      "/vfs/.crowdos/snapshots",
     ];
 
     for (const dir of standardDirs) {
       await this.mkdir(dir);
     }
 
-    const wsJsonPath = "/.crowdos/workspace.json";
+    // Canon: runtime object only — permissions, constraints, artifactDir,
+    // fsMounts. Categories and channels live in their own files next to it.
+    const wsJsonPath = "/vfs/.crowdos/workspace.json";
     if (!(await this.exists(wsJsonPath))) {
       const defaultMeta = {
-        id: this.workspaceId,
-        name: this.workspaceId === "default" ? "Default Workspace" : this.workspaceId,
-        createdAt: new Date().toISOString(),
-        permissions: { network: false, shell: false, maxAgents: 8 },
-        constraints: { networkAccess: false, shellExecution: true, memoryLimitMb: 512, cpuLimit: 1 },
+        workspace: {
+          id: this.workspaceId,
+          name: this.workspaceName,
+          createdAt: new Date().toISOString(),
+          permissions: { network: false, shell: false, maxAgents: 8 },
+          constraints: { networkAccess: false, shellExecution: true, memoryLimitMb: 512, cpuLimit: 1 },
+          artifactDir: "vfs/artifacts",
+          fsMounts: { scope: "workspace", mode: "default", mounts: [] },
+        },
       };
       await this.write(wsJsonPath, JSON.stringify(defaultMeta, null, 2));
     }

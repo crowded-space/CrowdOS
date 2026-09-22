@@ -13,12 +13,12 @@
 // service resolves are the same instance. That is what lets
 // setLocalStoreDirForTests redirect the manifest read. Per-test
 // vi.resetModules() would sever that link and send reads to the real localstore.
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { setLocalStoreDirForTests } from "../shared/core/local-file.js";
+import { localStoreDirsForTests, setLocalStoreDirForTests } from "../shared/core/local-file.js";
 
 let dir: string;
 
@@ -183,7 +183,10 @@ describe("§21 lazy expansion", () => {
 
 describe("§30 workspace manifest overlay", () => {
   function writeManifest(obj: unknown) {
-    writeFileSync(join(dir, "capabilities.json"), JSON.stringify(obj), "utf8");
+    // Canon: the overlay lives at <workspaceFolder>/vfs/.crowdos/capabilities.json.
+    const crowdos = localStoreDirsForTests().crowdos;
+    mkdirSync(crowdos, { recursive: true });
+    writeFileSync(join(crowdos, "capabilities.json"), JSON.stringify(obj), "utf8");
   }
 
   it("hides a capability the workspace disabled", async () => {
@@ -208,7 +211,9 @@ describe("§30 workspace manifest overlay", () => {
 
   it("degrades to the built-in vocabulary when the manifest is malformed", async () => {
     mockTiers({ liveTools: ["read_file"], authorized: ["read_file"] });
-    writeFileSync(join(dir, "capabilities.json"), "{ not valid json", "utf8");
+    const crowdos = localStoreDirsForTests().crowdos;
+    mkdirSync(crowdos, { recursive: true });
+    writeFileSync(join(crowdos, "capabilities.json"), "{ not valid json", "utf8");
     expect(await capabilitiesGate.get("filesystem.read")).not.toBeNull();
   });
 });

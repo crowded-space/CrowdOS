@@ -10,16 +10,42 @@ import {
   getAllowedRootsList,
   resolveEffectiveRoot,
   resolveMountScope,
+  resolveEffectiveMounts,
+  setEffectiveMounts,
 } from "./channel-mount-service.js";
-import type { EffectiveRoot, MountInfo, MountScope, WorkspaceMountRecord } from "./channel-mount-types.js";
+import type {
+  EffectiveMounts,
+  EffectiveRoot,
+  FsMount,
+  FsMountMode,
+  FsMountScope,
+  FsMounts,
+  MountInfo,
+  MountScope,
+  WorkspaceMountRecord,
+} from "./channel-mount-types.js";
 
-export type { EffectiveRoot, MountInfo, MountScope, WorkspaceMountRecord };
+export type {
+  EffectiveMounts,
+  EffectiveRoot,
+  FsMount,
+  FsMountMode,
+  FsMountScope,
+  FsMounts,
+  MountInfo,
+  MountScope,
+  WorkspaceMountRecord,
+};
 
 export const channelMountGate = {
   resolve: resolveChannelMount,
   resolveCategory: resolveCategoryMount,
   resolveWorkspace: resolveWorkspaceMount,
   effectiveRoot: resolveEffectiveRoot,
+  /** Canon virtual mounts: channel → category → workspace, first override wins. */
+  effectiveMounts: resolveEffectiveMounts,
+  /** Replace one level's canon virtual mount set (workspace/category/channel). */
+  setEffectiveMounts,
   scope: resolveMountScope,
   attachChannel: attachChannelMount,
   attachCategory: attachCategoryMount,

@@ -29,7 +29,9 @@ export class SkillContextMiddleware implements IContextMiddleware {
   readonly priority = 30;
 
   async process(packet: MutableContextPacket, ctx: ContextBuildContext): Promise<void> {
-    const { agent, userInput } = ctx;
+    // Canon: skills live inside the workspace folder, so discovery is scoped to
+    // the workspace this turn belongs to — not a cross-workspace union.
+    const { agent, userInput, workspaceId } = ctx;
 
     const alwaysOn: string[] = [];
     const deferred: string[] = [];
@@ -66,11 +68,11 @@ export class SkillContextMiddleware implements IContextMiddleware {
     // Discovery-first: a skill whose trigger does NOT appear in the user input
     // is advertised as one line and expanded only on demand.
     try {
-      const summaries = await skillsGate.listMarkdownSummaries();
+      const summaries = await skillsGate.listMarkdownSummaries({ workspaceId: workspaceId ?? null });
       for (const summary of summaries) {
         const triggers = this.triggersFor(summary);
         if (triggers.length > 0 && this.matches(triggers, userInput)) {
-          const skill = await skillsGate.getMarkdownSkill(summary.id);
+          const skill = await skillsGate.getMarkdownSkill(summary.id, workspaceId ?? null);
           if (skill) alwaysOn.push(`### Skill: ${skill.name} (${skill.category})\n\n${skill.body}`);
           continue;
         }

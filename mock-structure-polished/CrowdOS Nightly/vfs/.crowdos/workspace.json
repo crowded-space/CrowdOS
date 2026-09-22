@@ -1,0 +1,39 @@
+{
+  "workspace": {
+    "id": "ws_be3cd9a7ac09",
+    "name": "CrowdOS Nightly",
+    "createdAt": "2026-09-20T08:56:48.036Z",
+    "permissions": {
+      "network": false,
+      "shell": false,
+      "maxAgents": 8
+    },
+    "constraints": {
+      "networkAccess": false,
+      "shellExecution": true,
+      "memoryLimitMb": 512,
+      "cpuLimit": 1
+    },
+    "artifactDir": "vfs/artifacts",
+    "fsMounts": {
+      "scope": "workspace",
+      "mode": "default",
+      "mounts": [
+        {
+          "id": "ws-repo",
+          "source": "/workspace/repository",
+          "target": "/mnt/repository",
+          "type": "repository",
+          "readOnly": false
+        },
+        {
+          "id": "ws-shared",
+          "source": "/workspace/shared",
+          "target": "/mnt/shared",
+          "type": "local",
+          "readOnly": true
+        }
+      ]
+    }
+  }
+}

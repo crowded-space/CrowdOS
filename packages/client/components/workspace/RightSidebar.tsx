@@ -1,6 +1,8 @@
 import React, { useState, useMemo, useCallback, lazy, Suspense } from 'react';
 import { motion, AnimatePresence, useReducedMotion } from 'motion/react';
 import { useCrowdOSStore } from '@/stores/crowdOsStore';
+import { useScreenLockStore, isScreenlockError } from '@/stores/screenLockStore';
+import { resolveApiUrl } from '@/src/api/client';
 import { useShallow } from 'zustand/react/shallow';
 import { BarChart3, Database, Coins, Activity, Network } from 'lucide-react';
 import AgentRow from './AgentRow';
@@ -20,24 +22,64 @@ export default function RightSidebar() {
   const shouldReduceMotion = useReducedMotion();
   const [telemetryTab, setTelemetryTab] = useState<'channel' | 'global'>('global');
   const [ledger, setLedger] = useState<{ totalTokens: number; totalCostUsd: number } | null>(null);
+  // 'loading' → skeleton; 'ready' → ledger totals; 'offline' → honest local sums.
+  // A single null-able ledger could not tell "still fetching" from "fetch failed",
+  // so a failing poll rendered the skeleton forever and hid the fallback.
+  const [ledgerStatus, setLedgerStatus] = useState<'loading' | 'ready' | 'offline'>('loading');
 
   // UX-7: fetch real ledger aggregates from observability cost dashboard (SCL-3)
   // When available, global telemetry uses ledger totals instead of local estimates.
   // Fallback to DEMO_FALLBACK=false shows honest outage (no fake 421035 baseline).
+  //
+  // §19 screenlock: the poll is WORKSPACE-SCOPED (x-workspace-id). Untargeted,
+  // the PIN gate evaluates "is a screenlock configured in ANY workspace" and
+  // 401s an unlocked workspace whenever a sibling workspace has a PIN. Targeted,
+  // only this workspace's lock decides — an unlocked workspace answers, a locked
+  // one 401s and re-locks the shell (same contract as the store's tenant fetches).
+  // resolveApiUrl keeps the packaged app:// renderer pointed at the embedded
+  // backend instead of its own origin.
   React.useEffect(() => {
     let cancelled = false;
+    const workspaceId = activeWorkspaceId;
+    if (!workspaceId) return;
+    // Explicit annotation: the guard above proves non-null, but TS does not
+    // carry that narrowing into a hoisted function declaration's closure, and
+    // HeadersInit requires a plain string.
+    const scopedWorkspaceId: string = workspaceId;
     async function fetchLedger() {
       try {
-        const res = await fetch('/api/observability/cost/dashboard');
-        if (!res.ok) return;
+        const res = await fetch(resolveApiUrl('/api/observability/cost/dashboard'), {
+          headers: { 'x-workspace-id': scopedWorkspaceId },
+        });
+        if (res.status === 401) {
+          const body = await res.clone().json().catch(() => ({} as { message?: string }));
+          if (isScreenlockError(body?.message)) {
+            useScreenLockStore.getState().lock();
+            return;
+          }
+          if (!cancelled) setLedgerStatus('offline');
+          return;
+        }
+        if (!res.ok) {
+          if (!cancelled) setLedgerStatus('offline');
+          return;
+        }
         const data = await res.json() as { totalTokens?: number; totalCostUsd?: number };
-        if (!cancelled && typeof data.totalTokens === 'number') setLedger({ totalTokens: data.totalTokens, totalCostUsd: data.totalCostUsd ?? 0 });
-      } catch {}
+        if (cancelled) return;
+        if (typeof data.totalTokens === 'number') {
+          setLedger({ totalTokens: data.totalTokens, totalCostUsd: data.totalCostUsd ?? 0 });
+          setLedgerStatus('ready');
+        } else {
+          setLedgerStatus('offline');
+        }
+      } catch {
+        if (!cancelled) setLedgerStatus('offline');
+      }
     }
     fetchLedger();
     const id = setInterval(fetchLedger, 30000);
     return () => { cancelled = true; clearInterval(id); };
-  }, []);
+  }, [activeWorkspaceId]);
 
   // Dynamic telemetry metrics
   const { calculatedTokens, calculatedBudgetSpent, activeCount, totalAgentsCount, currentChannelsCount } = useMemo(() => {
@@ -286,7 +328,7 @@ export default function RightSidebar() {
               <span>Tokens</span>
             </div>
             <div className="text-[13px] font-semibold text-zinc-100 font-mono mt-1.5 tracking-tight">
-              {ledger === null && telemetryTab === 'global' ? <span className="inline-block h-4 w-16 skeleton" /> : calculatedTokens.toLocaleString()}
+              {ledgerStatus === 'loading' && telemetryTab === 'global' ? <span className="inline-block h-4 w-16 skeleton" /> : calculatedTokens.toLocaleString()}
             </div>
           </div>
 

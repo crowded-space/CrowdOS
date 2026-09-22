@@ -78,16 +78,29 @@ export function isNoDatabaseError(err: unknown): boolean {
   return (err as any).code === NO_DATABASE_CODE;
 }
 
-/** Connection-class failures (worth falling back) vs logic errors (not). */
+/**
+ * Connection-class failures (worth falling back) vs logic errors (not).
+ *
+ * Walks the `cause` chain: drizzle wraps driver failures, so the real code lives
+ * on the nested error. A query against an unreachable database arrives as
+ * `Error("Failed query: …")` with `cause.code === "ECONNREFUSED"` and NO code of
+ * its own — inspecting only the top level classified every wrapped outage as a
+ * logic error, which defeated the local-first fallbacks this predicate exists to
+ * gate (the cost routes' outage degradation among them). Depth is bounded so a
+ * self-referential chain cannot spin.
+ */
 export function isConnectionError(err: unknown): boolean {
-  if (!err || typeof err !== "object") return false;
-  if (isNoDatabaseError(err)) return true;
-  const code = String((err as any).code ?? "");
-  const message = String((err as any).message ?? "").toLowerCase();
-  if (/^(ECONNREFUSED|ENOTFOUND|ETIMEDOUT|EHOSTUNREACH|ENETUNREACH|EPIPE|ECONNRESET)$/.test(code)) return true;
-  if (/^(08|57P01|57P02|57P03|53300)/.test(code)) return true;
-  if (!code && /database_url is not set|fetch failed|connection (refused|timed out|terminated)|timeout|econn/i.test(message)) {
-    return true;
+  let current: unknown = err;
+  for (let depth = 0; depth < 5 && current && typeof current === "object"; depth += 1) {
+    if (isNoDatabaseError(current)) return true;
+    const code = String((current as any).code ?? "");
+    const message = String((current as any).message ?? "").toLowerCase();
+    if (/^(ECONNREFUSED|ENOTFOUND|ETIMEDOUT|EHOSTUNREACH|ENETUNREACH|EPIPE|ECONNRESET)$/.test(code)) return true;
+    if (/^(08|57P01|57P02|57P03|53300)/.test(code)) return true;
+    if (!code && /database_url is not set|fetch failed|connection (refused|timed out|terminated)|timeout|econn/i.test(message)) {
+      return true;
+    }
+    current = (current as { cause?: unknown }).cause;
   }
   return false;
 }

@@ -15,11 +15,12 @@
 //    agent could really invoke it.
 //
 // 3. MANIFEST OVERLAY. A workspace may add/override/hide capabilities via
-//    <localstore>/capabilities.json (the §17 JSON-on-disk config rule). The
-//    overlay is applied per workspace, so two workspaces can expose different
+//    <workspaceFolder>/vfs/.crowdos/capabilities.json (the §17 JSON-on-disk
+//    config rule; canon path from mock-structure-polished). The overlay is
+//    applied per workspace, so two workspaces can expose different
 //    vocabularies over the same built-in set (§30 isolation).
 
-import { readJsonObject } from "../shared/core/local-file.js";
+import { readJsonObject, searchableWorkspaceScopes } from "../shared/core/local-file.js";
 import { toolsGate } from "../tools/tools-gate.js";
 import { skillsGate } from "../skills/skills-gate.js";
 import { BUILTIN_CAPABILITIES } from "./capability-catalog.js";
@@ -82,19 +83,30 @@ export function mergeManifest(
   return [...byId.values()];
 }
 
-async function loadManifest(): Promise<CapabilityManifest | null> {
-  try {
-    const raw = await readJsonObject<unknown>(MANIFEST_FILE);
-    if (!raw || Object.keys(raw).length === 0) return null;
-    return raw as unknown as CapabilityManifest;
-  } catch {
-    return null;
+/**
+ * Read the manifest overlay. With a scope, one workspace. Without one, the
+ * first workspace that defines a manifest wins (there is exactly one overlay
+ * per workspace, and an unscoped caller has no other way to pick).
+ */
+async function loadManifest(workspaceId?: string | null): Promise<CapabilityManifest | null> {
+  const scopes: Array<string | null> = workspaceId && workspaceId.trim()
+    ? [workspaceId]
+    : searchableWorkspaceScopes();
+  for (const scope of scopes) {
+    try {
+      const raw = await readJsonObject<unknown>(MANIFEST_FILE, scope);
+      if (!raw || Object.keys(raw).length === 0) continue;
+      return raw as unknown as CapabilityManifest;
+    } catch {
+      // unreadable manifest degrades to the built-in vocabulary
+    }
   }
+  return null;
 }
 
 /** Descriptors after the manifest overlay, in stable domain/id order. */
-export async function listDescriptors(): Promise<CapabilityDescriptor[]> {
-  const merged = mergeManifest(BUILTIN_CAPABILITIES, await loadManifest());
+export async function listDescriptors(workspaceId?: string | null): Promise<CapabilityDescriptor[]> {
+  const merged = mergeManifest(BUILTIN_CAPABILITIES, await loadManifest(workspaceId));
   const domainRank = new Map(CAPABILITY_DOMAINS.map((d, i) => [d, i]));
   return merged.sort((a, b) => {
     const dr = (domainRank.get(a.domain) ?? 99) - (domainRank.get(b.domain) ?? 99);
@@ -108,7 +120,7 @@ export async function listDescriptors(): Promise<CapabilityDescriptor[]> {
  * This is what replaces wholesale tool-schema injection. Argument schemas are
  * deliberately absent — expanding them is `expand()` below.
  */
-export async function visibleFor(agentId: string): Promise<VisibleCapability[]> {
+export async function visibleFor(agentId: string, workspaceId?: string | null): Promise<VisibleCapability[]> {
   let authorized: string[] = [];
   try {
     authorized = await skillsGate.getResolvedToolsForAgent(agentId);
@@ -117,7 +129,7 @@ export async function visibleFor(agentId: string): Promise<VisibleCapability[]> 
     return [];
   }
   const allowed = new Set(authorized);
-  const descriptors = await listDescriptors();
+  const descriptors = await listDescriptors(workspaceId);
   const out: VisibleCapability[] = [];
   for (const d of descriptors) {
     const live = d.tools.filter((t) => allowed.has(t) && toolsGate.has(t));
@@ -134,8 +146,12 @@ export async function visibleFor(agentId: string): Promise<VisibleCapability[]> 
  * live tool for this agent — the same three conditions under which it was never
  * advertised, so an agent cannot expand its way past the availability filter.
  */
-export async function expand(agentId: string, capabilityId: string): Promise<ExpandedCapability | null> {
-  const descriptors = await listDescriptors();
+export async function expand(
+  agentId: string,
+  capabilityId: string,
+  workspaceId?: string | null,
+): Promise<ExpandedCapability | null> {
+  const descriptors = await listDescriptors(workspaceId);
   const descriptor = descriptors.find((d) => d.id === capabilityId);
   if (!descriptor) return null;
 
@@ -158,6 +174,9 @@ export async function expand(agentId: string, capabilityId: string): Promise<Exp
 }
 
 /** Resolve one capability descriptor by id (manifest applied). Diagnostics/tests. */
-export async function getDescriptor(capabilityId: string): Promise<CapabilityDescriptor | null> {
-  return (await listDescriptors()).find((d) => d.id === capabilityId) ?? null;
+export async function getDescriptor(
+  capabilityId: string,
+  workspaceId?: string | null,
+): Promise<CapabilityDescriptor | null> {
+  return (await listDescriptors(workspaceId)).find((d) => d.id === capabilityId) ?? null;
 }

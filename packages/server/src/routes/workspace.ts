@@ -25,20 +25,71 @@ import {
   getScreenLockStatus,
   setScreenLockPin,
   clearScreenLockPin,
+  resolveSandboxBase,
+  resolveWorkspaceFolder,
+  resolveRecordFolderName,
+  DEFAULT_ARTIFACT_DIR,
+  resolveWorkspaceFolderPath,
   type WorkspaceRecord,
 } from "../workspace/workspace-gate.js";
 import { isInsideRoot } from "../Filesystem/filesystem-gate.js";
 
+// Zone A base directory comes from the registry domain (resolveSandboxBase) so
+// the create route, the delete route, and the mount jail can never disagree
+// about which directory is "the sandbox".
+
 /**
- * Zone A base directory. The desktop shell sets WORKSPACE_DIR to roaming
- * app-data because `process.cwd()` may point at a tree where file creation
- * stalls for the host process; the fallback keeps dev/test boots working.
- *
- * Single definition: the create route provisions under it, and the delete
- * route only removes directories that live inside it.
+ * Move a workspace folder to match a rename, canon-style (folder = display
+ * name). Refuses rather than clobbering: an occupied destination, a folder
+ * outside the sandbox, or a missing source all leave the record untouched and
+ * report why. The per-folder workspace.json copy is rewritten by
+ * saveWorkspaceRecord once the new rootPath is stored.
  */
-function resolveSandboxBase(): string {
-  return process.env.WORKSPACE_DIR?.trim() || path.join(process.cwd(), "sandbox");
+async function renameWorkspaceFolder(
+  record: WorkspaceRecord,
+  previousName: string,
+): Promise<{ ok: true; folderName: string; rootPath: string } | { ok: false; error: string }> {
+  const sandboxBase = resolveSandboxBase();
+  const currentRoot = (record.rootPath?.trim() ? path.resolve(record.rootPath) : null) ??
+    (await resolveWorkspaceFolder(record.id));
+  // A folder the user pointed us at explicitly is not ours to move.
+  if (!currentRoot || !isInsideRoot(currentRoot, sandboxBase)) {
+    return { ok: false, error: "Workspace folder is outside the workspace sandbox; rename it manually." };
+  }
+  const folderName = resolveRecordFolderName({ id: record.id, name: record.name });
+  const nextRoot = resolveWorkspaceFolderPath(sandboxBase, folderName);
+  if (path.resolve(nextRoot) === path.resolve(currentRoot)) {
+    return { ok: true, folderName, rootPath: nextRoot };
+  }
+  const exists = await fs.stat(currentRoot).then(() => true).catch(() => false);
+  if (!exists) return { ok: false, error: `Workspace folder not found: ${currentRoot}` };
+  const occupied = await fs.stat(nextRoot).then(() => true).catch(() => false);
+  if (occupied) {
+    return { ok: false, error: `A folder named "${folderName}" already exists (renamed from "${previousName}").` };
+  }
+  try {
+    await fs.rename(currentRoot, nextRoot);
+  } catch (err: any) {
+    return { ok: false, error: `Could not move workspace folder: ${err?.message ?? String(err)}` };
+  }
+  return { ok: true, folderName, rootPath: nextRoot };
+}
+
+/**
+ * True when a workspace folder contains nothing CrowdOS did not put there:
+ * only the canon entries (workspace.json, vfs/, .gitkeep files). Anything else
+ * means the user stored something in it, so delete must keep the folder.
+ */
+const CROWDOS_OWNED_ENTRIES = new Set(["workspace.json", "vfs", ".gitkeep"]);
+
+async function folderIsCrowdosOwned(folder: string): Promise<boolean> {
+  try {
+    const entries = await fs.readdir(folder);
+    return entries.every((name) => CROWDOS_OWNED_ENTRIES.has(name));
+  } catch {
+    // Unreadable folder: do not claim ownership of it.
+    return false;
+  }
 }
 
 const updateSettingsSchema = z.object({
@@ -180,7 +231,10 @@ export async function workspaceRoutes(app: FastifyInstance) {
       // 4. Generate workspace ID and sandbox directory
       const id = "ws_" + randomUUID().replace(/-/g, "").slice(0, 12);
       const sandboxBase = resolveSandboxBase();
-      const resolvedSandbox = rootPath || path.join(sandboxBase, id);
+      // Canon: the folder is the display name (sanitized), not the id, so the
+      // directory is browsable. `id` stays the stable key everywhere else.
+      const folderName = resolveRecordFolderName({ id, name });
+      const resolvedSandbox = rootPath || resolveWorkspaceFolderPath(sandboxBase, folderName);
 
       // 5. Save to local workspaces.json registry FIRST so getWorkspaceDb(id)
       // resolves the new workspace pool (not global) for seeding.
@@ -189,6 +243,8 @@ export async function workspaceRoutes(app: FastifyInstance) {
         name,
         icon: icon || "💼",
         databaseUrl,
+        folderName,
+        artifactDir: DEFAULT_ARTIFACT_DIR,
         rootPath: resolvedSandbox,
         screenLockPinHash: null,
         createdAt: new Date().toISOString(),
@@ -220,7 +276,7 @@ export async function workspaceRoutes(app: FastifyInstance) {
           const { localSeedDefaultAgent } = await import("../agents/agent-local-store.js");
           const cat = await localCreateCategory({ name: "General", workspaceId: id, createdBy: "system", position: 0 });
           await localCreateChannel({ name: "general", type: "standard", createdBy: "system", categoryId: cat.id, workspaceId: id, position: 0 });
-          await localSeedDefaultAgent();
+          await localSeedDefaultAgent(id);
         } catch (err: any) {
           request.log.warn({ err }, "Notice: local preset seeding skipped or deferred");
         }
@@ -383,10 +439,21 @@ export async function workspaceRoutes(app: FastifyInstance) {
       }
 
       if (record) {
+        // Canon: the folder is the display name, so a rename moves the folder
+        // (the id, and therefore every row keyed by it, never changes).
+        const previousName = record.name;
         if (name !== undefined) record.name = name;
         if (icon !== undefined) record.icon = icon;
         if (rootPath !== undefined) record.rootPath = rootPath;
         if (storagePreference !== undefined) record.storagePreference = storagePreference;
+        if (name !== undefined && name !== previousName && rootPath === undefined) {
+          const rename = await renameWorkspaceFolder(record, previousName);
+          if (!rename.ok) {
+            return reply.status(409).send({ error: "Conflict", message: rename.error });
+          }
+          record.folderName = rename.folderName;
+          record.rootPath = rename.rootPath;
+        }
         await saveWorkspaceRecord(record);
       }
 
@@ -448,10 +515,21 @@ export async function workspaceRoutes(app: FastifyInstance) {
       // path — deleting the record must never `rm -rf` a directory the user
       // pointed us at, and must never touch a Zone B mount.
       const sandboxBase = resolveSandboxBase();
+      // Canon: a folder that only holds our own layout (workspace.json + vfs/)
+      // is ours to remove. A folder with user content in it is not, even when
+      // it lives inside the sandbox — deleting a record must never destroy work.
       const rootPath = record?.rootPath;
       if (rootPath && isInsideRoot(rootPath, sandboxBase)) {
         try {
-          await fs.rm(rootPath, { recursive: true, force: true });
+          const ours = await folderIsCrowdosOwned(rootPath);
+          if (ours) {
+            await fs.rm(rootPath, { recursive: true, force: true });
+          } else {
+            request.log.info(
+              { rootPath },
+              "Workspace record removed; folder kept because it holds files CrowdOS did not create.",
+            );
+          }
         } catch (err: any) {
           request.log.warn({ err }, "Notice: sandbox cleanup skipped");
         }

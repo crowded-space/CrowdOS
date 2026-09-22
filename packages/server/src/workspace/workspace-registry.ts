@@ -1,11 +1,26 @@
-﻿// ─── Workspace Registry (Local File Persistence) ─────────────────────
+// ─── Workspace Registry (Local File Persistence) ─────────────────────
 // Manages workspace metadata and database credentials in <userData>/workspaces.json.
 // Decouples workspace definitions completely from .env and the global database.
+//
+// Canon (mock-structure-polished): the global workspaces.json is the portal/hub
+// index and wins for listing and startup. Every workspace also owns a
+// display-name folder holding a per-folder copy of its own record
+// (rootPath "."), rewritten from the global after every load and save:
+//
+//   <sandboxBase>/<folderName>/workspace.json
+//   <sandboxBase>/<folderName>/vfs/...        <- see workspace-paths.ts
 
 import { promises as fs } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { TtlCache } from "../shared/core/ttl-cache.js";
+import { invalidateWorkspacePathCaches } from "../shared/core/local-file.js";
 import { parseWorkspaceDatabaseUrl } from "./workspace-database.js";
+import {
+  DEFAULT_ARTIFACT_DIR,
+  normalizeArtifactDir,
+  resolveWorkspaceFolderPath,
+  sanitizeWorkspaceFolderName,
+} from "./workspace-paths.js";
 
 // ponytail: preference lookups ride the hot path (every tier decision) —
 // 60s cache, invalidated on save/remove. Stale preference ≤60s is harmless
@@ -30,6 +45,17 @@ export interface WorkspaceRecord {
   name: string;
   icon: string;
   databaseUrl: string;
+  /**
+   * Display-name folder this workspace owns under the sandbox base. Absent =
+   * derived from `name` (sanitized). Folder names may change on rename; the
+   * `id` never does.
+   */
+  folderName?: string;
+  /**
+   * Folder-relative artifact directory. Absent = canon default "vfs/artifacts":
+   * <folder>/vfs/artifacts/<runId>/<artifactId>.<ext>.
+   */
+  artifactDir?: string;
   /**
    * Zone A — workspace-local state (config, agent/roster ids, skills,
    * instructions, channel history, runtime state). Authority: L0 only.
@@ -113,9 +139,24 @@ export function resolveSandboxBase(): string {
 }
 
 /**
- * Zone A root for one workspace: its registry `rootPath` when it has one,
- * else `<sandboxBase>/<workspaceId>`. Never a mount target — `LocalFilesystem
- * .initialize()` creates the workspace sectors here.
+ * Display-name folder for a record: explicit `folderName`, else the sanitized
+ * `name`, else the id. Pure — no I/O, so path resolution stays cheap.
+ */
+export function resolveRecordFolderName(record: Pick<WorkspaceRecord, "id" | "name" | "folderName">): string {
+  const explicit = record.folderName?.trim();
+  if (explicit) return sanitizeWorkspaceFolderName(explicit);
+  return sanitizeWorkspaceFolderName(record.name) || record.id;
+}
+
+/** Folder-relative artifact dir for a record, canon-normalized. */
+export function resolveRecordArtifactDir(record?: Pick<WorkspaceRecord, "artifactDir"> | null): string {
+  return normalizeArtifactDir(record?.artifactDir ?? DEFAULT_ARTIFACT_DIR);
+}
+
+/**
+ * Zone A root for one workspace: its registry `rootPath` when it has one, else
+ * `<sandboxBase>/<folderName>` (display name, not the id). Never a mount target
+ * — `LocalFilesystem.initialize()` creates the workspace sectors here.
  */
 export async function resolveWorkspaceLocalRoot(workspaceId?: string | null): Promise<string> {
   const sandboxBase = resolveSandboxBase();
@@ -123,7 +164,44 @@ export async function resolveWorkspaceLocalRoot(workspaceId?: string | null): Pr
   const record = await getWorkspaceRecord(workspaceId).catch(() => null);
   const rootPath = record?.rootPath?.trim();
   if (rootPath) return resolve(rootPath);
+  if (record) return resolveWorkspaceFolderPath(sandboxBase, resolveRecordFolderName(record));
   return join(sandboxBase, workspaceId);
+}
+
+/** Absolute folder a record owns (its `rootPath` when set, else derived). */
+export async function resolveWorkspaceFolder(workspaceId?: string | null): Promise<string | null> {
+  if (!workspaceId) return null;
+  const record = await getWorkspaceRecord(workspaceId).catch(() => null);
+  if (!record) return null;
+  const rootPath = record.rootPath?.trim();
+  if (rootPath) return resolve(rootPath);
+  return resolveWorkspaceFolderPath(resolveSandboxBase(), resolveRecordFolderName(record));
+}
+
+/**
+ * Rewrite a workspace's per-folder `workspace.json` copy.
+ *
+ * The global index is truth; this copy exists so the folder is self-contained
+ * and browsable. `rootPath` is stored as "." because the file lives in the
+ * folder it describes. Best-effort: a stalled filesystem must not fail a
+ * registry write, because the global index already holds the record.
+ */
+export async function writeWorkspaceFolderCopy(record: WorkspaceRecord): Promise<void> {
+  try {
+    const folder = record.rootPath?.trim()
+      ? resolve(record.rootPath)
+      : resolveWorkspaceFolderPath(resolveSandboxBase(), resolveRecordFolderName(record));
+    const copy: Record<string, unknown> = {
+      ...record,
+      folderName: resolveRecordFolderName(record),
+      artifactDir: resolveRecordArtifactDir(record),
+      rootPath: ".",
+    };
+    await fs.mkdir(folder, { recursive: true });
+    await fs.writeFile(join(folder, "workspace.json"), JSON.stringify(copy, null, 2), "utf8");
+  } catch {
+    // best-effort mirror; the global index remains truth
+  }
 }
 
 export function setRegistryFilePathForTests(filePath: string | null): void {
@@ -218,18 +296,32 @@ export async function tierContextFor(
 }
 
 export async function saveWorkspaceRecord(record: WorkspaceRecord): Promise<WorkspaceDescriptor> {
-  return withLock(async () => {
+  const saved = await withLock(async () => {
     const records = await readAllRaw();
-    const existingIndex = records.findIndex((w) => w.id === record.id);
+    const normalized: WorkspaceRecord = {
+      ...record,
+      folderName: resolveRecordFolderName(record),
+      artifactDir: resolveRecordArtifactDir(record),
+    };
+    const existingIndex = records.findIndex((w) => w.id === normalized.id);
+    let stored: WorkspaceRecord;
     if (existingIndex >= 0) {
-      records[existingIndex] = { ...record, updatedAt: new Date().toISOString() };
+      stored = { ...normalized, updatedAt: new Date().toISOString() };
+      records[existingIndex] = stored;
     } else {
-      records.push(record);
+      stored = normalized;
+      records.push(stored);
     }
     await writeAllRaw(records);
-    recordCache.delete(record.id);
-    return sanitizeWorkspaceRecord(record);
+    recordCache.delete(normalized.id);
+    // A new/changed record can change which folder a workspace resolves to,
+    // so the local-store path caches must not serve the previous answer.
+    invalidateWorkspacePathCaches();
+    // Canon: keep the folder copy in step with the global index.
+    await writeWorkspaceFolderCopy(stored);
+    return stored;
   });
+  return sanitizeWorkspaceRecord(saved);
 }
 
 export async function removeWorkspaceRecord(id: string): Promise<boolean> {
@@ -240,6 +332,7 @@ export async function removeWorkspaceRecord(id: string): Promise<boolean> {
     if (filtered.length === initialLen) return false;
     await writeAllRaw(filtered);
     recordCache.delete(id);
+    invalidateWorkspacePathCaches();
     return true;
   });
 }

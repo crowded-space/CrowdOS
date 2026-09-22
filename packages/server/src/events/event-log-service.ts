@@ -1,17 +1,23 @@
 // ─── Event Log service (§29 local event log + /api/events/recent) ──────
 // Two responsibilities, both thin over the local store:
 //
-//   1. recordBrokerEvent — the ONE append hook. Registered as a broker `onAny`
+//   1. recordBrokerEvent — the ONE append hook. Registered as a broker onAny
 //      subscriber at boot, so no producer call site ever appends by hand. The
-//      old durable_events design was the same shape (a single `onAny` fan-out
+//      old durable_events design was the same shape (a single onAny fan-out
 //      that classified and persisted); this is that intent minus PG.
 //
 //   2. listRecentEvents — the read behind GET /api/events/recent.
 //
+// Canon (mock-structure-polished): the log file lives inside the owning
+// workspace, so every call resolves the workspace id first. The event payload
+// already carries it when the producer knew it; a channel with no payload
+// workspaceId resolves through the channel row (a channel belongs to exactly one
+// workspace, so that lookup is authoritative, not a guess).
+//
 // Appends are best-effort: a failing log must never break live delivery or a
 // run, exactly like the retired fire-and-forget dual-write. The difference is
 // that the failure is now VISIBLE (console.warn + a counter) instead of being
-// swallowed by a `.catch(console.error)` deep in the socket bridge.
+// swallowed by a .catch(console.error) deep in the socket bridge.
 
 import type { BrokerEvent } from "../event-broker/event-broker-gate.js";
 import { appendNextEvent, listEventTail } from "./event-local-store.js";
@@ -21,6 +27,7 @@ import {
   resolveEventWorkspaceId,
   shouldLogEvent,
 } from "./event-classification.js";
+import { findWorkspaceIdForChannelLog, resolveWorkspaceIdForChannel } from "../shared/core/local-file.js";
 import type { EventLogRecord, ListRecentEventsOptions, RecentEventsResult } from "./event-log-types.js";
 
 /** Process-lifetime counters so dropped/failed appends are observable, not silent. */
@@ -35,6 +42,23 @@ export function resetEventLogStatsForTests(): void {
   eventLogStats.appended = 0;
   eventLogStats.skipped = 0;
   eventLogStats.failed = 0;
+}
+
+// Owning-workspace memo for channels whose events never carry a workspaceId.
+// §30: workspaceId is immutable after channel create, so a bounded memo is safe.
+const channelWorkspaceMemo = new Map<string, string | null>();
+
+async function workspaceOfChannel(channelId: string): Promise<string | null> {
+  const hit = channelWorkspaceMemo.get(channelId);
+  if (hit !== undefined) return hit;
+  // Row first (authoritative while the channel exists), then the log file
+  // itself (still resolves for an orphaned log or a row-less channel).
+  const ws =
+    (await resolveWorkspaceIdForChannel(channelId).catch(() => null)) ??
+    (await findWorkspaceIdForChannelLog("events", channelId).catch(() => null));
+  if (channelWorkspaceMemo.size > 5000) channelWorkspaceMemo.clear();
+  channelWorkspaceMemo.set(channelId, ws);
+  return ws;
 }
 
 /**
@@ -56,24 +80,29 @@ export async function recordBrokerEvent(
   const channelId = resolveEventChannelId(event)!;
   const timestamp = event.timestamp instanceof Date ? event.timestamp : new Date();
   try {
-    const record = await appendNextEvent(channelId, (seq) => ({
-      seq,
-      eventId: event.eventId,
-      type: event.type,
-      payload: event.payload,
-      createdAt: timestamp.toISOString(),
-      ts: timestamp.getTime(),
+    const workspaceId = resolveEventWorkspaceId(event.payload) ?? (await workspaceOfChannel(channelId));
+    const record = await appendNextEvent(
       channelId,
-      workspaceId: resolveEventWorkspaceId(event.payload),
-      agentId: resolveEventAgentId(event.payload),
-    }));
+      (seq) => ({
+        seq,
+        eventId: event.eventId,
+        type: event.type,
+        payload: event.payload,
+        createdAt: timestamp.toISOString(),
+        ts: timestamp.getTime(),
+        channelId,
+        workspaceId,
+        agentId: resolveEventAgentId(event.payload),
+      }),
+      workspaceId,
+    );
     eventLogStats.appended += 1;
     return record;
   } catch (err) {
     eventLogStats.failed += 1;
     // Never throws on the emit path: local log lag is a warning, not a failure.
     console.warn(
-      `[event-log] failed to append ${event.type} for channel ${channelId}: ` +
+      "[event-log] failed to append " + event.type + " for channel " + channelId + ": " +
         (err instanceof Error ? err.message : String(err)),
     );
     return null;
@@ -81,9 +110,9 @@ export async function recordBrokerEvent(
 }
 
 /**
- * Fire-and-forget wrapper for the broker subscriber. The broker's `onAny`
+ * Fire-and-forget wrapper for the broker subscriber. The broker's onAny
  * handler is synchronous, so the append is detached here and its rejection is
- * already handled inside `recordBrokerEvent`.
+ * already handled inside recordBrokerEvent.
  */
 export function recordBrokerEventDetached(
   event: Pick<BrokerEvent, "eventId" | "type" | "channelId" | "payload" | "timestamp">,
@@ -94,12 +123,14 @@ export function recordBrokerEventDetached(
 /**
  * Read the ascending event tail for a channel.
  *
- * Honest empty: an absent log answers `events: []` with `lastSeq: 0` — never a
+ * Honest empty: an absent log answers events: [] with lastSeq: 0 — never a
  * fabricated event, never an echoed request cursor pretending to be history.
  */
 export async function listRecentEvents(
   channelId: string,
   opts: ListRecentEventsOptions = {},
+  workspaceId?: string | null,
 ): Promise<RecentEventsResult> {
-  return listEventTail(channelId, opts);
+  const scope = workspaceId ?? (await workspaceOfChannel(channelId));
+  return listEventTail(channelId, opts, scope);
 }

@@ -1,0 +1,12 @@
+{
+  "id": "ws_be3cd9a7ac09",
+  "name": "CrowdOS Nightly",
+  "icon": "crow-cyan-radar",
+  "databaseUrl": "postgresql://postgres:<password>@localhost:5432/Nightly",
+  "rootPath": ".",
+  "mountPath": null,
+  "screenLockPinHash": "<scrypt-hash>",
+  "createdAt": "2026-09-15T15:35:27.121Z",
+  "updatedAt": "2026-09-21T11:58:32.470Z",
+  "storagePreference": "local"
+}

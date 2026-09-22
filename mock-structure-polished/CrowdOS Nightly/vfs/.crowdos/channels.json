@@ -1,0 +1,64 @@
+[
+  {
+    "id": "ch_general",
+    "categoryId": "cat_general",
+    "workspaceId": "ws_be3cd9a7ac09",
+    "name": "general",
+    "type": "standard",
+    "folderPath": null,
+    "createdBy": "system",
+    "position": 0,
+    "createdAt": "2026-09-20T09:25:29.127Z",
+    "archivedAt": null,
+    "archivedReason": null,
+    "fsMounts": {
+      "scope": "channel",
+      "mode": "inherit",
+      "mounts": []
+    }
+  },
+  {
+    "id": "ch_backend_dev",
+    "categoryId": "cat_backend",
+    "workspaceId": "ws_be3cd9a7ac09",
+    "name": "backend-dev",
+    "type": "standard",
+    "folderPath": null,
+    "createdBy": "system",
+    "position": 0,
+    "createdAt": "2026-09-20T09:25:29.127Z",
+    "archivedAt": null,
+    "archivedReason": null,
+    "fsMounts": {
+      "scope": "channel",
+      "mode": "inherit",
+      "mounts": []
+    }
+  },
+  {
+    "id": "ch_backend_exp",
+    "categoryId": "cat_backend",
+    "workspaceId": "ws_be3cd9a7ac09",
+    "name": "backend-experimental",
+    "type": "standard",
+    "folderPath": null,
+    "createdBy": "system",
+    "position": 1,
+    "createdAt": "2026-09-20T09:25:29.127Z",
+    "archivedAt": null,
+    "archivedReason": null,
+    "fsMounts": {
+      "scope": "channel",
+      "mode": "override",
+      "mounts": [
+        {
+          "id": "experimental-repo",
+          "source": "/repositories/backend-experimental",
+          "target": "/mnt/repository",
+          "type": "repository",
+          "readOnly": false
+        }
+      ]
+    }
+  }
+]

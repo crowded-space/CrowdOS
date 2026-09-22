@@ -26,7 +26,7 @@ import type { EventBroker } from "../event-broker/event-broker-gate.js";
 // ponytail: +1 indexed read per first-seen channel per process.
 const channelWorkspaceCache = new Map<string, string | null>();
 
-async function workspaceOfChannel(channelId: string): Promise<string | null> {
+export async function workspaceOfChannel(channelId: string): Promise<string | null> {
   const hit = channelWorkspaceCache.get(channelId);
   if (hit !== undefined) return hit;
   const ch = await channelGate.get(channelId).catch(() => null);
@@ -51,15 +51,19 @@ const seqFloored = new Set<string>();
  * if the replica is unreachable the local tier simply proceeds — the outbox
  * replay is idempotent (insert-ignore by id) so a collision cannot lose a row.
  */
-async function floorLocalSequenceFromReplica(seqKey: string, input: AppendMessageInput): Promise<void> {
-  const current = await localAllocateSequence(seqKey, 0);
+async function floorLocalSequenceFromReplica(
+  seqKey: string,
+  input: AppendMessageInput,
+  workspaceId: string | null,
+): Promise<void> {
+  const current = await localAllocateSequence(seqKey, 0, false, workspaceId);
   if (current > 0) return;
   try {
     const head = input.threadId
       ? await getDb().select({ max: sql<number>`coalesce(max(${messages.sequenceNumber}), 0)` }).from(messages).where(eq(messages.threadId, input.threadId))
       : await getDb().select({ max: sql<number>`coalesce(max(${messages.sequenceNumber}), 0)` }).from(messages).where(eq(messages.channelId, input.channelId));
     const max = Number((head[0] as any)?.max ?? 0);
-    if (max > 0) await localFloorSequence(seqKey, max);
+    if (max > 0) await localFloorSequence(seqKey, max, workspaceId);
   } catch {
     // Replica unreachable: local numbering starts fresh. Replay is idempotent.
   }
@@ -276,7 +280,7 @@ export async function listRecentMessages(channelId: string, limit: number, dbOve
         limit,
       });
     },
-    () => localListRawMessages(channelId, { limit }),
+    async () => localListRawMessages(channelId, { limit, workspaceId: await workspaceOfChannel(channelId) }),
   );
 }
 
@@ -307,7 +311,12 @@ export async function getChannelMessagesPage(
   const rows = await withStoreFallback(
     ctx,
     async () => fetchPg(getDb()),
-    () => localListRawMessages(channelId, { limit: limit + 1, before: opts.before }),
+    async () =>
+      localListRawMessages(channelId, {
+        limit: limit + 1,
+        before: opts.before,
+        workspaceId: await workspaceOfChannel(channelId),
+      }),
   );
   return assemblePage(rows, limit, channelId);
 }
@@ -395,15 +404,18 @@ export async function appendMessage(input: AppendMessageInput, opts: AppendMessa
   };
 
   const writeLocal = async (sequenceNumber: number, workspaceId: string | null) =>
-    localAppendMessage({
-      ...baseRow,
+    localAppendMessage(
+      {
+        ...baseRow,
+        workspaceId,
+        mentions: (input.mentions ?? []) as unknown[],
+        metadata: (input.metadata ?? null) as Record<string, unknown> | null,
+        toolCalls: (input.toolCalls ?? null) as unknown[] | null,
+        sequenceNumber,
+        timestamp: timestamp.toISOString(),
+      },
       workspaceId,
-      mentions: (input.mentions ?? []) as unknown[],
-      metadata: (input.metadata ?? null) as Record<string, unknown> | null,
-      toolCalls: (input.toolCalls ?? null) as unknown[] | null,
-      sequenceNumber,
-      timestamp: timestamp.toISOString(),
-    });
+    );
 
   const queueForBackfill = async (sequenceNumber: number, workspaceId: string | null) => {
     await appendOutbox({
@@ -445,10 +457,10 @@ export async function appendMessage(input: AppendMessageInput, opts: AppendMessa
   // (channel|thread) per process; afterwards the local counter is authoritative
   // and this costs nothing.
   if (!seqFloored.has(seqKey)) {
-    await floorLocalSequenceFromReplica(seqKey, input);
+    await floorLocalSequenceFromReplica(seqKey, input, workspaceId);
     seqFloored.add(seqKey);
   }
-  const sequenceNumber = await localAllocateSequence(seqKey, 1);
+  const sequenceNumber = await localAllocateSequence(seqKey, 1, false, workspaceId);
   await writeLocal(sequenceNumber, workspaceId);
   // The file row is normalized for JSON storage (absent => null); the value
   // returned to callers and emitted on `message:new` keeps the caller’s shape

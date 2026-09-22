@@ -27,7 +27,28 @@ import {
   tierContextFor,
   resolveSandboxBase,
   resolveWorkspaceLocalRoot,
+  resolveWorkspaceFolder,
+  resolveRecordFolderName,
+  resolveRecordArtifactDir,
+  writeWorkspaceFolderCopy,
 } from "./workspace-registry.js";
+import {
+  DEFAULT_ARTIFACT_DIR,
+  normalizeArtifactDir,
+  resolveAgentsDir,
+  resolveArtifactsDir,
+  resolveCrowdosDir,
+  resolveSrcDir,
+  resolveVfsDir,
+  resolveWorkspaceFolderPath,
+  sanitizeWorkspaceFolderName,
+  toFolderRelative,
+} from "./workspace-paths.js";
+import {
+  defaultWorkspaceRuntimeConfig,
+  readWorkspaceRuntimeConfig,
+  writeWorkspaceRuntimeConfig,
+} from "./workspace-runtime.js";
 import {
   getScreenLockStatus,
   getWorkspacePinHash,
@@ -55,6 +76,13 @@ export type {
   DbSyncState,
   DbSyncInfo,
 } from "./workspace-registry.js";
+export type {
+  WorkspaceRuntimeConfig,
+  WorkspacePermissions as WorkspaceRuntimePermissions,
+  RuntimeConstraints as WorkspaceRuntimeConstraints,
+  WorkspaceFsMount,
+  WorkspaceFsMounts,
+} from "./workspace-runtime.js";
 
 export {
   getWorkspaceDb,
@@ -82,6 +110,23 @@ export {
   tierContextFor,
   resolveSandboxBase,
   resolveWorkspaceLocalRoot,
+  resolveWorkspaceFolder,
+  resolveRecordFolderName,
+  resolveRecordArtifactDir,
+  writeWorkspaceFolderCopy,
+  DEFAULT_ARTIFACT_DIR,
+  normalizeArtifactDir,
+  resolveAgentsDir,
+  resolveArtifactsDir,
+  resolveCrowdosDir,
+  resolveSrcDir,
+  resolveVfsDir,
+  resolveWorkspaceFolderPath,
+  sanitizeWorkspaceFolderName,
+  toFolderRelative,
+  defaultWorkspaceRuntimeConfig,
+  readWorkspaceRuntimeConfig,
+  writeWorkspaceRuntimeConfig,
   getScreenLockStatus,
   getWorkspacePinHash,
   setScreenLockPin,

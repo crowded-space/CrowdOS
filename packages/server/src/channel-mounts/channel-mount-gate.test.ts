@@ -19,7 +19,7 @@ const CHANNEL_REPO = join(TEST_HOME, "repo-channel");
 
 import { channelMountGate } from "./channel-mount-gate.js";
 import { setRegistryFilePathForTests } from "../workspace/workspace-registry.js";
-import { setLocalStoreDirForTests } from "../shared/core/local-file.js";
+import { localStoreDirsForTests, setLocalStoreDirForTests } from "../shared/core/local-file.js";
 import { channelMountRoutes } from "../routes/channel-mounts.js";
 import { filesystemRoutes } from "../routes/filesystem.js";
 import { validatorCompiler } from "../shared/core/validation.js";
@@ -37,8 +37,11 @@ function samePath(a: string, b: string): boolean {
 }
 
 function writeJson(name: string, rows: Row[]): void {
-  mkdirSync(TEST_LOCALSTORE, { recursive: true });
-  writeFileSync(join(TEST_LOCALSTORE, name), JSON.stringify(rows, null, 2), "utf8");
+  // Canon: categories/channels live at <workspaceFolder>/vfs/.crowdos/. An
+  // unscoped row belongs to the documented "default" workspace folder.
+  const crowdos = localStoreDirsForTests().crowdos;
+  mkdirSync(crowdos, { recursive: true });
+  writeFileSync(join(crowdos, name), JSON.stringify(rows, null, 2), "utf8");
 }
 
 function writeWorkspaces(records: Row[]): void {
@@ -98,11 +101,13 @@ describe("channelMountGate", () => {
     // platform (tmpdir is NOT under $HOME on Linux/macOS) while leaving the
     // developer's real machine layout untouched.
     process.env.WORKSPACE_DIR = TEST_ROOT;
+    // Store scope FIRST: the canon layout is derived from it, so the fixture
+    // writes below must resolve against TEST_ROOT rather than the real sandbox.
+    setLocalStoreDirForTests(TEST_LOCALSTORE);
     writeWorkspaces([]);
     writeJson("categories.json", []);
     writeJson("channels.json", []);
     setRegistryFilePathForTests(TEST_REGISTRY);
-    setLocalStoreDirForTests(TEST_LOCALSTORE);
   });
 
   afterEach(() => {
@@ -193,6 +198,33 @@ describe("channelMountGate", () => {
       const res = await channelMountGate.validate(REPO_DIR, "ws-narrow");
       expect(res.valid).toBe(false);
       expect(res.error).toBe(`Path outside allowed roots: ${TEST_SANDBOX}`);
+    });
+
+    it("refuses the workspace config sandbox (vfs/) even inside the jail", async () => {
+      // Canon: vfs/ is the workspace's own runtime state, never a mount target.
+      const workspaceFolder = join(TEST_SANDBOX, "CrowdOS Nightly");
+      const vfs = join(workspaceFolder, "vfs");
+      const artifacts = join(vfs, "artifacts");
+      mkdirSync(join(vfs, ".crowdos"), { recursive: true });
+      mkdirSync(artifacts, { recursive: true });
+      writeWorkspaces([workspaceRecord("ws-vfs", { allowedMountRoots: [TEST_SANDBOX] })]);
+      setRegistryFilePathForTests(TEST_REGISTRY);
+
+      for (const target of [vfs, artifacts]) {
+        const res = await channelMountGate.validate(target, "ws-vfs");
+        expect(res.valid).toBe(false);
+        expect(res.error).toContain("workspace config sandbox");
+      }
+    });
+
+    it("still mounts a normal folder that merely has a vfs-named sibling", async () => {
+      // A user repository may contain a directory called vfs/; without the
+      // workspace marker (vfs/.crowdos or a sibling workspace.json) it is
+      // ordinary content and stays mountable.
+      const plain = join(TEST_HOME, "plain-vfs");
+      mkdirSync(join(plain, "vfs"), { recursive: true });
+      const res = await channelMountGate.validate(join(plain, "vfs"));
+      expect(res.valid).toBe(true);
     });
   });
 

@@ -1,21 +1,106 @@
 import { randomUUID } from "node:crypto";
+import { promises as fs } from "node:fs";
+import { join } from "node:path";
 import { eq, desc, lt, and, sql } from "drizzle-orm";
 import { getDb } from "../shared/config/database.js";
 import { artifacts } from "../db/schema.js";
+// Gate-only: the Workspace domain exposes the artifact-dir resolution ports, so
+// Artifacts never reaches past its facade (Domain Facade Standard §2).
+import {
+  getWorkspaceRecord,
+  resolveArtifactsDir,
+  resolveRecordArtifactDir,
+  resolveWorkspaceFolder,
+  toFolderRelative,
+} from "../workspace/workspace-gate.js";
 import type { CreateArtifactInput, ArtifactRow } from "./artifact-types.js";
+
+// ─── Artifacts repository (canon: workspace artifactDir) ───────────────
+// Generated artifacts are plain FILES under the workspace own artifactDir:
+//
+//   <workspaceFolder>/vfs/artifacts/<runId>/<artifactId>.<ext>
+//
+// The DB row keeps the FOLDER-RELATIVE path ("vfs/artifacts/<runId>/<file>"), so
+// the record stays valid if the workspace folder moves, and the panel resolves
+// it against whichever root it is showing. Generation never writes outside the
+// workspace folder: artifactDir is normalized to a folder-relative path first.
+
+/** Extension for an artifact body, derived from its type. */
+function extensionFor(type: string, explicitPath?: string | null): string {
+  if (explicitPath) {
+    const match = /\.([A-Za-z0-9]+)$/.exec(explicitPath);
+    if (match) return match[1].toLowerCase();
+  }
+  switch (type) {
+    case "report":
+    case "analysis_report":
+      return "md";
+    case "diff":
+      return "patch";
+    case "execution_log":
+    case "reasoning_trace":
+      return "jsonl";
+    case "runtime_snapshot":
+    case "citations":
+      return "json";
+    case "generated_component":
+      return "ts";
+    default:
+      return "txt";
+  }
+}
+
+/** Body worth persisting for a file-backed artifact, or null when there is none. */
+function artifactBody(input: CreateArtifactInput): string | null {
+  if (typeof input.contentRef === "string" && input.contentRef.length > 0) return input.contentRef;
+  if (typeof input.patch === "string" && input.patch.length > 0) return input.patch;
+  return null;
+}
+
+/**
+ * Persist an artifact body to the workspace artifactDir. Best-effort: a
+ * filesystem failure must not fail artifact creation, because the DB row is
+ * still a valid pointer (the panel reports a missing file honestly).
+ *
+ * Returns the folder-relative path that was written, or null when there was no
+ * body to write or the write failed.
+ */
+export async function writeArtifactFile(input: CreateArtifactInput, artifactId: string): Promise<string | null> {
+  const body = artifactBody(input);
+  if (body === null) return null;
+  try {
+    const folder = await resolveWorkspaceFolder(input.workspaceId);
+    if (!folder) return null;
+    const record = await getWorkspaceRecord(input.workspaceId).catch(() => null);
+    const artifactDir = resolveRecordArtifactDir(record);
+    const runSegment = input.runId ? String(input.runId) : "unscoped";
+    const dir = join(resolveArtifactsDir(folder, artifactDir), runSegment);
+    await fs.mkdir(dir, { recursive: true });
+    const file = join(dir, artifactId + "." + extensionFor(input.type, input.path));
+    await fs.writeFile(file, body, "utf8");
+    return toFolderRelative(file, folder);
+  } catch {
+    return null;
+  }
+}
 
 export async function createArtifact(input: CreateArtifactInput): Promise<ArtifactRow> {
   const db = getDb();
-  const id = `art_${randomUUID().slice(0, 8)}_${Date.now().toString(36)}`;
+  const id = "art_" + randomUUID().slice(0, 8) + "_" + Date.now().toString(36);
   const now = new Date();
+  // Canon: generation defaults to the workspace artifactDir. An explicit
+  // input.path is respected as the stored reference, but the body still lands in
+  // the workspace own artifact folder (never in a user repository).
+  const written = await writeArtifactFile(input, id);
+  const storedPath = written ?? input.path ?? null;
   const [row] = await db.insert(artifacts).values({
     id,
     workspaceId: input.workspaceId,
     producerAgent: input.producerAgent,
     artifactType: input.type as any,
-    path: input.path ?? null,
+    path: storedPath,
     semanticTags: input.semanticTags ?? [],
-    metadata: input.metadata ?? {},
+    metadata: written ? { ...(input.metadata ?? {}), artifactPath: written } : (input.metadata ?? {}),
     createdAt: now,
     runId: input.runId ?? null,
     beforeHash: input.beforeHash ?? null,
@@ -24,7 +109,7 @@ export async function createArtifact(input: CreateArtifactInput): Promise<Artifa
     contentRef: input.contentRef ?? null,
   }).returning();
   const created = row as unknown as ArtifactRow;
-  // SCL-3/ART-1: emit artifact events for observability & client sync (CTX-1 phantom handler fix)
+  // SCL-3/ART-1: emit artifact events for observability and client sync (CTX-1 phantom handler fix)
   // Explicit literal emits so check-events regex can detect them.
   try {
     // Shared instance: a fresh EventBroker would reach no subscriber.
@@ -107,7 +192,7 @@ export async function runArtifactRetentionSweep(now: Date = new Date()): Promise
   const cutoff = new Date(now.getTime() - retentionDays * DAY_MS);
   const purged = await purgeExpiredArtifacts(cutoff);
   if (purged > 0) {
-    console.log(`[ArtifactRetention] Purged ${purged} artifacts created before ${cutoff.toISOString()} (retention ${retentionDays}d). Workspace-cascade also applies.`);
+    console.log("[ArtifactRetention] Purged " + purged + " artifacts created before " + cutoff.toISOString() + " (retention " + retentionDays + "d). Workspace-cascade also applies.");
   }
   return { purged };
 }

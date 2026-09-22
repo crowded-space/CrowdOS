@@ -10,7 +10,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { setLocalStoreDirForTests } from "../shared/core/local-file.js";
+import { localStoreDirsForTests, setLocalStoreDirForTests } from "../shared/core/local-file.js";
 import { env } from "../shared/config/env.js";
 
 const prevDatabaseUrl = env.DATABASE_URL;
@@ -141,7 +141,10 @@ describe("§29 event log · end-to-end local turn", () => {
     expect(types).toContain("message:new");
     expect(body.lastSeq).toBeGreaterThan(0);
     // The log is the channel's own file, not a shared bucket.
-    expect(existsSync(join(dir, "events", `${channelId}.jsonl`))).toBe(true);
+    // Canon: the log lives inside the owning workspace's vfs/.crowdos/events/.
+    expect(
+      existsSync(join(localStoreDirsForTests("ws-events").crowdos, "events", `${channelId}.jsonl`)),
+    ).toBe(true);
     // Ephemeral streaming never lands, even though the turn streamed.
     expect(types).not.toContain("message:stream");
 
@@ -194,7 +197,10 @@ describe("§29 event log · end-to-end local turn", () => {
     const body = await waitForEvents(channelId, 3);
     expect(body.events.map((e: any) => e.seq)).toEqual([1, 2, 3]);
 
-    const raw = readFileSync(join(dir, "events", `${channelId}.jsonl`), "utf8");
+    const raw = readFileSync(
+      join(localStoreDirsForTests("ws-events-2").crowdos, "events", `${channelId}.jsonl`),
+      "utf8",
+    );
     expect(raw.endsWith("\n")).toBe(true);
     const lines = raw.trim().split("\n");
     expect(lines).toHaveLength(3);

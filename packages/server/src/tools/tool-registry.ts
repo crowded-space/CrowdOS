@@ -1092,7 +1092,10 @@ export class ToolRegistry {
           }
 
           if (!capabilityId) {
-            const visible = await capabilitiesGate.visibleFor(agentId);
+            // Canon: the manifest overlay is per workspace, so discovery must be
+            // scoped to the caller's workspace or it reads another workspace's
+            // vocabulary (and a disabled capability could reappear).
+            const visible = await capabilitiesGate.visibleFor(agentId, ctx?.workspaceId ?? null);
             if (visible.length === 0) {
               return { success: true, output: "No capabilities are available to you in this context." };
             }
@@ -1110,7 +1113,7 @@ export class ToolRegistry {
             return { success: true, output: lines.join("\n") };
           }
 
-          const expanded = await capabilitiesGate.expand(agentId, capabilityId);
+          const expanded = await capabilitiesGate.expand(agentId, capabilityId, ctx?.workspaceId ?? null);
           if (!expanded) {
             return {
               success: false,
@@ -1179,13 +1182,16 @@ export class ToolRegistry {
         required: [],
       },
       dangerLevel: "safe",
-      handler: async (args) => {
+      handler: async (args, ctx) => {
         try {
           const { skillsGate } = await import("../skills/skills-gate.js");
           const raw = typeof args?.skill_id === "string" ? args.skill_id.trim() : "";
+          // Canon: skills live inside the owning workspace folder, so discovery
+          // and expansion are scoped to the caller's workspace.
+          const workspaceId = ctx?.workspaceId ?? null;
 
           if (!raw) {
-            const summaries = await skillsGate.listMarkdownSummaries();
+            const summaries = await skillsGate.listMarkdownSummaries({ workspaceId });
             if (summaries.length === 0) {
               return { success: true, output: "No Markdown skills are installed in this workspace." };
             }
@@ -1198,14 +1204,14 @@ export class ToolRegistry {
 
           const ids = raw.split(",").map((s) => s.trim()).filter(Boolean);
           if (ids.length === 1) {
-            const skill = await skillsGate.getMarkdownSkill(ids[0]);
+            const skill = await skillsGate.getMarkdownSkill(ids[0], workspaceId);
             if (!skill) {
               return { success: false, output: "", error: `No enabled skill with id "${ids[0]}". Call load_skill with no skill_id to list what is installed.` };
             }
             return { success: true, output: `# Skill: ${skill.name} (${skill.category})\n\n${skill.body}` };
           }
 
-          const composed = await skillsGate.composeMarkdownSkills(ids);
+          const composed = await skillsGate.composeMarkdownSkills(ids, workspaceId);
           if (composed.resolved.length === 0) {
             return { success: false, output: "", error: `None of the requested skills exist: ${composed.missing.join(", ")}.` };
           }

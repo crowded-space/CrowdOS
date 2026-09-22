@@ -41,7 +41,9 @@ export class ToolSchemaMiddleware implements IContextMiddleware {
   readonly priority = 40;
 
   async process(packet: MutableContextPacket, ctx: ContextBuildContext): Promise<void> {
-    const { agent, runtimeType } = ctx;
+    // Canon: the capability manifest overlay is per workspace, so discovery is
+    // scoped to the workspace this turn belongs to.
+    const { agent, runtimeType, workspaceId } = ctx;
 
     const requiresTools = ["agentic", "coding", "research", "swarm"].includes(runtimeType);
 
@@ -126,7 +128,7 @@ export class ToolSchemaMiddleware implements IContextMiddleware {
     // construction. Same pattern the agentic runtime uses for runs-gate.
     try {
       const { capabilitiesGate } = await import("../../../capabilities/capabilities-gate.js");
-      packet.visibleCapabilities = await capabilitiesGate.visibleFor(agent.id);
+      packet.visibleCapabilities = await capabilitiesGate.visibleFor(agent.id, workspaceId ?? null);
     } catch {
       packet.visibleCapabilities = [];
     }

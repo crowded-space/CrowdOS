@@ -125,6 +125,27 @@ describe("tier resolution matrix", () => {
     expect(isConnectionError(Object.assign(new Error("NO_DATABASE: workspace ws-1 has no databaseUrl"), { code: "NO_DATABASE" }))).toBe(true);
     expect(isConnectionError(Object.assign(new Error("null value in column"), { code: "23502" }))).toBe(false);
     expect(isConnectionError(new Error("boom"))).toBe(false);
+    // Drizzle wraps driver failures: the real code sits on `cause`, and the
+    // wrapper carries no code of its own. Inspecting only the top level
+    // misclassified every wrapped outage as a logic error.
+    expect(
+      isConnectionError(
+        Object.assign(new Error("Failed query: select 1"), {
+          cause: Object.assign(new Error("connect ECONNREFUSED 127.0.0.1:5432"), { code: "ECONNREFUSED" }),
+        }),
+      ),
+    ).toBe(true);
+    expect(
+      isConnectionError(
+        Object.assign(new Error("Failed query: select 1"), {
+          cause: Object.assign(new Error("null value in column"), { code: "23502" }),
+        }),
+      ),
+    ).toBe(false);
+    // Bounded walk: a self-referential chain must terminate, not spin.
+    const looped: { message: string; cause?: unknown } = { message: "looped" };
+    looped.cause = looped;
+    expect(isConnectionError(looped)).toBe(false);
   });
 });
 

@@ -32,10 +32,19 @@ import { agentGate } from "../../agents/agent-gate.js";
 import { globalBroker } from "../sockets/register-socket-server.js";
 import { LibrarianRuntime } from "./librarian-runtime.js";
 import { agents, categories, channelSequences, channels, messages, workspaces } from "../../db/schema.js";
-import { mutateJsonArray, mutateJsonObject, readJsonArray, readJsonl, resolveLocalStoreDir } from "./local-file.js";
+import {
+  mutateJsonArray,
+  mutateJsonObject,
+  readJsonArray,
+  readJsonl,
+  resolveLocalStoreDir,
+  writeJsonFile,
+  deleteFile,
+} from "./local-file.js";
+import { resolveWorkspaceAgentsDir } from "./local-file.js";
 import { readOutbox, removeOutboxIds, type OutboxEntry } from "./outbox.js";
 import type { LocalChannelRow, LocalCategoryRow } from "../../channels/channel-local-store.js";
-import type { LocalAgentRow } from "../../agents/agent-local-store.js";
+import { localListAgentRows, type LocalAgentRow } from "../../agents/agent-local-store.js";
 import type { LocalMessageRow } from "../../messages/message-local-store.js";
 
 export interface PairingResult {
@@ -63,8 +72,8 @@ export async function localWorkspaceContent(workspaceId: string): Promise<{
   messages: number;
 }> {
   const [chans, ags] = await Promise.all([
-    readJsonArray<LocalChannelRow>("channels.json").catch(() => []),
-    readJsonArray<LocalAgentRow>("agents.json").catch(() => []),
+    readJsonArray<LocalChannelRow>("channels.json", workspaceId).catch(() => []),
+    localListAgentRows(workspaceId).catch(() => []),
   ]);
   const ownChannels = chans.filter((c) => (c.workspaceId ?? "default") === workspaceId);
   // Isolation: scoped roster per workspace; legacy null rows belong to default.
@@ -72,7 +81,7 @@ export async function localWorkspaceContent(workspaceId: string): Promise<{
   let messageCount = 0;
   for (const ch of ownChannels) {
     try {
-      const rows = await readJsonl(ch.id);
+      const rows = await readJsonl(ch.id, workspaceId);
       messageCount += rows.length;
       if (messageCount > 0) break;
     } catch {
@@ -202,7 +211,7 @@ export async function pushWorkspaceToDb(workspaceId: string, opts: { pruneExtras
   const db = await tenantDb(workspaceId);
   const counts = { categories: 0, channels: 0, agents: 0, messages: 0 };
 
-  const allCats = (await readJsonArray<LocalCategoryRow>("categories.json").catch(() => []))
+  const allCats = (await readJsonArray<LocalCategoryRow>("categories.json", workspaceId).catch(() => []))
     .filter((c) => (c.workspaceId ?? "default") === workspaceId);
   for (const c of allCats) {
     const row = reviveDates({ ...c }, ["createdAt"]);
@@ -215,7 +224,7 @@ export async function pushWorkspaceToDb(workspaceId: string, opts: { pruneExtras
 
   // Isolation: push only this workspace's roster slice (scoped + legacy
   // null rows owned by default). Never push the whole global file.
-  const allAgents = (await readJsonArray<LocalAgentRow>("agents.json").catch(() => []))
+  const allAgents = (await localListAgentRows(workspaceId).catch(() => []))
     .filter((a) => !a.isTemplate && ((a.workspaceId ?? "default") === workspaceId));
   for (const a of allAgents) {
     const row = reviveDates({ ...a }, ["createdAt", "updatedAt", "archivedAt"]);
@@ -226,7 +235,7 @@ export async function pushWorkspaceToDb(workspaceId: string, opts: { pruneExtras
     counts.agents++;
   }
 
-  const allChannels = (await readJsonArray<LocalChannelRow>("channels.json").catch(() => []))
+  const allChannels = (await readJsonArray<LocalChannelRow>("channels.json", workspaceId).catch(() => []))
     .filter((c) => (c.workspaceId ?? "default") === workspaceId);
   for (const c of allChannels) {
     const row = reviveDates({ ...c }, ["createdAt", "archivedAt"]);
@@ -238,7 +247,7 @@ export async function pushWorkspaceToDb(workspaceId: string, opts: { pruneExtras
   }
 
   for (const c of allChannels) {
-    const localRows = (await readJsonl(c.id).catch(() => [])) as unknown as LocalMessageRow[];
+    const localRows = (await readJsonl(c.id, workspaceId).catch(() => [])) as unknown as LocalMessageRow[];
     if (opts.pruneExtras) {
       await (db as any).delete(messages).where(eq(messages.channelId, c.id));
     }
@@ -284,16 +293,19 @@ export async function pullWorkspaceFromDb(workspaceId: string, opts: { force?: b
     }));
     counts.categories = pulled.length;
     return [...rest, ...pulled];
-  });
+  }, workspaceId);
 
   // Isolation: pull only this workspace's slice + legacy-global rows.
   const dbAgents = (await (db as any).query.agents.findMany({}).catch(() => []))
     .filter((a: any) => (a.workspaceId ?? null) === null || a.workspaceId === workspaceId);
-  await mutateJsonArray<LocalAgentRow>("agents.json", (rows) => {
-    const byId = new Map(rows.map((r) => [r.id, r]));
+  // Canon: the roster is one file per agent under vfs/agents, so a pull writes
+  // each missing agent individually rather than rewriting one shared array.
+  {
+    const existing = await localListAgentRows(workspaceId).catch(() => [] as LocalAgentRow[]);
+    const byId = new Map(existing.map((r) => [r.id, r]));
     for (const a of dbAgents) {
       if (byId.has(a.id)) continue;
-      byId.set(a.id, {
+      const row: LocalAgentRow = {
         id: a.id, workspaceId: a.workspaceId ?? null,
         name: a.name, title: a.title, species: a.species ?? undefined,
         avatar: a.avatar ?? undefined, authorityLevel: a.authorityLevel,
@@ -309,11 +321,13 @@ export async function pullWorkspaceFromDb(workspaceId: string, opts: { force?: b
         archivedReason: a.archivedReason ?? null,
         contextTokenCap: (a as any).contextTokenCap ?? null,
         createdAt: new Date(a.createdAt).toISOString(), updatedAt: new Date(a.updatedAt).toISOString(),
-      });
+      };
+      const file = join(resolveWorkspaceAgentsDir(workspaceId), row.id.replace(/[^A-Za-z0-9_-]/g, "_") + ".json");
+      await writeJsonFile(file, row);
+      byId.set(row.id, row);
       counts.agents++;
     }
-    return [...byId.values()];
-  });
+  }
 
   const dbChannels = await (db as any).query.channels.findMany({
     where: eq(channels.workspaceId, workspaceId),
@@ -330,14 +344,14 @@ export async function pullWorkspaceFromDb(workspaceId: string, opts: { force?: b
     }));
     counts.channels = pulled.length;
     return [...rest, ...pulled];
-  });
+  }, workspaceId);
 
   for (const c of dbChannels) {
     const pgRows = await (db as any).query.messages.findMany({
       where: eq(messages.channelId, c.id),
       orderBy: (t: any, { asc }: any) => [asc(t.sequenceNumber)],
     }).catch(() => []);
-    const dir = join(resolveLocalStoreDir(), "messages");
+    const dir = join(resolveLocalStoreDir(workspaceId), "messages");
     await fs.mkdir(dir, { recursive: true });
     const lines = pgRows.map((m: any) =>
       JSON.stringify({
@@ -354,7 +368,7 @@ export async function pullWorkspaceFromDb(workspaceId: string, opts: { force?: b
       await mutateJsonObject<number>("sequences.json", (obj) => {
         const key = `ch:${c.id}`;
         obj[key] = Math.max(typeof obj[key] === "number" ? (obj[key] as number) : 0, maxSeq);
-      });
+      }, workspaceId);
     }
   }
   return counts;
@@ -507,19 +521,25 @@ export async function outboxBacklog(workspaceId: string): Promise<number> {
 
 async function snapshotLocalWorkspace(workspaceId: string): Promise<string> {
   const ts = new Date().toISOString().replace(/[:.]/g, "-");
-  const snapDir = join(resolveLocalStoreDir(), ".snapshots", `${workspaceId}-${ts}`);
+  const snapDir = join(resolveLocalStoreDir(workspaceId), "snapshots", `${workspaceId}-${ts}`);
   await fs.mkdir(snapDir, { recursive: true });
-  for (const name of ["categories.json", "channels.json", "agents.json", "sequences.json", "outbox.jsonl"]) {
+  for (const name of ["categories.json", "channels.json", "sequences.json", "channel-settings.json"]) {
     try {
-      await fs.copyFile(join(resolveLocalStoreDir(), name), join(snapDir, name));
+      await fs.copyFile(join(resolveLocalStoreDir(workspaceId), name), join(snapDir, name));
     } catch {
       // missing file — nothing to snapshot
     }
   }
   try {
-    await fs.cp(join(resolveLocalStoreDir(), "messages"), join(snapDir, "messages"), { recursive: true });
+    await fs.cp(join(resolveLocalStoreDir(workspaceId), "messages"), join(snapDir, "messages"), { recursive: true });
   } catch {
     // no message logs — nothing to snapshot
+  }
+  // Canon: the roster is one file per agent, so snapshot the whole agents dir.
+  try {
+    await fs.cp(resolveWorkspaceAgentsDir(workspaceId), join(snapDir, "agents"), { recursive: true });
+  } catch {
+    // no agents — nothing to snapshot
   }
   return snapDir;
 }
@@ -527,7 +547,7 @@ async function snapshotLocalWorkspace(workspaceId: string): Promise<string> {
 /** Wipe one workspace's local rows (channels/categories/messages/counters/outbox). */
 export async function clearWorkspaceLocalData(workspaceId: string): Promise<void> {
   await mutateJsonArray<LocalCategoryRow>("categories.json", (rows) =>
-    rows.filter((r) => (r.workspaceId ?? "default") !== workspaceId));
+    rows.filter((r) => (r.workspaceId ?? "default") !== workspaceId), workspaceId);
   const removedChannelIds: string[] = [];
   await mutateJsonArray<LocalChannelRow>("channels.json", (rows) => {
     const kept = rows.filter((r) => {
@@ -538,20 +558,29 @@ export async function clearWorkspaceLocalData(workspaceId: string): Promise<void
       return true;
     });
     return kept;
-  });
+  }, workspaceId);
   // Isolation: wipe only this workspace's scoped agents; legacy-global
   // (null workspaceId) rows survive — they belong to every workspace.
-  await mutateJsonArray<LocalAgentRow>("agents.json", (rows) =>
-    rows.filter((r) => (r.workspaceId ?? null) === null || (r.workspaceId ?? "default") !== workspaceId));
+  // Canon: the roster is one file per agent, so scoped rows are deleted file by
+  // file; legacy-global rows (no workspaceId) are left in place.
+  {
+    const rows = await localListAgentRows(workspaceId).catch(() => [] as LocalAgentRow[]);
+    for (const row of rows) {
+      if ((row.workspaceId ?? null) === null) continue;
+      if ((row.workspaceId ?? "default") !== workspaceId) continue;
+      const file = join(resolveWorkspaceAgentsDir(workspaceId), row.id.replace(/[^A-Za-z0-9_-]/g, "_") + ".json");
+      await deleteFile(file).catch(() => {});
+    }
+  }
   for (const cid of removedChannelIds) {
     try {
-      await fs.unlink(join(resolveLocalStoreDir(), "messages", `${cid.replace(/[^A-Za-z0-9_-]/g, "_")}.jsonl`));
+      await fs.unlink(join(resolveLocalStoreDir(workspaceId), "messages", `${cid.replace(/[^A-Za-z0-9_-]/g, "_")}.jsonl`));
     } catch {
       // already gone
     }
     await mutateJsonObject<number>("sequences.json", (obj) => {
       delete obj[`ch:${cid}`];
-    }).catch(() => {});
+    }, workspaceId).catch(() => {});
   }
   await clearWorkspaceOutbox(workspaceId);
 }
@@ -603,7 +632,7 @@ export async function rebuildWorkspaceRag(workspaceId: string): Promise<{
   const librarian = await agentGate.getById("agent-librarian").catch(() => null);
   if (!librarian) return { ok: false, indexed: 0, failed: 0, memories: "deferred", reason: "no librarian agent row" };
   const runtime = new LibrarianRuntime();
-  const chans = (await readJsonArray<LocalChannelRow>("channels.json").catch(() => []))
+  const chans = (await readJsonArray<LocalChannelRow>("channels.json", workspaceId).catch(() => []))
     .filter((c) => (c.workspaceId ?? "default") === workspaceId);
   // In dual mode the channel list lives in PG — merge both tiers by id.
   let targets = chans;

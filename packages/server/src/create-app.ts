@@ -13,7 +13,15 @@ import { registerRateLimit } from "./routes/rate-limit.js";
 import { registerSocketServer } from "./shared/sockets/register-socket-server.js";
 import { initRuntime } from "./runtime/runtime-gate.js";
 import { runWithDb, closeDatabaseConnection } from "./shared/config/database.js";
-import { closeAllWorkspaceDatabases, listWorkspaceRecords, getWorkspaceDb, getWorkspacePinHash, getWorkspaceRecord } from "./workspace/workspace-gate.js";
+import {
+  closeAllWorkspaceDatabases,
+  listWorkspaceRecords,
+  getWorkspaceDb,
+  getWorkspacePinHash,
+  getWorkspaceRecord,
+  resolveRecordFolderName,
+  resolveWorkspaceFolderPath,
+} from "./workspace/workspace-gate.js";
 import { LocalFilesystem } from "./Filesystem/filesystem-gate.js";
 import { pinGate, isWorkspaceManagementPath } from "./shared/auth/pin-gate.js";
 import { authGate } from "./shared/auth/auth-gate.js";
@@ -55,11 +63,13 @@ async function bootstrapWorkspaces(logger: any, workspaceDir: string) {
     const sandboxRoot = workspaceDir;
 
     // M5: bounded concurrency — serial await per workspace blocked listen.
-    const initOne = async (ws: { id: string; name: string; rootPath?: string }) => {
+    const initOne = async (ws: { id: string; name: string; rootPath?: string; folderName?: string }) => {
       logger.info(`Bootstrapping filesystem for workspace: ${ws.name} (${ws.id})...`);
       const filesystem = new LocalFilesystem({
         workspaceId: ws.id,
-        workspaceRoot: ws.rootPath || path.join(sandboxRoot, ws.id),
+        // Canon: the folder is the display name (sanitized), never the id.
+        workspaceRoot: ws.rootPath || resolveWorkspaceFolderPath(sandboxRoot, resolveRecordFolderName(ws)),
+        workspaceName: ws.name,
         actorId: "system",
       });
       await filesystem.initialize();
@@ -75,6 +85,7 @@ async function bootstrapWorkspaces(logger: any, workspaceDir: string) {
     const defaultFilesystem = new LocalFilesystem({
       workspaceId: "default",
       workspaceRoot: path.join(sandboxRoot, "default"),
+      workspaceName: "Default Workspace",
       actorId: systemActor,
     });
     await Promise.allSettled([defaultFilesystem.initialize()]);

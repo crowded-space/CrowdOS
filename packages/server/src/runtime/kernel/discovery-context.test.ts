@@ -12,7 +12,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { setLocalStoreDirForTests } from "../../shared/core/local-file.js";
+import { localStoreDirsForTests, setLocalStoreDirForTests } from "../../shared/core/local-file.js";
 // IMPORT ORDER MATTERS: ToolSchemaMiddleware -> tools-gate -> tool-registry ->
 // register-socket-server -> runtime-gate -> context-assembler is a real module
 // cycle. Importing the pipeline manager first (exactly what production does)
@@ -26,7 +26,9 @@ let dir: string;
 const BODY_MARKER = "SKILL_BODY_PAYLOAD_MARKER";
 
 function writeSkill(slug: string, frontMatter: string[], body: string): void {
-  const skillsDir = join(dir, "skills");
+  // Canon: skills live at <workspaceFolder>/vfs/.crowdos/skills/, so the
+  // fixture writes into the SAME workspace folder the context names.
+  const skillsDir = join(localStoreDirsForTests("ws-skill-discovery").crowdos, "skills");
   mkdirSync(skillsDir, { recursive: true });
   writeFileSync(join(skillsDir, `${slug}.md`), [...frontMatter, body, ""].join("\n"), "utf8");
 }

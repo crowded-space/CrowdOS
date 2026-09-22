@@ -1,0 +1,28 @@
+{
+  "workspaces": [
+    {
+      "id": "ws_be3cd9a7ac09",
+      "name": "CrowdOS Nightly",
+      "icon": "crow-cyan-radar",
+      "databaseUrl": "postgresql://postgres:<password>@localhost:5432/Nightly",
+      "rootPath": "C:\\Users\\Asus\\AppData\\Roaming\\@crowdspace\\desktop\\workspaces\\CrowdOS Nightly",
+      "mountPath": null,
+      "screenLockPinHash": "<scrypt-hash>",
+      "createdAt": "2026-09-15T15:35:27.121Z",
+      "updatedAt": "2026-09-21T11:58:32.470Z",
+      "storagePreference": "local"
+    },
+    {
+      "id": "ws_08fb26cb736e",
+      "name": "Local Test",
+      "icon": "crow-matrix-terminal",
+      "databaseUrl": "",
+      "rootPath": "C:\\Users\\Asus\\AppData\\Roaming\\@crowdspace\\desktop\\workspaces\\Local Test",
+      "mountPath": null,
+      "screenLockPinHash": null,
+      "createdAt": "2026-09-20T09:25:29.099Z",
+      "updatedAt": "2026-09-20T09:25:29.099Z",
+      "storagePreference": "default"
+    }
+  ]
+}

@@ -32,12 +32,12 @@ export type {
 
 export const capabilitiesGate = {
   /** All descriptors (built-in vocabulary + workspace manifest overlay). */
-  list: () => listDescriptors(),
+  list: (workspaceId?: string | null) => listDescriptors(workspaceId),
   /** Discovery-first view for an agent: id + domain + summary, no schemas. */
-  visibleFor: (agentId: string) => visibleFor(agentId),
+  visibleFor: (agentId: string, workspaceId?: string | null) => visibleFor(agentId, workspaceId),
   /** Lazy expansion: full tool schemas for one capability, agent-scoped. */
-  expand: (agentId: string, capabilityId: string) => expand(agentId, capabilityId),
+  expand: (agentId: string, capabilityId: string, workspaceId?: string | null) =>
+    expand(agentId, capabilityId, workspaceId),
   /** One descriptor by id (diagnostics/tests). */
-  get: (capabilityId: string) => getDescriptor(capabilityId),
+  get: (capabilityId: string, workspaceId?: string | null) => getDescriptor(capabilityId, workspaceId),
 };
-

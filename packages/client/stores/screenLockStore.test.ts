@@ -49,7 +49,7 @@ describe("isScreenlockError", () => {
   it("matches the server 401 message", () => {
     expect(
       isScreenlockError(
-        "Screenlock is enabled. Provide x-pin header or Authorization: Bearer <pin>.",
+        "Screenlock is enabled. Provide the x-pin header.",
       ),
     ).toBe(true);
   });

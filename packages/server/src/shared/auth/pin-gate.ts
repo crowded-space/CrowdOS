@@ -165,14 +165,8 @@ function isExemptPath(url: string): boolean {
 }
 
 function extractPin(request: FastifyRequest): string {
-  const authHeader = (request.headers["authorization"] as string) || "";
-  if (authHeader.startsWith("Bearer ")) {
-    return authHeader.slice(7).trim();
-  }
   const pinHeader = (request.headers["x-pin"] as string) || "";
   if (pinHeader) return pinHeader.trim();
-  const legacy = (request.headers["x-api-key"] as string) || "";
-  if (legacy) return legacy.trim();
   return "";
 }
 
@@ -181,7 +175,7 @@ function sendUnauthorized(reply: FastifyReply): void {
     statusCode: 401,
     error: "Unauthorized",
     message:
-      "Screenlock is enabled. Provide x-pin header or Authorization: Bearer <pin>. " +
+      "Screenlock is enabled. Provide the x-pin header. " +
       "Query-string PIN is disabled (desktop hardening). " +
       "Configure the PIN via Workspace settings or the LOCAL_PIN env var.",
   });

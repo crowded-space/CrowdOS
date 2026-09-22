@@ -15,7 +15,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { setLocalStoreDirForTests } from "../shared/core/local-file.js";
+import { localStoreDirsForTests, setLocalStoreDirForTests } from "../shared/core/local-file.js";
 import { parseMarkdownSkill } from "./markdown-skill-parser.js";
 import {
   loadSkills,
@@ -28,7 +28,9 @@ import {
 let dir: string;
 
 function skillFile(slug: string, content: string): void {
-  const skillsDir = join(dir, "skills");
+  // Canon: skills live at <workspaceFolder>/vfs/.crowdos/skills/. The unscoped
+  // default workspace is the folder these tests write into.
+  const skillsDir = join(localStoreDirsForTests().crowdos, "skills");
   mkdirSync(skillsDir, { recursive: true });
   writeFileSync(join(skillsDir, `${slug}.md`), content, "utf8");
 }
