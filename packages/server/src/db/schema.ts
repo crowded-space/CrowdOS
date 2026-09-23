@@ -258,6 +258,10 @@ export const categories = pgTable("categories", {
   name: text("name").notNull(),
   workspaceId: text("workspace_id").references(() => workspaces.id, { onDelete: "cascade" }),
   folderPath: text("folder_path"),
+  // Canon virtual mount set (inherit/override chain). Mirrors the local-store
+  // row field; jsonb keeps the descriptor schema-agnostic, the same choice the
+  // local tier already makes by storing rows as JSON files.
+  fsMounts: jsonb("fs_mounts"),
   ownedByAgentId: text("owned_by_agent_id").references(() => agents.id, { onDelete: "set null" }),
   embeddingProfileId: text("embedding_profile_id").references(() => embeddingModelProfiles.id),
   createdBy: text("created_by").notNull(),
@@ -270,6 +274,10 @@ export const channels = pgTable("channels", {
   categoryId: text("category_id").references(() => categories.id, { onDelete: "cascade" }),
   workspaceId: text("workspace_id").references(() => workspaces.id, { onDelete: "cascade" }),
   folderPath: text("folder_path"),
+  // Canon virtual mount set (inherit/override chain). Mirrors the local-store
+  // row field; jsonb keeps the descriptor schema-agnostic, the same choice the
+  // local tier already makes by storing rows as JSON files.
+  fsMounts: jsonb("fs_mounts"),
   name: text("name").notNull(),
   type: channelTypeEnum("type").notNull().default("standard"),
   createdBy: text("created_by").notNull(),

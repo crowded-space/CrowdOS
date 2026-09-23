@@ -19,6 +19,10 @@ import { canPickDirectoryNative, pickDirectoryNative } from './desktop-bridge';
 interface Props {
   targetType: 'channel' | 'category' | 'workspace';
   targetId: string;
+  /** Scopes the in-app navigator to this workspace's mount jail. Without it
+   *  the browser falls back to the default roots, which can offer folders the
+   *  workspace's own allowedMountRoots would then refuse on attach. */
+  workspaceId?: string | null;
   initialPath?: string | null;
   onClose?: () => void;
   onSaved?: (path: string | null) => void;
@@ -31,7 +35,7 @@ interface BrowseEntry {
   path: string;
 }
 
-export default function FolderMountPicker({ targetType, targetId, initialPath, onClose, onSaved }: Props) {
+export default function FolderMountPicker({ targetType, targetId, workspaceId, initialPath, onClose, onSaved }: Props) {
   const [path, setPath] = useState(initialPath ?? '');
   const [saving, setSaving] = useState(false);
   const [pickingNative, setPickingNative] = useState(false);
@@ -114,7 +118,9 @@ export default function FolderMountPicker({ targetType, targetId, initialPath, o
     setBrowserLoading(true);
     setError(null);
     try {
-      const data = await apiClient.browseFilesystem(targetDir ?? null, null);
+      // Same jail the attach will validate against — picker and saver must
+      // never disagree about which folders are mountable.
+      const data = await apiClient.browseFilesystem(targetDir ?? null, workspaceId ?? null);
       setBrowsingPath(data.path);
       setParentPath(data.parent);
       setEntries(data.entries || []);

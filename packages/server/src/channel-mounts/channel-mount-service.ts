@@ -438,12 +438,16 @@ export async function attachChannelMount(channelId: string, folderPath: string |
   const channel = await channelGate.get(channelId).catch(() => null);
   if (!channel) return { ok: false, error: "Channel not found" };
   if (folderPath === null || folderPath.trim() === "") {
-    await channelGate.update(channelId, { folderPath: null } as any).catch(() => null);
+    const res = await channelGate.update(channelId, { folderPath: null } as any).catch(() => null);
+    // A swallowed failure used to report success, so a broken store answered
+    // 200 with a mount that was never cleared. Surface it instead.
+    if (!res || (res as { notFound?: true }).notFound) return { ok: false, error: "Failed to clear the channel mount" };
     return { ok: true };
   }
   const v = await validateMountPath(folderPath, channel.workspaceId);
   if (!v.valid) return { ok: false, error: v.error! };
-  await channelGate.update(channelId, { folderPath: v.resolved! } as any).catch(() => null);
+  const res = await channelGate.update(channelId, { folderPath: v.resolved! } as any).catch(() => null);
+  if (!res || (res as { notFound?: true }).notFound) return { ok: false, error: "Failed to set the channel mount" };
   return { ok: true };
 }
 
@@ -451,12 +455,14 @@ export async function attachCategoryMount(categoryId: string, folderPath: string
   const cat = await channelGate.getCategory(categoryId).catch(() => null);
   if (!cat) return { ok: false, error: "Category not found" };
   if (folderPath === null || folderPath.trim() === "") {
-    await channelGate.updateCategory(categoryId, { folderPath: null }).catch(() => null);
+    const updated = await channelGate.updateCategory(categoryId, { folderPath: null }).catch(() => null);
+    if (!updated) return { ok: false, error: "Failed to clear the category mount" };
     return { ok: true };
   }
   const v = await validateMountPath(folderPath, cat.workspaceId);
   if (!v.valid) return { ok: false, error: v.error! };
-  await channelGate.updateCategory(categoryId, { folderPath: v.resolved! }).catch(() => null);
+  const updated = await channelGate.updateCategory(categoryId, { folderPath: v.resolved! }).catch(() => null);
+  if (!updated) return { ok: false, error: "Failed to set the category mount" };
   return { ok: true };
 }
 
@@ -649,6 +655,13 @@ export async function setEffectiveMounts(input: {
   if (!workspaceId) return { ok: false, error: "workspaceId or channelId is required" };
   const runtime = await readWorkspaceRuntimeConfig(workspaceId).catch(() => null);
   const workspaceSet: FsMounts = { scope: "workspace", mode: "default", mounts: normalized.mounts };
-  await writeWorkspaceRuntimeConfig(workspaceId, { fsMounts: workspaceSet }, runtime?.name).catch(() => null);
+  // A failed runtime write used to be swallowed and echoed back as ok - the
+  // resolver would then keep serving the stale set. Surface the failure.
+  try {
+    await writeWorkspaceRuntimeConfig(workspaceId, { fsMounts: workspaceSet }, runtime?.name);
+  } catch (err) {
+    const msg = (err as Error)?.message ?? String(err);
+    return { ok: false, error: "Failed to write the workspace mount set: " + msg };
+  }
   return { ok: true, mounts: workspaceSet };
 }

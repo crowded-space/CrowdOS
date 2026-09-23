@@ -148,6 +148,13 @@
       "when": 1789300000002,
       "tag": "0020_channel_settings_workspace",
       "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "7",
+      "when": 1789300000003,
+      "tag": "0021_channels_fs_mounts",
+      "breakpoints": true
     }
   ]
 }

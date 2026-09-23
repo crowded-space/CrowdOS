@@ -8,6 +8,7 @@ import { providerRoutes } from "./providers.js";
 import { workspaceRoutes } from "./workspace.js";
 import { categoryRoutes } from "./categories.js";
 import { channelRoutes } from "./channels.js";
+import { channelMountRoutes } from "./channel-mounts.js";
 import { messageRoutes } from "./messages.js";
 import { filesystemRoutes } from "./filesystem.js";
 import { skillRoutes } from "./skills.js";
@@ -31,6 +32,11 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(workspaceRoutes);
   await app.register(categoryRoutes);
   await app.register(channelRoutes);
+  // ChannelMounts transport: mount get/set for channel/category/workspace,
+  // the jailed host-filesystem browse, and the allowed-roots listing. Without
+  // this registration every mount endpoint 404s in production while the
+  // route-integration test (which wires its own app) still passes.
+  await app.register(channelMountRoutes);
   await app.register(messageRoutes);
   await app.register(filesystemRoutes);
   await app.register(skillRoutes);

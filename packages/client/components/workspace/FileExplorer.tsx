@@ -515,6 +515,7 @@ export default function FileExplorer() {
             <FolderMountPicker
               targetType="channel"
               targetId={activeChannelId}
+              workspaceId={activeWorkspaceId}
               initialPath={mounted ? repo.scope?.path ?? null : null}
               onSaved={handleMountSaved}
               onClose={() => setPickerOpen(false)}

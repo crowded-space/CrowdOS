@@ -215,6 +215,7 @@ export async function pushWorkspaceToDb(workspaceId: string, opts: { pruneExtras
     .filter((c) => (c.workspaceId ?? "default") === workspaceId);
   for (const c of allCats) {
     const row = reviveDates({ ...c }, ["createdAt"]);
+    // Canon virtual mounts ride the row; rows without one simply write NULL.
     await (db as any).insert(categories).values(row).onConflictDoUpdate({
       target: categories.id,
       set: withoutId(row),
@@ -239,6 +240,7 @@ export async function pushWorkspaceToDb(workspaceId: string, opts: { pruneExtras
     .filter((c) => (c.workspaceId ?? "default") === workspaceId);
   for (const c of allChannels) {
     const row = reviveDates({ ...c }, ["createdAt", "archivedAt"]);
+    // Canon virtual mounts ride the row; rows without one simply write NULL.
     await (db as any).insert(channels).values(row).onConflictDoUpdate({
       target: channels.id,
       set: withoutId(row),
@@ -288,7 +290,10 @@ export async function pullWorkspaceFromDb(workspaceId: string, opts: { force?: b
     const pulled: LocalCategoryRow[] = dbCats.map((c: any) => ({
       id: c.id, name: c.name, workspaceId: c.workspaceId ?? workspaceId,
       folderPath: c.folderPath ?? null, ownedByAgentId: c.ownedByAgentId ?? null,
-      embeddingProfileId: c.embeddingProfileId ?? null, createdBy: c.createdBy,
+      embeddingProfileId: c.embeddingProfileId ?? null,
+      // Canon virtual mounts ride the row; PG rows may predate the column.
+      fsMounts: c.fsMounts ?? undefined,
+      createdBy: c.createdBy,
       position: c.position ?? 0, createdAt: new Date(c.createdAt).toISOString(),
     }));
     counts.categories = pulled.length;
@@ -337,6 +342,8 @@ export async function pullWorkspaceFromDb(workspaceId: string, opts: { force?: b
     const pulled: LocalChannelRow[] = dbChannels.map((c: any) => ({
       id: c.id, categoryId: c.categoryId ?? null, workspaceId: c.workspaceId ?? workspaceId,
       folderPath: c.folderPath ?? null, name: c.name, type: c.type ?? "standard",
+      // Canon virtual mounts ride the row; PG rows may predate the column.
+      fsMounts: c.fsMounts ?? undefined,
       createdBy: c.createdBy, position: c.position ?? 0,
       createdAt: new Date(c.createdAt).toISOString(),
       archivedAt: c.archivedAt ? new Date(c.archivedAt).toISOString() : null,

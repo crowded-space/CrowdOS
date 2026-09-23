@@ -156,6 +156,7 @@ export async function updateCategory(
     if (patch.embeddingProfileId !== undefined) updateData.embeddingProfileId = patch.embeddingProfileId;
     if (patch.position !== undefined) updateData.position = patch.position;
     if (patch.folderPath !== undefined) updateData.folderPath = patch.folderPath;
+    if (patch.fsMounts !== undefined) updateData.fsMounts = patch.fsMounts;
     const [updated] = await db.update(categories).set(updateData).where(eq(categories.id, id)).returning();
     return updated ?? null;
   }
@@ -177,6 +178,7 @@ export async function updateCategory(
       if (patch.embeddingProfileId !== undefined) updateData.embeddingProfileId = patch.embeddingProfileId;
       if (patch.position !== undefined) updateData.position = patch.position;
       if (patch.folderPath !== undefined) updateData.folderPath = patch.folderPath;
+      if (patch.fsMounts !== undefined) updateData.fsMounts = patch.fsMounts;
       await db.update(categories).set(updateData).where(eq(categories.id, id));
     },
     localWrite: () => localUpdateCategory(id, patch),
@@ -404,6 +406,7 @@ export async function updateChannel(id: string, body: UpdateChannelBody, dbOverr
     const updateData: Partial<typeof channels.$inferInsert> = {};
     if ((body as any).categoryId !== undefined) updateData.categoryId = (body as any).categoryId;
     if ((body as any).folderPath !== undefined) updateData.folderPath = (body as any).folderPath;
+    if ((body as any).fsMounts !== undefined) updateData.fsMounts = (body as any).fsMounts;
     if ((body as any).name !== undefined) updateData.name = (body as any).name;
     if ((body as any).position !== undefined) updateData.position = (body as any).position;
     if ((body as any).type !== undefined) {
@@ -445,6 +448,7 @@ export async function updateChannel(id: string, body: UpdateChannelBody, dbOverr
       const updateData: Partial<typeof channels.$inferInsert> = {};
       if (patch.categoryId !== undefined) updateData.categoryId = patch.categoryId;
       if (patch.folderPath !== undefined) updateData.folderPath = patch.folderPath;
+      if (patch.fsMounts !== undefined) updateData.fsMounts = patch.fsMounts;
       if (patch.name !== undefined) updateData.name = patch.name;
       if (patch.position !== undefined) updateData.position = patch.position;
       if (patch.type !== undefined) {
