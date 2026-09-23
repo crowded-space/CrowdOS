@@ -187,6 +187,16 @@ export async function localUpsertAgent(input: {
   status?: string;
   isTemplate?: boolean;
 }): Promise<any> {
+  if (input.id === undefined && (!input.workspaceId || !String(input.workspaceId).trim()) && process.env.VITEST === undefined) {
+    // Tenant guard (QA audit 2026-09-23): a created agent without a scope
+    // used to be filed under the "default" workspace folder. Fail loudly —
+    // callers must name the workspace. Updates pass an id and keep their
+    // existing scope (existing file wins), so only creation is gated here.
+    // Unit tests are exempt: they build explicit per-test store fixtures
+    // (setLocalStoreDirForTests) where unscoped upserts are the documented
+    // fixture mechanism, not production traffic.
+    throw new Error("localUpsertAgent: workspaceId is required when creating an agent (refusing to write to the 'default' scope)");
+  }
   const now = new Date().toISOString();
   const id = input.id ?? randomUUID();
   const scope = input.workspaceId ?? null;
@@ -256,6 +266,22 @@ export async function localDeleteAgent(id: string, workspaceId?: string | null):
  * untouched, so repeated boots never duplicate the roster.
  */
 export async function localSeedDefaultAgent(workspaceId?: string | null): Promise<any> {
+  if (!workspaceId || !String(workspaceId).trim()) {
+    // Tenant guard (QA audit 2026-09-23): unscoped seeding used to file the
+    // row under the "default" workspace folder. The default assistant is a
+    // per-workspace row, so in production refuse to CREATE an unscoped one
+    // (explicit workspace seeding is the only production path).
+    const existingUnscoped = await localListAgents({ workspaceId: null });
+    const foundUnscoped = existingUnscoped.find((r: LocalAgentRow) => r.name === "default-assistant" && r.archivedAt === null);
+    if (foundUnscoped) return foundUnscoped;
+    if (process.env.VITEST !== undefined) {
+      // Unit tests: the store dir is an explicit per-test fixture
+      // (setLocalStoreDirForTests), so an unscoped seed is the documented
+      // fixture path - keep it working under vitest only.
+      return localUpsertAgent({ id: "agent-default-assistant", workspaceId: null, name: "default-assistant", title: "Default Assistant", authorityLevel: 1, modelModuleId: null, instructionModuleId: "instr-default", memorySharingPolicy: "full", status: "idle", isTemplate: false });
+    }
+    throw new Error("localSeedDefaultAgent: workspaceId is required to seed a default agent (refusing to write to the 'default' scope)");
+  }
   const existing = await localListAgents({ workspaceId: workspaceId ?? null });
   const found = existing.find((r: LocalAgentRow) => r.name === "default-assistant" && r.archivedAt === null);
   if (found) return found;

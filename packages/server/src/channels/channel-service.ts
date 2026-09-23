@@ -98,6 +98,12 @@ export async function createCategory(
   body: { name: string; workspaceId?: string | null; ownedByAgentId?: string | null; embeddingProfileId?: string | null; createdBy: string; position?: number },
   dbOverride?: any,
 ) {
+  if (!dbOverride && !(body.workspaceId && String(body.workspaceId).trim())) {
+    // Tenant guard (QA audit 2026-09-23): a headerless POST used to fall
+    // through to the default scope and silently misfile the row. Fail
+    // loudly here so the route never reports success for a misfiled write.
+    throw new Error("createCategory: workspaceId is required (refusing to write to the default scope)");
+  }
   const id = randomUUID();
   const now = new Date();
   const pgValues = {
@@ -275,6 +281,12 @@ export async function listChannels(opts?: { limit?: number; cursor?: string | nu
 
 export async function createChannel(body: CreateChannelBody, dbOverride?: any, workspaceId?: string | null) {
   const categoryId = (body as any).categoryId ?? null;
+  // Tenant resolution moved BEFORE the guards (QA audit 2026-09-23): the
+  // owning workspace is the explicit scope, else the parent category's
+  // workspace, else fail closed so a row can never land in default.
+  const wsResolved: string | null = (workspaceId && String(workspaceId).trim())
+    ? String(workspaceId).trim()
+    : (categoryId ? ((await getCategoryById(categoryId).catch(() => null)) as { workspaceId?: string | null } | null)?.workspaceId ?? null : null);
   if (dbOverride) {
     const db = dbOverride;
     const [categoryOk, existingSameName] = await Promise.all([
@@ -312,6 +324,11 @@ export async function createChannel(body: CreateChannelBody, dbOverride?: any, w
   if (categoryId && !(await categoryExists(categoryId))) {
     return { error: "category", categoryId } as const;
   }
+  if (!(wsResolved && String(wsResolved).trim())) {
+    // Tenant guard (QA audit 2026-09-23): resolve the owning workspace
+    // BEFORE the guards; a headerless create must never land in default.
+    return { error: "category", categoryId: categoryId || "(missing workspace scope)" } as const;
+  }
   const dupCheck = await Promise.all([
     (async () => {
       const rows = await localListChannels({ limit: 200 });
@@ -338,12 +355,7 @@ export async function createChannel(body: CreateChannelBody, dbOverride?: any, w
   // channel created under a category belongs to that category's workspace
   // unless the caller named one explicitly. Deriving it here keeps the two
   // rows in the same folder instead of splitting them across scopes.
-  let ws = workspaceId ?? null;
-  if (!ws && categoryId) {
-    const parent = await getCategoryById(categoryId).catch(() => null);
-    ws = (parent as { workspaceId?: string | null } | null)?.workspaceId ?? null;
-  }
-  ws = ws ?? "default";
+  const ws = wsResolved as string;
   const ctx = await tierContextFor(ws);
   const pgValues = {
     id,

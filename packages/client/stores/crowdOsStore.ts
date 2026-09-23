@@ -10,6 +10,7 @@ import {
 } from './messagePagination';
 import type { PageCursor } from './messagePagination';
 import { apiClient, setActiveWorkspaceId } from '../src/api/client';
+import { setActiveWorkspaceIdGetter, withTenantHeaders } from '../src/config/pin';
 import { isScreenlockError, useScreenLockStore } from './screenLockStore';
 
 // UX-7: DEMO_FALLBACK honesty — when false, outages show errors, not seeded demo data
@@ -26,6 +27,12 @@ const DEMO_FALLBACK: boolean = (() => {
   } catch {}
   return false;
 })();
+
+// Tenant header source for the global fetch patch (src/config/pin.ts). The
+// patch injects x-workspace-id into every /api/ fetch that a caller (legacy
+// direct fetch calls in this store included) did not scope explicitly.
+// Registered at module load, before any request can fire.
+setActiveWorkspaceIdGetter(() => useCrowdOSStore.getState().activeWorkspaceId);
 import { 
   Agent, 
   AgentStatus,
@@ -151,7 +158,9 @@ async function readApiError(response: Response, fallback: string): Promise<Error
 }
 
 async function fetchJsonOrThrow<T>(url: string, init: RequestInit, fallback: string): Promise<T> {
-  const response = await fetch(url, init);
+  // Tenant-aware: legacy direct fetches here must carry x-workspace-id like
+  // apiClient does (the global patch is the backstop, not the only layer).
+  const response = await fetch(url, withTenantHeaders(init));
   if (!response.ok) {
     throw await readApiError(response, fallback);
   }
@@ -159,7 +168,7 @@ async function fetchJsonOrThrow<T>(url: string, init: RequestInit, fallback: str
 }
 
 async function fetchNoContentOrThrow(url: string, init: RequestInit, fallback: string): Promise<void> {
-  const response = await fetch(url, init);
+  const response = await fetch(url, withTenantHeaders(init));
   if (!response.ok) {
     throw await readApiError(response, fallback);
   }
@@ -1207,7 +1216,10 @@ const initialSelectedMode: ComposerMode = (() => {
       const ch = get().activeChannelId;
       if (ch) persistSeq(ch, seq);
     }
-    console.log('[Socket] Authoritative runtime snapshot received:', snap);
+    // Debug-level: this fires every ~15s per connection and flooded the
+    // console with object dumps (QA audit 2026-09-23). Keep it available
+    // under verbose filtering only.
+    console.debug('[Socket] Authoritative runtime snapshot received:', snap);
     // ponytail: the roster is owned by the tenant REST fetch — a snapshot
     // built from another database must never clobber it (untagged snapshots
     // are global broadcasts; apply their agents only on a workspaceId match).
@@ -1981,8 +1993,15 @@ const initialSelectedMode: ComposerMode = (() => {
           }));
         }
 
-        // Budget Telemetry (parallel after core fetches to not block roster)
-        await get().fetchBudget();
+        // Budget Telemetry (parallel after core fetches to not block roster).
+        // Budget endpoints are PG-only (local-mode guard answers 501); calling
+        // them for a DB-less workspace spammed the console with guaranteed
+        // "Failed to load resource" errors on every refresh (QA audit
+        // 2026-09-23). Skip unless the active workspace has a database.
+        const activeWsForBudget = get().workspaces.find(w => w.id === targetWsId);
+        if (activeWsForBudget?.database?.configured) {
+          await get().fetchBudget();
+        }
 
         if (typeof localStorage !== 'undefined') {
           localStorage.setItem('crowdos_workspaces', JSON.stringify(dbWorkspaces));
@@ -3317,6 +3336,11 @@ const initialSelectedMode: ComposerMode = (() => {
     // Budget Actions implementation
     fetchBudget: async () => {
       try {
+        // Defense in depth: skip the PG-only call for DB-less workspaces so
+        // local mode never logs a guaranteed 501 (socket budget handlers and
+        // settings flows can still call this directly).
+        const activeWs = get().workspaces.find(w => w.id === get().activeWorkspaceId);
+        if (!activeWs?.database?.configured) return;
         const res = await fetch(`${BACKEND_URL}/api/workspace/budget`);
         if (res.ok) {
           const data = await res.json();

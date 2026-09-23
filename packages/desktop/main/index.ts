@@ -38,6 +38,7 @@ import {
 } from "./app-shell.js";
 import type { DesktopShellHandles } from "./app-shell.js";
 import { loadDesktopConfig, saveDesktopConfig, saveDesktopConfigDebounced } from "./config-store.js";
+import { startDesktopLogTee } from "./desktop-log.js";
 import { ensureDatabase } from "./ensure-database.js";
 import { registerIpcHandlers } from "./ipc-handlers.js";
 import { isAllowedExternal, isAllowedNavigation } from "./navigation-guard.js";
@@ -133,6 +134,11 @@ async function boot(): Promise<void> {
   const paths = getDesktopPaths(userData);
   mkdirSync(paths.workspacesDir, { recursive: true });
   mkdirSync(paths.logsDir, { recursive: true });
+  // Persist main-process diagnostics (console warn/error) to the documented
+  // file log so a packaged build keeps support evidence on disk (QA audit
+  // 2026-09-23: logs/desktop.log never existed). Boot/IPC/backend failures
+  // land here; the stream writer lives in ./desktop-log.ts.
+  startDesktopLogTee(join(paths.logsDir, "desktop.log"));
 
   const stored = loadDesktopConfig(paths.configFile);
 

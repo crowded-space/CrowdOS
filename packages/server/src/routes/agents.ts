@@ -67,7 +67,10 @@ export async function agentRoutes(app: FastifyInstance) {
     },
     async (request, reply) => {
       try {
-        const agent = await agentGate.create({ ...request.body, modelModuleId: request.body.modelModuleId ?? null }, (request as any).db);
+        const agent = await agentGate.create(
+          { ...request.body, modelModuleId: request.body.modelModuleId ?? null, workspaceId: (request as any).workspaceId ?? null },
+          (request as any).db,
+        );
         emitWorkspaceSync();
         return reply.status(201).send(agent);
       } catch (error) {

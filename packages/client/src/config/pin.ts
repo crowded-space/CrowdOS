@@ -7,6 +7,44 @@
 // localStorage (desktop has no safeStorage wiring today — main-process
 // persistence in plaintext config.json is intentionally NOT used).
 //
+// ─── TENANT CHANNEL (x-workspace-id) ─────────────────────────────────
+// The server resolves the workspace tenant ONLY from the x-workspace-id
+// header (create-app.ts onRequest hook). Legacy direct fetch() calls in
+// crowdOsStore.ts (createCategory/createChannel/addAgent, message pages,
+// budget telemetry) bypassed apiClient and sent no tenant header, so every
+// local-mode write fell back to the "default" scope: categories/agents
+// were silently misfiled into <workspaces>/default, and channel creation
+// answered 400 "Category not found" for a category that existed in the
+// active workspace. The patch below injects the ACTIVE workspace id into
+// every /api/ fetch whose caller did not set an explicit tenant header.
+// Read from the store lazily via an injected getter (config layer must not
+// import the store — import-cycle risk); the store registers the real
+// getter at module load (crowdOsStore.ts).
+type WorkspaceIdGetter = () => string | null;
+let activeWorkspaceIdGetter: WorkspaceIdGetter = () => null;
+
+/** Registered by the store at module load so this config layer can scope
+ *  requests without importing the store (import-cycle guard). */
+export function setActiveWorkspaceIdGetter(getter: WorkspaceIdGetter): void {
+  activeWorkspaceIdGetter = typeof getter === "function" ? getter : () => null;
+}
+
+function activeWorkspaceIdForRequest(): string | null {
+  try {
+    return activeWorkspaceIdGetter() || null;
+  } catch {
+    return null;
+  }
+}
+
+/** Attach the active tenant header when the caller did not set one. */
+export function withTenantHeaders(init?: RequestInit): RequestInit {
+  const wsId = activeWorkspaceIdForRequest();
+  if (!wsId) return init ?? {};
+  const headers = new Headers(init?.headers);
+  if (!headers.has('x-workspace-id')) headers.set('x-workspace-id', wsId);
+  return { ...init, headers };
+}
 // ─── CREDENTIAL CHANNEL (do not re-merge) ────────────────────────────
 // The PIN travels on `x-pin` ONLY. `Authorization` belongs to the API key
 // (SEC-1 `crowd_…`), and the mounted auth gate reads `Authorization` first.
@@ -108,7 +146,7 @@ export function pinAuthHeaders(): Record<string, string> {
 }
 
 // Global fetch monkey-patch for legacy direct fetch calls (components, store)
-// Ensures every /api request carries PIN without touching each call site.
+// Ensures every /api request carries PIN + the active tenant id without
 // Idempotent — only patches once. Sends nothing when no PIN is configured.
 if (typeof window !== 'undefined' && !(globalThis as any).__pinFetchPatched) {
   try {
@@ -118,7 +156,7 @@ if (typeof window !== 'undefined' && !(globalThis as any).__pinFetchPatched) {
       try {
         const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : (input as Request).url ?? '';
         if (url.includes('/api/') || url.includes('/socket.io')) {
-          init = withPinHeaders(init);
+          init = withTenantHeaders(withPinHeaders(init));
         }
       } catch {}
       return origFetch(input as any, init as any);

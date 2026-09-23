@@ -159,8 +159,22 @@ export async function localCreateCategory(input: {
   position?: number;
   fsMounts?: FsMounts;
 }): Promise<any> {
+  if (!input.workspaceId || !String(input.workspaceId).trim()) {
+    // Tenant guard (QA audit 2026-09-23): a headerless request used to fall
+    // back to the "default" scope and silently misfile the row. Fail loudly
+    // instead — callers must name the workspace explicitly.
+    throw new Error("localCreateCategory: workspaceId is required (refusing to write to the 'default' scope)");
+  }
   const now = new Date().toISOString();
-  const workspaceId = input.workspaceId ?? DEFAULT_WORKSPACE_SCOPE;
+  const workspaceId = input.workspaceId;
+  const dupe = (await readJsonArray<LocalCategoryRow>(CATEGORIES_FILE, workspaceId)).find(
+    (r) => r.name.trim().toLowerCase() === input.name.trim().toLowerCase(),
+  );
+  if (dupe) {
+    // Duplicate guard (QA audit 2026-09-23): channels had one, categories
+    // did not - repeated failed UI attempts piled up identical rows.
+    throw new Error("Category already exists in this workspace: " + input.name);
+  }
   const row: LocalCategoryRow = {
     id: input.id ?? randomUUID(),
     name: input.name,
@@ -254,7 +268,15 @@ export async function localCreateChannel(input: {
   position?: number;
   fsMounts?: FsMounts;
 }): Promise<{ channel?: any; error?: "category" | "duplicate_name"; categoryId?: string; name?: string }> {
-  const workspaceId = input.workspaceId ?? DEFAULT_WORKSPACE_SCOPE;
+  if (!input.workspaceId || !String(input.workspaceId).trim()) {
+    // Tenant guard (QA audit 2026-09-23): same contract as categories — a
+    // headerless request must fail loudly, not land in the "default" scope.
+    // Surfaced as a distinct error so routes/tests can tell it from a truly
+    // missing parent category.
+    console.error("[localCreateChannel] rejected: workspaceId is required (refusing to write to the 'default' scope)");
+    return { error: "category", categoryId: "(missing workspace scope)" };
+  }
+  const workspaceId = input.workspaceId;
   if (input.categoryId) {
     if (!(await localCategoryExists(input.categoryId, workspaceId))) {
       return { error: "category", categoryId: input.categoryId };

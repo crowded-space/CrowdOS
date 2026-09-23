@@ -226,7 +226,7 @@ export class AgentRegistry {
     if (input.l3Subtype && input.authorityLevel !== 3) {
       throw new Error("Only authority level 3 agents may define an l3Subtype.");
     }
-    const ctx = await tierContextFor(null);
+    const ctx = await tierContextFor(input.workspaceId ?? null);
     if (resolveTier(ctx).tier === "dual") {
       // Best-effort PG validation — skips itself when the database is gone.
       await this.ensureValidReferences(input, undefined).catch((err) => {
