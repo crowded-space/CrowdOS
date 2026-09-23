@@ -2845,22 +2845,25 @@ const initialSelectedMode: ComposerMode = (() => {
 
     updateModelModule: async (id, patch) => {
       try {
+        // Send only the fields actually provided: the redacted read returns
+        // masks for secrets and the edit form omits unchanged numbers, so a
+        // blind spread would send null/NaN and fail server validation.
+        const body: Record<string, unknown> = {};
+        if (patch.name !== undefined) body.label = patch.name;
+        if (patch.provider !== undefined) body.provider = patch.provider;
+        if (patch.modelProfileId !== undefined) body.modelName = patch.modelProfileId;
+        if (patch.apiKey !== undefined && patch.apiKey !== '') body.apiKey = patch.apiKey;
+        if (patch.baseUrl !== undefined) body.endpointUrl = patch.baseUrl || null;
+        if (patch.temperature != null && Number.isFinite(patch.temperature)) body.temperature = patch.temperature;
+        if (patch.topP != null && Number.isFinite(patch.topP)) body.topP = patch.topP;
+        if (patch.maxTokens != null && Number.isFinite(patch.maxTokens)) body.maxOutputTokens = patch.maxTokens;
+        if (patch.maxRecentMessages != null && Number.isFinite(patch.maxRecentMessages)) body.maxRecentMessages = patch.maxRecentMessages;
+        if (patch.enableCompression !== undefined) body.enableCompression = patch.enableCompression;
+        if (patch.compressionThreshold != null && Number.isFinite(patch.compressionThreshold)) body.compressionThreshold = patch.compressionThreshold;
         await fetchJsonOrThrow<ModelModule>(`${BACKEND_URL}/api/modules/model/${id}`, {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            label: patch.name,
-            provider: patch.provider,
-            modelName: patch.modelProfileId,
-            apiKey: patch.apiKey,
-            endpointUrl: patch.baseUrl,
-            temperature: patch.temperature,
-            topP: patch.topP,
-            maxOutputTokens: patch.maxTokens,
-            maxRecentMessages: patch.maxRecentMessages,
-            enableCompression: patch.enableCompression,
-            compressionThreshold: patch.compressionThreshold
-          })
+          body: JSON.stringify(body)
         }, 'Failed to update ModelModule.');
         await get().fetchWorkspaces();
       } catch (err) {

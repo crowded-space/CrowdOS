@@ -14,26 +14,14 @@ const CONNECT_DB_SUGGESTION =
   "Connect a database to this workspace (Workspace Overview → Database) to enable provider modules, skills, budgets, and semantic memory. Chat, channels, and files keep working locally.";
 
 function emptyShape(path: string): { empty: true; body: unknown } | null {
-  if (path === "/api/modules") {
-    return {
-      empty: true,
-      body: {
-        modelModules: [],
-        instructionModules: [],
-        toolkitModules: [],
-        constraintsModules: [],
-        capabilitiesModules: [],
-        localMode: true,
-      },
-    };
-  }
   if (path === "/api/providers/generation") return { empty: true, body: [] };
   if (path === "/api/skills") return { empty: true, body: [] };
   return null;
 }
 
+// /api/modules left the guard: module catalogs now have a local file tier
+// (module-local-store), so reads and writes serve local truth like agents.
 const GUARDED_PREFIXES = [
-  "/api/modules",
   "/api/skills",
   "/api/providers",
   "/api/workspace/settings",

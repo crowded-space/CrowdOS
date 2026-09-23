@@ -1,6 +1,7 @@
 import { eq } from "drizzle-orm";
 import { randomUUID } from "node:crypto";
-import { getDb, dbScopeKey } from "../shared/config/database.js";
+import { getDb, dbScopeKey, resolveTier } from "../shared/config/database.js";
+import { tierContextFor } from "../workspace/workspace-gate.js";
 import { TtlCache } from "../shared/core/ttl-cache.js";
 import { compileGoogleEndpoint } from "../shared/core/google-model-helpers.js";
 import { encrypt, decrypt } from "../shared/core/secret-box.js";
@@ -26,24 +27,68 @@ import type {
   CreateCapabilitiesModuleBody,
   UpdateCapabilitiesModuleBody
 } from "./module-validators.js";
+import type {
+  ModelModule,
+  InstructionModule,
+  ToolkitModule,
+  ConstraintsModule,
+  CapabilitiesModule,
+} from "./module-types.js";
+import {
+  localListModelModules,
+  localGetModelModule,
+  localUpsertModelModule,
+  localDeleteModelModule,
+  localListInstructionModules,
+  localGetInstructionModule,
+  localUpsertInstructionModule,
+  localDeleteInstructionModule,
+  localListToolkitModules,
+  localGetToolkitModule,
+  localUpsertToolkitModule,
+  localDeleteToolkitModule,
+  localListConstraintsModules,
+  localGetConstraintsModule,
+  localUpsertConstraintsModule,
+  localDeleteConstraintsModule,
+  localListCapabilitiesModules,
+  localGetCapabilitiesModule,
+  localUpsertCapabilitiesModule,
+  localDeleteCapabilitiesModule,
+} from "./module-local-store.js";
+
+/**
+ * Effective store tier for the caller's workspace. Routes thread the
+ * x-workspace-id header down as workspaceId; null falls back to the global
+ * tier context so legacy unscoped callers keep working.
+ */
+async function moduleTier(workspaceId?: string | null) {
+  return resolveTier(await tierContextFor(workspaceId ?? null));
+}
+
+/** Serialize a module row for the local JSON store (Date fields -> ISO). */
+function serializeRow<T extends { createdAt: Date; updatedAt: Date }>(row: T): any {
+  return {
+    ...row,
+    createdAt: row.createdAt instanceof Date ? row.createdAt.toISOString() : row.createdAt,
+    updatedAt: row.updatedAt instanceof Date ? row.updatedAt.toISOString() : row.updatedAt,
+  };
+}
 
 export type ModuleType = "model" | "instruction" | "toolkit" | "constraints" | "capabilities";
 
 export async function findReferencingAgent(moduleType: ModuleType, moduleId: string) {
-  const db = getDb();
-  if (moduleType === "model") {
-    return db.query.agents.findFirst({ where: eq(agents.modelModuleId, moduleId) });
-  }
-  if (moduleType === "instruction") {
-    return db.query.agents.findFirst({ where: eq(agents.instructionModuleId, moduleId) });
-  }
-  if (moduleType === "toolkit") {
-    return db.query.agents.findFirst({ where: eq(agents.toolkitModuleId, moduleId) });
-  }
-  if (moduleType === "constraints") {
-    return db.query.agents.findFirst({ where: eq(agents.constraintsModuleId, moduleId) });
-  }
-  return db.query.agents.findFirst({ where: eq(agents.capabilitiesModuleId, moduleId) });
+  // Tier-aware: getDb() throws in Local mode (no DATABASE_URL), which turned
+  // every module de-registration into a 500 before the local file store was
+  // ever consulted. The registry union reads local rows and PG only when the
+  // dual tier can actually serve them.
+  const { agentRegistry } = await import("../agents/agent-gate.js");
+  const roster = await agentRegistry.list({});
+  if (moduleType === "model") return roster.find((a: any) => a.modelModuleId === moduleId) ?? null;
+  if (moduleType === "instruction") return roster.find((a: any) => a.instructionModuleId === moduleId) ?? null;
+  if (moduleType === "toolkit") return roster.find((a: any) => a.toolkitModuleId === moduleId) ?? null;
+  if (moduleType === "constraints") return roster.find((a: any) => a.constraintsModuleId === moduleId) ?? null;
+  return roster.find((a: any) => a.capabilitiesModuleId === moduleId) ?? null;
 }
 
 export interface ModuleReferenceIds {
@@ -242,8 +287,20 @@ async function fetchAllModules(opts?: ListModulesOpts) {
   };
 }
 
-export async function listAllModules(opts?: ListModulesOpts) {
+export async function listAllModules(opts?: ListModulesOpts & { workspaceId?: string | null }) {
   const { limit, offset } = clampListOpts(opts);
+  const { tier } = await moduleTier(opts?.workspaceId);
+  if (tier === "local") {
+    const [modelModules, instructionModules, toolkitModules, constraintsModules, capabilitiesModules] =
+      await Promise.all([
+        localListModelModules(opts?.workspaceId),
+        localListInstructionModules(opts?.workspaceId),
+        localListToolkitModules(opts?.workspaceId),
+        localListConstraintsModules(opts?.workspaceId),
+        localListCapabilitiesModules(opts?.workspaceId),
+      ]);
+    return { modelModules, instructionModules, toolkitModules, constraintsModules, capabilitiesModules };
+  }
   const key = `${dbScopeKey()}:all:${limit}:${offset}`;
   const hit = listAllCache.get(key);
   if (hit) return hit;
@@ -253,29 +310,53 @@ export async function listAllModules(opts?: ListModulesOpts) {
 }
 
 // --- Model Modules ---
-export async function listModelModules(opts?: ListModulesOpts) {
+export async function listModelModules(opts?: ListModulesOpts & { workspaceId?: string | null }) {
   const { limit, offset } = clampListOpts(opts);
+  const { tier } = await moduleTier(opts?.workspaceId);
+  if (tier === "local") {
+    const rows = await localListModelModules(opts?.workspaceId);
+    return rows.slice(offset, offset + limit);
+  }
   return getDb().select().from(modelModules).limit(limit).offset(offset);
 }
-export async function getModelModule(id: string) {
+export async function getModelModule(id: string, workspaceId?: string | null) {
+  const { tier } = await moduleTier(workspaceId);
+  if (tier === "local") return localGetModelModule(id, workspaceId);
   const [res] = await getDb().select().from(modelModules).where(eq(modelModules.id, id)).limit(1);
   return res ?? null;
 }
-export async function createModelModule(body: CreateModelModuleBody) {
+export async function createModelModule(body: CreateModelModuleBody, workspaceId?: string | null) {
   const id = randomUUID();
-  const [res] = await getDb().insert(modelModules).values({
+  const values = {
     id,
     ...body,
     apiKey: body.apiKey == null ? null : encrypt(body.apiKey),
     endpointUrl: body.endpointUrl ?? null,
     stopSequences: body.stopSequences ?? [],
     enableCompression: body.enableCompression ?? true
-  }).returning();
+  };
+  const { tier } = await moduleTier(workspaceId);
+  if (tier === "local") {
+    const now = new Date();
+    const row: ModelModule = { ...(values as any), createdAt: now, updatedAt: now };
+    await localUpsertModelModule(serializeRow(row), workspaceId);
+    return row;
+  }
+  const [res] = await getDb().insert(modelModules).values(values).returning();
   return res;
 }
-export async function updateModelModule(id: string, body: UpdateModelModuleBody) {
+export async function updateModelModule(id: string, body: UpdateModelModuleBody, workspaceId?: string | null) {
   const updates: UpdateModelModuleBody = { ...body };
   if (updates.apiKey !== undefined) updates.apiKey = updates.apiKey == null ? null : encrypt(updates.apiKey);
+  const { tier } = await moduleTier(workspaceId);
+  if (tier === "local") {
+    const existing = await localGetModelModule(id, workspaceId);
+    if (!existing) return null;
+    const row: ModelModule = { ...existing, ...(updates as any), updatedAt: new Date() };
+    await localUpsertModelModule(serializeRow(row), workspaceId);
+    runtimeGate.invalidateModelModuleCache(id);
+    return row;
+  }
   const [res] = await getDb()
     .update(modelModules)
     .set({ ...updates, updatedAt: new Date() })
@@ -284,37 +365,72 @@ export async function updateModelModule(id: string, body: UpdateModelModuleBody)
   runtimeGate.invalidateModelModuleCache(id);
   return res ?? null;
 }
-export async function deleteModelModule(id: string) {
+export async function deleteModelModule(id: string, workspaceId?: string | null) {
+  const { tier } = await moduleTier(workspaceId);
+  if (tier === "local") {
+    const deleted = await localDeleteModelModule(id, workspaceId);
+    runtimeGate.invalidateModelModuleCache(id);
+    return deleted ? [{ id }] : [];
+  }
   const rows = await getDb().delete(modelModules).where(eq(modelModules.id, id)).returning();
   runtimeGate.invalidateModelModuleCache(id);
   return rows;
 }
-export async function testModelModule(id: string) {
-  const [module] = await getDb().select().from(modelModules).where(eq(modelModules.id, id)).limit(1);
+export async function testModelModule(id: string, workspaceId?: string | null) {
+  const { tier } = await moduleTier(workspaceId);
+  let module: any = null;
+  if (tier === "local") {
+    module = await localGetModelModule(id, workspaceId);
+  } else {
+    [module] = await getDb().select().from(modelModules).where(eq(modelModules.id, id)).limit(1);
+  }
   if (!module) return null;
   return testConnectionHelper(module.provider, module.modelName, module.apiKey ? decrypt(module.apiKey) : module.apiKey, module.endpointUrl);
 }
 
 // --- Instruction Modules ---
-export async function listInstructionModules(opts?: ListModulesOpts) {
+export async function listInstructionModules(opts?: ListModulesOpts & { workspaceId?: string | null }) {
   const { limit, offset } = clampListOpts(opts);
+  const { tier } = await moduleTier(opts?.workspaceId);
+  if (tier === "local") {
+    const rows = await localListInstructionModules(opts?.workspaceId);
+    return rows.slice(offset, offset + limit);
+  }
   return getDb().select().from(instructionModules).limit(limit).offset(offset);
 }
-export async function getInstructionModule(id: string) {
+export async function getInstructionModule(id: string, workspaceId?: string | null) {
+  const { tier } = await moduleTier(workspaceId);
+  if (tier === "local") return localGetInstructionModule(id, workspaceId);
   const [res] = await getDb().select().from(instructionModules).where(eq(instructionModules.id, id)).limit(1);
   return res ?? null;
 }
-export async function createInstructionModule(body: CreateInstructionModuleBody) {
+export async function createInstructionModule(body: CreateInstructionModuleBody, workspaceId?: string | null) {
   const id = randomUUID();
-  const [res] = await getDb().insert(instructionModules).values({
+  const values = {
     id,
     ...body,
     base: body.base ?? [],
     runtimePatchable: body.runtimePatchable ?? false
-  }).returning();
+  };
+  const { tier } = await moduleTier(workspaceId);
+  if (tier === "local") {
+    const now = new Date();
+    const row: InstructionModule = { ...(values as any), createdAt: now, updatedAt: now };
+    await localUpsertInstructionModule(serializeRow(row), workspaceId);
+    return row;
+  }
+  const [res] = await getDb().insert(instructionModules).values(values).returning();
   return res;
 }
-export async function updateInstructionModule(id: string, body: UpdateInstructionModuleBody) {
+export async function updateInstructionModule(id: string, body: UpdateInstructionModuleBody, workspaceId?: string | null) {
+  const { tier } = await moduleTier(workspaceId);
+  if (tier === "local") {
+    const existing = await localGetInstructionModule(id, workspaceId);
+    if (!existing) return null;
+    const row: InstructionModule = { ...existing, ...(body as any), updatedAt: new Date() };
+    await localUpsertInstructionModule(serializeRow(row), workspaceId);
+    return row;
+  }
   const [res] = await getDb()
     .update(instructionModules)
     .set({ ...body, updatedAt: new Date() })
@@ -322,30 +438,56 @@ export async function updateInstructionModule(id: string, body: UpdateInstructio
     .returning();
   return res ?? null;
 }
-export async function deleteInstructionModule(id: string) {
+export async function deleteInstructionModule(id: string, workspaceId?: string | null) {
+  const { tier } = await moduleTier(workspaceId);
+  if (tier === "local") {
+    const deleted = await localDeleteInstructionModule(id, workspaceId);
+    return deleted ? [{ id }] : [];
+  }
   return getDb().delete(instructionModules).where(eq(instructionModules.id, id)).returning();
 }
 
 // --- Toolkit Modules ---
-export async function listToolkitModules(opts?: ListModulesOpts) {
+export async function listToolkitModules(opts?: ListModulesOpts & { workspaceId?: string | null }) {
   const { limit, offset } = clampListOpts(opts);
+  const { tier } = await moduleTier(opts?.workspaceId);
+  if (tier === "local") {
+    const rows = await localListToolkitModules(opts?.workspaceId);
+    return rows.slice(offset, offset + limit);
+  }
   return getDb().select().from(toolkitModules).limit(limit).offset(offset);
 }
-export async function getToolkitModule(id: string) {
+export async function getToolkitModule(id: string, workspaceId?: string | null) {
+  const { tier } = await moduleTier(workspaceId);
+  if (tier === "local") return localGetToolkitModule(id, workspaceId);
   const [res] = await getDb().select().from(toolkitModules).where(eq(toolkitModules.id, id)).limit(1);
   return res ?? null;
 }
-export async function createToolkitModule(body: CreateToolkitModuleBody) {
+export async function createToolkitModule(body: CreateToolkitModuleBody, workspaceId?: string | null) {
   const id = randomUUID();
-  const [res] = await getDb().insert(toolkitModules).values({
-    id,
-    ...body,
-    tools: body.tools ?? []
-  }).returning();
+  const values = { id, ...body, tools: body.tools ?? [] };
+  const { tier } = await moduleTier(workspaceId);
+  if (tier === "local") {
+    const now = new Date();
+    const row: ToolkitModule = { ...(values as any), createdAt: now, updatedAt: now };
+    await localUpsertToolkitModule(serializeRow(row), workspaceId);
+    skillsGate.invalidateAgentCaches();
+    return row;
+  }
+  const [res] = await getDb().insert(toolkitModules).values(values).returning();
   skillsGate.invalidateAgentCaches();
   return res;
 }
-export async function updateToolkitModule(id: string, body: UpdateToolkitModuleBody) {
+export async function updateToolkitModule(id: string, body: UpdateToolkitModuleBody, workspaceId?: string | null) {
+  const { tier } = await moduleTier(workspaceId);
+  if (tier === "local") {
+    const existing = await localGetToolkitModule(id, workspaceId);
+    if (!existing) return null;
+    const row: ToolkitModule = { ...existing, ...(body as any), updatedAt: new Date() };
+    await localUpsertToolkitModule(serializeRow(row), workspaceId);
+    skillsGate.invalidateAgentCaches();
+    return row;
+  }
   const [res] = await getDb()
     .update(toolkitModules)
     .set({ ...body, updatedAt: new Date() })
@@ -354,32 +496,61 @@ export async function updateToolkitModule(id: string, body: UpdateToolkitModuleB
   skillsGate.invalidateAgentCaches();
   return res ?? null;
 }
-export async function deleteToolkitModule(id: string) {
+export async function deleteToolkitModule(id: string, workspaceId?: string | null) {
+  const { tier } = await moduleTier(workspaceId);
+  if (tier === "local") {
+    const deleted = await localDeleteToolkitModule(id, workspaceId);
+    skillsGate.invalidateAgentCaches();
+    return deleted ? [{ id }] : [];
+  }
   const rows = await getDb().delete(toolkitModules).where(eq(toolkitModules.id, id)).returning();
   skillsGate.invalidateAgentCaches();
   return rows;
 }
 
 // --- Constraints Modules ---
-export async function listConstraintsModules(opts?: ListModulesOpts) {
+export async function listConstraintsModules(opts?: ListModulesOpts & { workspaceId?: string | null }) {
   const { limit, offset } = clampListOpts(opts);
+  const { tier } = await moduleTier(opts?.workspaceId);
+  if (tier === "local") {
+    const rows = await localListConstraintsModules(opts?.workspaceId);
+    return rows.slice(offset, offset + limit);
+  }
   return getDb().select().from(constraintsModules).limit(limit).offset(offset);
 }
-export async function getConstraintsModule(id: string) {
+export async function getConstraintsModule(id: string, workspaceId?: string | null) {
+  const { tier } = await moduleTier(workspaceId);
+  if (tier === "local") return localGetConstraintsModule(id, workspaceId);
   const [res] = await getDb().select().from(constraintsModules).where(eq(constraintsModules.id, id)).limit(1);
   return res ?? null;
 }
-export async function createConstraintsModule(body: CreateConstraintsModuleBody) {
+export async function createConstraintsModule(body: CreateConstraintsModuleBody, workspaceId?: string | null) {
   const id = randomUUID();
-  const [res] = await getDb().insert(constraintsModules).values({
+  const values = {
     id,
     ...body,
     rules: body.rules ?? [],
     disallowedActions: body.disallowedActions ?? []
-  }).returning();
+  };
+  const { tier } = await moduleTier(workspaceId);
+  if (tier === "local") {
+    const now = new Date();
+    const row: ConstraintsModule = { ...(values as any), createdAt: now, updatedAt: now };
+    await localUpsertConstraintsModule(serializeRow(row), workspaceId);
+    return row;
+  }
+  const [res] = await getDb().insert(constraintsModules).values(values).returning();
   return res;
 }
-export async function updateConstraintsModule(id: string, body: UpdateConstraintsModuleBody) {
+export async function updateConstraintsModule(id: string, body: UpdateConstraintsModuleBody, workspaceId?: string | null) {
+  const { tier } = await moduleTier(workspaceId);
+  if (tier === "local") {
+    const existing = await localGetConstraintsModule(id, workspaceId);
+    if (!existing) return null;
+    const row: ConstraintsModule = { ...existing, ...(body as any), updatedAt: new Date() };
+    await localUpsertConstraintsModule(serializeRow(row), workspaceId);
+    return row;
+  }
   const [res] = await getDb()
     .update(constraintsModules)
     .set({ ...body, updatedAt: new Date() })
@@ -387,30 +558,58 @@ export async function updateConstraintsModule(id: string, body: UpdateConstraint
     .returning();
   return res ?? null;
 }
-export async function deleteConstraintsModule(id: string) {
+export async function deleteConstraintsModule(id: string, workspaceId?: string | null) {
+  const { tier } = await moduleTier(workspaceId);
+  if (tier === "local") {
+    const deleted = await localDeleteConstraintsModule(id, workspaceId);
+    return deleted ? [{ id }] : [];
+  }
   return getDb().delete(constraintsModules).where(eq(constraintsModules.id, id)).returning();
 }
 
 // --- Capabilities Modules ---
-export async function listCapabilitiesModules(opts?: ListModulesOpts) {
+export async function listCapabilitiesModules(opts?: ListModulesOpts & { workspaceId?: string | null }) {
   const { limit, offset } = clampListOpts(opts);
+  const { tier } = await moduleTier(opts?.workspaceId);
+  if (tier === "local") {
+    const rows = await localListCapabilitiesModules(opts?.workspaceId);
+    return rows.slice(offset, offset + limit);
+  }
   return getDb().select().from(capabilitiesModules).limit(limit).offset(offset);
 }
-export async function getCapabilitiesModule(id: string) {
+export async function getCapabilitiesModule(id: string, workspaceId?: string | null) {
+  const { tier } = await moduleTier(workspaceId);
+  if (tier === "local") return localGetCapabilitiesModule(id, workspaceId);
   const [res] = await getDb().select().from(capabilitiesModules).where(eq(capabilitiesModules.id, id)).limit(1);
   return res ?? null;
 }
-export async function createCapabilitiesModule(body: CreateCapabilitiesModuleBody) {
+export async function createCapabilitiesModule(body: CreateCapabilitiesModuleBody, workspaceId?: string | null) {
   const id = randomUUID();
-  const [res] = await getDb().insert(capabilitiesModules).values({
+  const values = {
     id,
     ...body,
     skills: body.skills ?? [],
     functionSchemas: body.functionSchemas ?? []
-  }).returning();
+  };
+  const { tier } = await moduleTier(workspaceId);
+  if (tier === "local") {
+    const now = new Date();
+    const row: CapabilitiesModule = { ...(values as any), createdAt: now, updatedAt: now };
+    await localUpsertCapabilitiesModule(serializeRow(row), workspaceId);
+    return row;
+  }
+  const [res] = await getDb().insert(capabilitiesModules).values(values).returning();
   return res;
 }
-export async function updateCapabilitiesModule(id: string, body: UpdateCapabilitiesModuleBody) {
+export async function updateCapabilitiesModule(id: string, body: UpdateCapabilitiesModuleBody, workspaceId?: string | null) {
+  const { tier } = await moduleTier(workspaceId);
+  if (tier === "local") {
+    const existing = await localGetCapabilitiesModule(id, workspaceId);
+    if (!existing) return null;
+    const row: CapabilitiesModule = { ...existing, ...(body as any), updatedAt: new Date() };
+    await localUpsertCapabilitiesModule(serializeRow(row), workspaceId);
+    return row;
+  }
   const [res] = await getDb()
     .update(capabilitiesModules)
     .set({ ...body, updatedAt: new Date() })
@@ -418,6 +617,11 @@ export async function updateCapabilitiesModule(id: string, body: UpdateCapabilit
     .returning();
   return res ?? null;
 }
-export async function deleteCapabilitiesModule(id: string) {
+export async function deleteCapabilitiesModule(id: string, workspaceId?: string | null) {
+  const { tier } = await moduleTier(workspaceId);
+  if (tier === "local") {
+    const deleted = await localDeleteCapabilitiesModule(id, workspaceId);
+    return deleted ? [{ id }] : [];
+  }
   return getDb().delete(capabilitiesModules).where(eq(capabilitiesModules.id, id)).returning();
 }

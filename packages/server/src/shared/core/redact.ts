@@ -39,15 +39,19 @@ export function redactSecrets<T>(input: T, seen = new WeakSet()): T {
   const out: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(input as Record<string, unknown>)) {
     if (isSensitiveKey(k)) {
+      // Mask string values only. Credentials are strings; numeric fields that
+      // merely contain "token" in their name (e.g. maxOutputTokens) must pass
+      // through untouched or client edit payloads get corrupted ("Validation
+      // failed" on every model-module update). Objects under a sensitive key
+      // are recursed so their string fields are still scrubbed.
       if (typeof v === "string" && v) {
         out[k] = maskValue(v);
         out[`${k}_configured`] = true;
-      } else if (v) {
-        out[k] = "••••••••";
-        out[`${k}_configured`] = true;
+      } else if (v && typeof v === "object") {
+        out[k] = redactSecrets(v, seen);
       } else {
         out[k] = v;
-        out[`${k}_configured`] = false;
+        out[`${k}_configured`] = typeof v === "string" && v.length > 0;
       }
     } else if (v && typeof v === "object") {
       out[k] = redactSecrets(v, seen);

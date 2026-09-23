@@ -61,6 +61,15 @@ function emitWorkspaceSync(): void {
   globalBroker?.emit("workspace:sync", {});
 }
 
+/** Tenant scope for module ops: x-workspace-id header, or query param. */
+function workspaceIdFrom(request: any): string | null {
+  const raw = request.headers?.["x-workspace-id"];
+  const header = Array.isArray(raw) ? raw[0] : raw;
+  if (typeof header === "string" && header.trim()) return header.trim();
+  const q = (request.query ?? {}) as { workspaceId?: unknown };
+  return typeof q.workspaceId === "string" && q.workspaceId.trim() ? q.workspaceId.trim() : null;
+}
+
 function parseListQuery(query: unknown): { limit: number; offset: number } {
   const q = (query ?? {}) as { limit?: unknown; offset?: unknown };
   const rawLimit = Number(q.limit);
@@ -73,7 +82,7 @@ function parseListQuery(query: unknown): { limit: number; offset: number } {
 export async function moduleRoutes(app: FastifyInstance) {
   // GET /api/modules - Return all modules aggregated — redact secrets (P0-2)
   app.get("/api/modules", async (request, reply) => {
-    const all = await listAllModules(parseListQuery(request.query));
+    const all = await listAllModules({ ...parseListQuery(request.query), workspaceId: workspaceIdFrom(request) });
     const body = {
       ...all,
       modelModules: (all.modelModules as unknown[]).map((m) => redactSecrets(m as Record<string, unknown>)),
@@ -84,7 +93,8 @@ export async function moduleRoutes(app: FastifyInstance) {
 
   // --- Model Modules ---
   app.get("/api/modules/model", async (request, reply) => {
-    const list = await listModelModules(parseListQuery(request.query));
+    const wsId = workspaceIdFrom(request);
+    const list = await listModelModules({ ...parseListQuery(request.query), workspaceId: wsId });
     const body = (list as unknown[]).map((m) => redactSecrets(m as Record<string, unknown>));
     if (maybeSend304(request, reply, body)) return;
     return body;
@@ -94,7 +104,7 @@ export async function moduleRoutes(app: FastifyInstance) {
     "/api/modules/model/:id",
     { schema: { params: paramIdSchema } },
     async (request, reply) => {
-      const res = await getModelModule(request.params.id);
+      const res = await getModelModule(request.params.id, workspaceIdFrom(request));
       if (!res) return reply.status(404).send({ error: "Not Found", message: "ModelModule not found" });
       const body = redactSecrets(res as unknown as Record<string, unknown>);
       if (maybeSend304(request, reply, body)) return;
@@ -106,7 +116,7 @@ export async function moduleRoutes(app: FastifyInstance) {
     "/api/modules/model",
     { schema: { body: modelModuleSchema } },
     async (request, reply) => {
-      const res = await createModelModule(request.body);
+      const res = await createModelModule(request.body, workspaceIdFrom(request));
       emitWorkspaceSync();
       return reply.status(201).send(redactSecrets(res as unknown as Record<string, unknown>));
     }
@@ -116,7 +126,7 @@ export async function moduleRoutes(app: FastifyInstance) {
     "/api/modules/model/:id",
     { schema: { params: paramIdSchema, body: updateModelModuleSchema } },
     async (request, reply) => {
-      const res = await updateModelModule(request.params.id, request.body);
+      const res = await updateModelModule(request.params.id, request.body, workspaceIdFrom(request));
       if (!res) return reply.status(404).send({ error: "Not Found", message: "ModelModule not found" });
       emitWorkspaceSync();
       return redactSecrets(res as unknown as Record<string, unknown>);
@@ -135,7 +145,7 @@ export async function moduleRoutes(app: FastifyInstance) {
         });
       }
 
-      const deleted = await deleteModelModule(request.params.id);
+      const deleted = await deleteModelModule(request.params.id, workspaceIdFrom(request));
       if (deleted.length === 0) return reply.status(404).send({ error: "Not Found", message: "ModelModule not found" });
       emitWorkspaceSync();
       return reply.status(204).send();
@@ -146,7 +156,7 @@ export async function moduleRoutes(app: FastifyInstance) {
     "/api/modules/model/:id/test",
     { schema: { params: paramIdSchema } },
     async (request, reply) => {
-      const result = await testModelModule(request.params.id);
+      const result = await testModelModule(request.params.id, workspaceIdFrom(request));
       if (!result) return reply.status(404).send({ error: "Not Found", message: "ModelModule not found" });
       return result;
     }
@@ -154,7 +164,7 @@ export async function moduleRoutes(app: FastifyInstance) {
 
   // --- Instruction Modules ---
   app.get("/api/modules/instruction", async (request, reply) => {
-    const body = await listInstructionModules(parseListQuery(request.query));
+    const body = await listInstructionModules({ ...parseListQuery(request.query), workspaceId: workspaceIdFrom(request) });
     if (maybeSend304(request, reply, body)) return;
     return body;
   });
@@ -163,7 +173,7 @@ export async function moduleRoutes(app: FastifyInstance) {
     "/api/modules/instruction/:id",
     { schema: { params: paramIdSchema } },
     async (request, reply) => {
-      const res = await getInstructionModule(request.params.id);
+      const res = await getInstructionModule(request.params.id, workspaceIdFrom(request));
       if (!res) return reply.status(404).send({ error: "Not Found", message: "InstructionModule not found" });
       if (maybeSend304(request, reply, res)) return;
       return res;
@@ -174,7 +184,7 @@ export async function moduleRoutes(app: FastifyInstance) {
     "/api/modules/instruction",
     { schema: { body: instructionModuleSchema } },
     async (request, reply) => {
-      const res = await createInstructionModule(request.body);
+      const res = await createInstructionModule(request.body, workspaceIdFrom(request));
       emitWorkspaceSync();
       return reply.status(201).send(res);
     }
@@ -184,7 +194,7 @@ export async function moduleRoutes(app: FastifyInstance) {
     "/api/modules/instruction/:id",
     { schema: { params: paramIdSchema, body: updateInstructionModuleSchema } },
     async (request, reply) => {
-      const res = await updateInstructionModule(request.params.id, request.body);
+      const res = await updateInstructionModule(request.params.id, request.body, workspaceIdFrom(request));
       if (!res) return reply.status(404).send({ error: "Not Found", message: "InstructionModule not found" });
       emitWorkspaceSync();
       return res;
@@ -203,7 +213,7 @@ export async function moduleRoutes(app: FastifyInstance) {
         });
       }
 
-      const deleted = await deleteInstructionModule(request.params.id);
+      const deleted = await deleteInstructionModule(request.params.id, workspaceIdFrom(request));
       if (deleted.length === 0) return reply.status(404).send({ error: "Not Found", message: "InstructionModule not found" });
       emitWorkspaceSync();
       return reply.status(204).send();
@@ -212,7 +222,7 @@ export async function moduleRoutes(app: FastifyInstance) {
 
   // --- Toolkit Modules ---
   app.get("/api/modules/toolkit", async (request, reply) => {
-    const body = await listToolkitModules(parseListQuery(request.query));
+    const body = await listToolkitModules({ ...parseListQuery(request.query), workspaceId: workspaceIdFrom(request) });
     if (maybeSend304(request, reply, body)) return;
     return body;
   });
@@ -221,7 +231,7 @@ export async function moduleRoutes(app: FastifyInstance) {
     "/api/modules/toolkit/:id",
     { schema: { params: paramIdSchema } },
     async (request, reply) => {
-      const res = await getToolkitModule(request.params.id);
+      const res = await getToolkitModule(request.params.id, workspaceIdFrom(request));
       if (!res) return reply.status(404).send({ error: "Not Found", message: "ToolkitModule not found" });
       if (maybeSend304(request, reply, res)) return;
       return res;
@@ -232,7 +242,7 @@ export async function moduleRoutes(app: FastifyInstance) {
     "/api/modules/toolkit",
     { schema: { body: toolkitModuleSchema } },
     async (request, reply) => {
-      const res = await createToolkitModule(request.body);
+      const res = await createToolkitModule(request.body, workspaceIdFrom(request));
       emitWorkspaceSync();
       return reply.status(201).send(res);
     }
@@ -242,7 +252,7 @@ export async function moduleRoutes(app: FastifyInstance) {
     "/api/modules/toolkit/:id",
     { schema: { params: paramIdSchema, body: updateToolkitModuleSchema } },
     async (request, reply) => {
-      const res = await updateToolkitModule(request.params.id, request.body);
+      const res = await updateToolkitModule(request.params.id, request.body, workspaceIdFrom(request));
       if (!res) return reply.status(404).send({ error: "Not Found", message: "ToolkitModule not found" });
       emitWorkspaceSync();
       return res;
@@ -261,7 +271,7 @@ export async function moduleRoutes(app: FastifyInstance) {
         });
       }
 
-      const deleted = await deleteToolkitModule(request.params.id);
+      const deleted = await deleteToolkitModule(request.params.id, workspaceIdFrom(request));
       if (deleted.length === 0) return reply.status(404).send({ error: "Not Found", message: "ToolkitModule not found" });
       emitWorkspaceSync();
       return reply.status(204).send();
@@ -270,7 +280,7 @@ export async function moduleRoutes(app: FastifyInstance) {
 
   // --- Constraints Modules ---
   app.get("/api/modules/constraints", async (request, reply) => {
-    const body = await listConstraintsModules(parseListQuery(request.query));
+    const body = await listConstraintsModules({ ...parseListQuery(request.query), workspaceId: workspaceIdFrom(request) });
     if (maybeSend304(request, reply, body)) return;
     return body;
   });
@@ -279,7 +289,7 @@ export async function moduleRoutes(app: FastifyInstance) {
     "/api/modules/constraints/:id",
     { schema: { params: paramIdSchema } },
     async (request, reply) => {
-      const res = await getConstraintsModule(request.params.id);
+      const res = await getConstraintsModule(request.params.id, workspaceIdFrom(request));
       if (!res) return reply.status(404).send({ error: "Not Found", message: "ConstraintsModule not found" });
       if (maybeSend304(request, reply, res)) return;
       return res;
@@ -290,7 +300,7 @@ export async function moduleRoutes(app: FastifyInstance) {
     "/api/modules/constraints",
     { schema: { body: constraintsModuleSchema } },
     async (request, reply) => {
-      const res = await createConstraintsModule(request.body);
+      const res = await createConstraintsModule(request.body, workspaceIdFrom(request));
       emitWorkspaceSync();
       return reply.status(201).send(res);
     }
@@ -300,7 +310,7 @@ export async function moduleRoutes(app: FastifyInstance) {
     "/api/modules/constraints/:id",
     { schema: { params: paramIdSchema, body: updateConstraintsModuleSchema } },
     async (request, reply) => {
-      const res = await updateConstraintsModule(request.params.id, request.body);
+      const res = await updateConstraintsModule(request.params.id, request.body, workspaceIdFrom(request));
       if (!res) return reply.status(404).send({ error: "Not Found", message: "ConstraintsModule not found" });
       emitWorkspaceSync();
       return res;
@@ -319,7 +329,7 @@ export async function moduleRoutes(app: FastifyInstance) {
         });
       }
 
-      const deleted = await deleteConstraintsModule(request.params.id);
+      const deleted = await deleteConstraintsModule(request.params.id, workspaceIdFrom(request));
       if (deleted.length === 0) return reply.status(404).send({ error: "Not Found", message: "ConstraintsModule not found" });
       emitWorkspaceSync();
       return reply.status(204).send();
@@ -328,7 +338,7 @@ export async function moduleRoutes(app: FastifyInstance) {
 
   // --- Capabilities Modules ---
   app.get("/api/modules/capabilities", async (request, reply) => {
-    const body = await listCapabilitiesModules(parseListQuery(request.query));
+    const body = await listCapabilitiesModules({ ...parseListQuery(request.query), workspaceId: workspaceIdFrom(request) });
     if (maybeSend304(request, reply, body)) return;
     return body;
   });
@@ -337,7 +347,7 @@ export async function moduleRoutes(app: FastifyInstance) {
     "/api/modules/capabilities/:id",
     { schema: { params: paramIdSchema } },
     async (request, reply) => {
-      const res = await getCapabilitiesModule(request.params.id);
+      const res = await getCapabilitiesModule(request.params.id, workspaceIdFrom(request));
       if (!res) return reply.status(404).send({ error: "Not Found", message: "CapabilitiesModule not found" });
       if (maybeSend304(request, reply, res)) return;
       return res;
@@ -348,7 +358,7 @@ export async function moduleRoutes(app: FastifyInstance) {
     "/api/modules/capabilities",
     { schema: { body: capabilitiesModuleSchema } },
     async (request, reply) => {
-      const res = await createCapabilitiesModule(request.body);
+      const res = await createCapabilitiesModule(request.body, workspaceIdFrom(request));
       emitWorkspaceSync();
       return reply.status(201).send(res);
     }
@@ -358,7 +368,7 @@ export async function moduleRoutes(app: FastifyInstance) {
     "/api/modules/capabilities/:id",
     { schema: { params: paramIdSchema, body: updateCapabilitiesModuleSchema } },
     async (request, reply) => {
-      const res = await updateCapabilitiesModule(request.params.id, request.body);
+      const res = await updateCapabilitiesModule(request.params.id, request.body, workspaceIdFrom(request));
       if (!res) return reply.status(404).send({ error: "Not Found", message: "CapabilitiesModule not found" });
       emitWorkspaceSync();
       return res;
@@ -377,7 +387,7 @@ export async function moduleRoutes(app: FastifyInstance) {
         });
       }
 
-      const deleted = await deleteCapabilitiesModule(request.params.id);
+      const deleted = await deleteCapabilitiesModule(request.params.id, workspaceIdFrom(request));
       if (deleted.length === 0) return reply.status(404).send({ error: "Not Found", message: "CapabilitiesModule not found" });
       emitWorkspaceSync();
       return reply.status(204).send();

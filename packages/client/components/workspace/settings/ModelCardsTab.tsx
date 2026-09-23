@@ -79,7 +79,9 @@ export default function ModelCardsTab() {
     setLabel(mod.name);
     setProvider(mod.provider || 'google');
     setModelName(mod.modelProfileId);
-    setApiKey(mod.apiKey || '');
+    // Never prefill the key: reads return a redacted mask, and sending that
+    // mask back would overwrite the stored credential. Blank = keep existing.
+    setApiKey('');
     setBaseUrl(mod.baseUrl || '');
     setTemperature(mod.temperature ?? 0.7);
     setMaxTokens(mod.maxTokens ?? 2048);
@@ -90,27 +92,23 @@ export default function ModelCardsTab() {
     e.preventDefault();
     if (!label || !modelName) return;
 
+    // Only send an apiKey when the user actually typed one; on edit an empty
+    // field means "keep the stored key".
+    const trimmedKey = apiKey.trim();
+    const payload = {
+      name: label,
+      provider,
+      modelProfileId: modelName,
+      apiKey: trimmedKey || undefined,
+      baseUrl,
+      temperature,
+      maxTokens
+    };
     try {
       if (editingId) {
-        await updateModelModule(editingId, {
-          name: label,
-          provider,
-          modelProfileId: modelName,
-          apiKey,
-          baseUrl,
-          temperature,
-          maxTokens
-        });
+        await updateModelModule(editingId, payload);
       } else {
-        await addModelModule({
-          name: label,
-          provider,
-          modelProfileId: modelName,
-          apiKey,
-          baseUrl,
-          temperature,
-          maxTokens
-        });
+        await addModelModule(payload);
       }
       resetForm();
     } catch (err) {
