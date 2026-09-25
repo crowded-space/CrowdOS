@@ -25,7 +25,7 @@ async function resolveRuntimeRoot(packet: { channelId?: string; workspaceId?: st
     });
     return root.path;
   } catch {
-    const { Guard } = await import('../../tools/safety/guard.js');
+    const { Guard } = await import('../../tools/tools-gate.js');
     return Guard.getWorkspaceDir(packet?.workspaceId);
   }
 }
@@ -217,7 +217,7 @@ export class CodingRuntime extends BaseRuntime {
               }
               let resolved: string;
               try {
-                const { Guard } = await import('../../tools/safety/guard.js');
+                const { Guard } = await import('../../tools/tools-gate.js');
                 resolved = await Guard.validatePath(targetPath, await resolveRuntimeRoot(packet));
               } catch (e: any) {
                 return { success: false, output: '', error: e?.message || String(e) };
@@ -297,7 +297,7 @@ export class CodingRuntime extends BaseRuntime {
               }
               let resolved: string;
               try {
-                const { Guard } = await import('../../tools/safety/guard.js');
+                const { Guard } = await import('../../tools/tools-gate.js');
                 resolved = await Guard.validatePath(targetPath, await resolveRuntimeRoot(packet));
               } catch (e: any) {
                 return { success: false, output: '', error: e?.message || String(e) };

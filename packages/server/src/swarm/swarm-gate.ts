@@ -4,6 +4,7 @@ import { dispatchSwarmTasks } from "./swarm-dispatcher.js";
 import type { WorkerExecutor } from "./swarm-dispatcher.js";
 import { aggregateSwarmOutputs } from "./swarm-aggregator.js";
 import { verifySwarm } from "./swarm-verifier.js";
+import { resolveWorker, loadWorkerCandidates } from "./swarm-worker-resolver.js";
 import type { SwarmPlan, SwarmPlanTask, SwarmTaskRow, SwarmTaskStatus, SwarmWorkerResult, SwarmAggregationResult, SwarmVerificationResult, SwarmReport } from "./swarm-types.js";
 import { isSwarmV1Enabled } from "./swarm-types.js";
 import {
@@ -56,6 +57,10 @@ export const swarmGate = {
 
   // Dispatcher
   dispatch: dispatchSwarmTasks,
+
+  // Worker resolution (roster → agent for plan assignees)
+  resolveWorker,
+  loadWorkerCandidates,
 
   // Aggregator
   aggregate: aggregateSwarmOutputs,

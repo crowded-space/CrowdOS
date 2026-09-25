@@ -2,7 +2,6 @@ import type { ContextPacket, RuntimeResult, RuntimeEvent } from '../types.js'
 import type { EventBroker } from '../../event-broker/event-broker-gate.js'
 import { BaseRuntime } from './base-runtime.js'
 import { swarmGate } from '../../swarm/swarm-gate.js'
-import { resolveWorker, loadWorkerCandidates } from '../../swarm/swarm-worker-resolver.js'
 import { RuntimeKernel } from '../kernel/runtime-kernel.js'
 import type { AgentProfile } from '../../agents/agent-gate.js'
 import { ContextAssembler } from '../kernel/context-assembler.js'
@@ -50,7 +49,7 @@ export class SwarmRuntime extends BaseRuntime {
 
       // §22/§31: load the workspace roster ONCE and resolve every task against
       // it. One roster read per swarm, not one per task.
-      const candidates = await loadWorkerCandidates(packet.workspaceId)
+      const candidates = await swarmGate.loadWorkerCandidates(packet.workspaceId)
 
       // 1. Supervisor LLM → structured plan (with honest fallback)
       const planResult = await swarmGate.plan(packet, this.kernel as any, broker)
@@ -106,7 +105,7 @@ export class SwarmRuntime extends BaseRuntime {
         task: { id: string; dependsOn: string[]; assigneeTemplate: string; goal?: string; description?: string },
         _ctx: { packet: ContextPacket; broker: EventBroker; runId: string },
       ) => {
-        const resolved = resolveWorker(task.assigneeTemplate, candidates, {
+        const resolved = swarmGate.resolveWorker(task.assigneeTemplate, candidates, {
           requestingAgent: { id: packet.agentId, name: packet.agentName, authorityLevel: packet.authorityLevel } as AgentProfile,
         })
         workerAttribution.set(task.id, {

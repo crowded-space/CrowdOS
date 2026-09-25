@@ -54,6 +54,9 @@ export class AnthropicAdapter implements IProviderAdapter {
 
     if (request.temperature !== undefined) {
       body.temperature = request.temperature
+    } else if (config.temperature !== undefined) {
+      // ponytail: request wins, config fallback — was config-silent vs openai/ollama/custom
+      body.temperature = config.temperature
     }
 
     if (request.tools && request.tools.length > 0) {
