@@ -15,7 +15,13 @@ export class InstructionStackMiddleware implements IContextMiddleware {
   readonly priority = 15;
 
   async process(packet: MutableContextPacket, ctx: ContextBuildContext): Promise<void> {
-    const db = getDb();
+    // ponytail: degrade like history-compression — local-first runs have no DATABASE_URL
+    let db: ReturnType<typeof getDb>;
+    try {
+      db = getDb();
+    } catch {
+      return;
+    }
     const { agent } = ctx;
     const instructions: string[] = [];
 

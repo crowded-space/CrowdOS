@@ -2567,12 +2567,10 @@ const initialSelectedMode: ComposerMode = (() => {
     // Agent operations
     addAgent: async (agent) => {
       try {
-        const modelModuleId = agent.modelModuleId || get().modelModules[0]?.id;
-        const instructionModuleId = agent.instructionModuleId || get().instructionModules[0]?.id;
-
-        if (!modelModuleId || !instructionModuleId) {
-          throw new Error('Create a ModelModule and InstructionModule before creating an agent.');
-        }
+        // Local mode: the server seeds canon default modules and resolves
+        // missing references on create, so an empty catalog is not an error.
+        const modelModuleId = agent.modelModuleId || get().modelModules[0]?.id || null;
+        const instructionModuleId = agent.instructionModuleId || get().instructionModules[0]?.id || 'instr-default';
 
         const body = {
           name: agent.name,
@@ -2630,9 +2628,8 @@ const initialSelectedMode: ComposerMode = (() => {
         if (patch.isOmniscient !== undefined) body.isOmniscient = patch.isOmniscient;
         const backendStatus = toBackendAgentStatus(patch.status);
         if (backendStatus !== undefined) body.status = backendStatus;
-        
-        // Match permissions structure Zod schema requirements
-        body.permissions = { spawnAgents: true, patchRuntime: true, accessAllChannels: true };
+        // Permissions are advisory-only here; the backend merges partial
+        // updates over the existing deny-by-default blob. Never force-grant.
 
         await fetchJsonOrThrow<Agent>(`${BACKEND_URL}/api/agents/${id}`, {
           method: 'PUT',

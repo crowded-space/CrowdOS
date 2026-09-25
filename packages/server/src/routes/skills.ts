@@ -15,6 +15,10 @@ function emitWorkspaceSync(): void {
   globalBroker?.emit("workspace:sync", {});
 }
 
+function isForeignKeyViolation(err: unknown): boolean {
+  return Boolean(err && typeof err === "object" && (err as { code?: string }).code === "23503");
+}
+
 const agentSkillParamsSchema = z.object({
   id: z.string().min(1),
   skillId: z.string().min(1),
@@ -111,7 +115,16 @@ export async function skillRoutes(app: FastifyInstance) {
     "/api/agents/:id/skills/:skillId",
     { schema: { params: agentSkillParamsSchema } },
     async (request, reply) => {
-      await skillsGate.assignSkill(request.params.id, request.params.skillId);
+      try {
+        await skillsGate.assignSkill(request.params.id, request.params.skillId);
+      } catch (err: any) {
+        // FK violations (unknown agent or skill) surface as a clean 404,
+        // not a raw 500; anything else is a real failure and propagates.
+        if (isForeignKeyViolation(err)) {
+          return reply.status(404).send({ statusCode: 404, error: "Not Found", message: "Agent or skill not found" });
+        }
+        throw err;
+      }
       emitWorkspaceSync();
       return reply.status(204).send();
     }
@@ -122,7 +135,14 @@ export async function skillRoutes(app: FastifyInstance) {
     "/api/agents/:id/skills/:skillId",
     { schema: { params: agentSkillParamsSchema } },
     async (request, reply) => {
-      await skillsGate.removeSkill(request.params.id, request.params.skillId);
+      try {
+        await skillsGate.removeSkill(request.params.id, request.params.skillId);
+      } catch (err: any) {
+        if (isForeignKeyViolation(err)) {
+          return reply.status(404).send({ statusCode: 404, error: "Not Found", message: "Agent or skill not found" });
+        }
+        throw err;
+      }
       emitWorkspaceSync();
       return reply.status(204).send();
     }

@@ -556,9 +556,9 @@ export default function WorkspaceSettingsModal() {
     e.preventDefault();
     if (!newAgentName.trim()) return;
 
-    const sanitizedName = newAgentName.replace(/[^A-Za-z0-9_]/g, '');
+    const sanitizedName = newAgentName.replace(/[^A-Za-z0-9_-]/g, '');
     if (!sanitizedName) {
-      showError('Validation Error', 'Name must contain letters, numbers, or underscores.');
+      showError('Validation Error', 'Name must contain letters, numbers, hyphens, or underscores.');
       return;
     }
 
@@ -620,9 +620,9 @@ export default function WorkspaceSettingsModal() {
     e.preventDefault();
     if (!editingAgentId) return;
 
-    const sanitizedName = editAgentName.replace(/[^A-Za-z0-9_]/g, '');
+    const sanitizedName = editAgentName.replace(/[^A-Za-z0-9_-]/g, '');
     if (!sanitizedName) {
-      showError('Validation Error', 'Name must contain letters, numbers, or underscores.');
+      showError('Validation Error', 'Name must contain letters, numbers, hyphens, or underscores.');
       return;
     }
     
@@ -659,7 +659,7 @@ export default function WorkspaceSettingsModal() {
 
   const handleDuplicateAgent = async (agent: any) => {
     const targetName = `copy_of_${agent.name}`.slice(0, 30);
-    const sanitizedName = targetName.replace(/[^A-Za-z0-9_]/g, '');
+    const sanitizedName = targetName.replace(/[^A-Za-z0-9_-]/g, '');
     
     try {
       await addAgent({
@@ -710,7 +710,7 @@ export default function WorkspaceSettingsModal() {
             showError('Invalid Config', 'Missing "name" field in JSON configuration.');
             return;
           }
-          setNewAgentName(parsed.name.replace(/[^A-Za-z0-9_]/g, ''));
+          setNewAgentName(parsed.name.replace(/[^A-Za-z0-9_-]/g, ''));
           setNewAgentSpecies(parsed.species || 'Raven');
           setNewAgentLevel(parsed.level !== undefined ? parsed.level : 3);
           setNewAgentDesc(parsed.description || '');
@@ -1138,8 +1138,8 @@ export default function WorkspaceSettingsModal() {
                           placeholder="alphanumeric_with_underscores"
                           className="w-full bg-zinc-900 border border-zinc-800 rounded px-2.5 py-1.5 focus:border-zinc-700 focus:ring-1 focus:ring-zinc-700/40 focus:outline-none font-mono text-xs text-zinc-100 placeholder-zinc-650"
                         />
-                        {newAgentName && !/^[A-Za-z0-9_]+$/.test(newAgentName) && (
-                          <span className="text-[10px] text-rose-400 font-sans block mt-1">âš ï¸ Only letters, numbers, and underscores allowed.</span>
+                        {newAgentName && !/^[A-Za-z0-9_-]+$/.test(newAgentName) && (
+                          <span className="text-[10px] text-rose-400 font-sans block mt-1">âš ï¸ Only letters, numbers, hyphens, and underscores allowed.</span>
                         )}
                         {newAgentName && agents.some(a => a.name.toLowerCase() === newAgentName.toLowerCase()) && (
                           <span className="text-[10px] text-amber-500 font-sans block mt-1">âš ï¸ Name already exists in this workspace.</span>
@@ -1318,7 +1318,7 @@ export default function WorkspaceSettingsModal() {
                       </button>
                       <button
                         type="submit"
-                        disabled={Boolean(newAgentName && !/^[A-Za-z0-9_]+$/.test(newAgentName))}
+                        disabled={Boolean(newAgentName && !/^[A-Za-z0-9_-]+$/.test(newAgentName))}
                         className="px-2.5 py-1.5 bg-indigo-500 text-white rounded font-semibold hover:bg-indigo-650 cursor-pointer disabled:bg-zinc-800 disabled:text-zinc-600 disabled:cursor-not-allowed"
                       >
                         Launch Assembly
@@ -1353,8 +1353,8 @@ export default function WorkspaceSettingsModal() {
                           onChange={(e) => setEditAgentName(e.target.value)}
                           className="w-full bg-zinc-950 border border-zinc-800 rounded px-2.5 py-1.5 focus:border-indigo-700 focus:ring-1 focus:ring-indigo-700/40 focus:outline-none font-mono text-xs text-zinc-100"
                         />
-                        {editAgentName && !/^[A-Za-z0-9_]+$/.test(editAgentName) && (
-                          <span className="text-[10px] text-rose-450 font-sans block mt-1">âš ï¸ Only letters, numbers, and underscores allowed.</span>
+                        {editAgentName && !/^[A-Za-z0-9_-]+$/.test(editAgentName) && (
+                          <span className="text-[10px] text-rose-450 font-sans block mt-1">âš ï¸ Only letters, numbers, hyphens, and underscores allowed.</span>
                         )}
                       </div>
 
@@ -1519,7 +1519,7 @@ export default function WorkspaceSettingsModal() {
                       </button>
                       <button
                         type="submit"
-                        disabled={Boolean(editAgentName && !/^[A-Za-z0-9_]+$/.test(editAgentName))}
+                        disabled={Boolean(editAgentName && !/^[A-Za-z0-9_-]+$/.test(editAgentName))}
                         className="px-2.5 py-1.5 bg-indigo-600 text-white rounded font-semibold hover:bg-indigo-500 cursor-pointer transition shadow-xl disabled:bg-zinc-800 disabled:text-zinc-600 disabled:cursor-not-allowed"
                       >
                         Save Configuration

@@ -637,6 +637,13 @@ export async function setEffectiveMounts(input: {
   const workspaceId = input.workspaceId ?? channel?.workspaceId ?? category?.workspaceId ?? null;
   const scope: FsMounts["scope"] = channel ? "channel" : category ? "category" : "workspace";
   const mode = input.mode ?? "override";
+  // "default" is the WORKSPACE level's own mode (the canon parent set); a
+  // channel/category row stored with mode "default" would be dead data — the
+  // resolver only honors "override" below workspace, so an ineffective write
+  // must be refused rather than silently stored.
+  if (mode === "default" && (channel || category)) {
+    return { ok: false, error: 'Mode "default" is only valid at the workspace level' };
+  }
   const normalized = normalizeMounts({ scope, mode, mounts: input.mounts });
   if (!normalized) return { ok: false, error: `Invalid mount set (mode: ${String(input.mode)})` };
 

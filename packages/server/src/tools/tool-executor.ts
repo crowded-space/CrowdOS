@@ -185,8 +185,23 @@ export class ToolExecutor {
     const __span = __tracing ? __tracing.startSpan("tool", { runId: __runId, channelId: __channelId, agentId, attributes: { tool: toolId } }) : null;
 
     try {
-      // 1. Fetch Agent Identity
-      const agent = await db.query.agents.findFirst({
+      // 1. Fetch Agent Identity. Tenant routing: a tool call carries the run's
+      // workspace, and a workspace-record database holds the agent row — the
+      // ambient handle (global pool / ALS) cannot see it. Prefer the workspace
+      // handle; fall back to ambient when the workspace is local-only
+      // (NO_DATABASE) or the handle errors, preserving the legacy behavior.
+      const ctxWorkspaceId = (partialCtx as unknown as { workspaceId?: string })?.workspaceId;
+      let agentDb = db;
+      if (ctxWorkspaceId) {
+        try {
+          const { getWorkspaceDb } = await import("../workspace/workspace-gate.js");
+          const resolved = await getWorkspaceDb(ctxWorkspaceId);
+          if (resolved?.db) agentDb = resolved.db;
+        } catch {
+          // local-only workspace or resolution failure: ambient handle
+        }
+      }
+      const agent = await agentDb.query.agents.findFirst({
         where: eq(agents.id, agentId),
       });
 

@@ -19,6 +19,12 @@ function emitWorkspaceSync(): void {
   globalBroker?.emit("workspace:sync", {});
 }
 
+/** Tenant scope for agent ops: request.workspaceId (resolved from x-workspace-id). */
+function workspaceIdFrom(request: any): string | null {
+  const wid = (request as any).workspaceId;
+  return typeof wid === "string" && wid.trim() ? wid.trim() : null;
+}
+
 export async function agentRoutes(app: FastifyInstance) {
   app.get<{ Querystring: ListAgentsQuery }>(
     "/api/agents",
@@ -29,6 +35,7 @@ export async function agentRoutes(app: FastifyInstance) {
     },
     async (request) =>
       agentGate.list({
+        workspaceId: workspaceIdFrom(request),
         authorityLevel: request.query.authorityLevel as 0 | 1 | 2 | 3 | undefined,
         status: request.query.status,
         isTemplate: request.query.isTemplate,
@@ -45,7 +52,7 @@ export async function agentRoutes(app: FastifyInstance) {
       },
     },
     async (request, reply) => {
-      const agent = await agentGate.getById(request.params.id, (request as any).db);
+      const agent = await agentGate.getById(request.params.id, (request as any).db, workspaceIdFrom(request));
       if (!agent) {
         return reply.status(404).send({
           statusCode: 404,
@@ -93,8 +100,9 @@ export async function agentRoutes(app: FastifyInstance) {
     },
     async (request, reply) => {
       try {
+        const wsId = workspaceIdFrom(request);
         const previous = await agentGate.getById(request.params.id, (request as any).db);
-        const updated = await agentGate.update(request.params.id, request.body, (request as any).db);
+        const updated = await agentGate.update(request.params.id, { ...request.body, workspaceId: wsId }, (request as any).db, wsId);
         if (!updated) {
           return reply.status(404).send({
             statusCode: 404,
@@ -127,6 +135,17 @@ export async function agentRoutes(app: FastifyInstance) {
       },
     },
     async (request, reply) => {
+      // Tenant scope: delete must resolve the row inside the caller's
+      // workspace (duplicate ids across folders must not cross-delete).
+      const wsId = workspaceIdFrom(request);
+      const target = await agentGate.getById(request.params.id, (request as any).db, wsId);
+      if (!target) {
+        return reply.status(404).send({
+          statusCode: 404,
+          error: "Not Found",
+          message: "Agent not found",
+        });
+      }
       const deleted = await agentGate.delete(request.params.id, (request as any).db);
       if (!deleted) {
         return reply.status(404).send({

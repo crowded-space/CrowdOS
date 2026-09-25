@@ -478,7 +478,20 @@ export async function appendMessage(input: AppendMessageInput, opts: AppendMessa
   // PG counter upward so any PG-side allocation by another process can never
   // re-issue a seq the local log already used.
   try {
-    await withTransaction(async (tx: any) => {
+    // Tenant routing: a workspace-record database owns this channel's replica
+    // rows. The ambient handle (global pool) is only the fallback for
+    // workspaces with no record URL — writing the replica leg there would
+    // strand the row in the wrong database with the outbox never triggered.
+    let replicaDb: any = null;
+    try {
+      if (workspaceId) {
+        const { getWorkspaceDb } = await import("../workspace/workspace-gate.js");
+        replicaDb = (await getWorkspaceDb(workspaceId)).db ?? null;
+      }
+    } catch {
+      // local-only workspace: fall back to the ambient handle below
+    }
+    const replicate = async (tx: any) => {
       const row = { ...baseRow, workspaceId, sequenceNumber };
       // Best-effort replica insert: a pre-existing row must not fail the run.
       await tx.insert(messages).values(row).onConflictDoNothing();
@@ -489,7 +502,12 @@ export async function appendMessage(input: AppendMessageInput, opts: AppendMessa
           set "last_seq" = greatest("channel_sequences"."last_seq", ${sequenceNumber}),
               "updated_at" = now()
       `);
-    });
+    };
+    if (replicaDb) {
+      await runWithDb(replicaDb, () => withTransaction(replicate));
+    } else {
+      await withTransaction(replicate);
+    }
     noteDbSuccess(url);
   } catch (err) {
     // Local already committed, so the message IS durable. A failed replica leg

@@ -105,12 +105,12 @@ async function handleRetention(): Promise<void> {
 
 async function handleApprovalExpire(): Promise<void> {
   try {
-    const { sweepApprovalsOnce } = await import("../approvals/approval-sweeper.js");
+    const { approvalGate } = await import("../approvals/approval-gate.js");
     const { getSharedBroker } = await import("../event-broker/event-broker-gate.js");
     // ponytail: single shared instance; no orphan fallback.
     const broker = (getSharedBroker as () => unknown | null)?.();
     if (!broker) throw new Error("EventBroker not initialized (no shared broker registered).");
-    await sweepApprovalsOnce(broker);
+    await approvalGate.sweepOnce(broker);
   } catch (err) {
     console.error("[maintenance:approval-expire] failed", (err as Error)?.message || err);
     throw err;

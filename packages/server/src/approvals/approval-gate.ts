@@ -50,11 +50,18 @@ export const approvalGate = {
   decide,
   expirePendingApprovals,
   sweepExpired,
+  sweepOnce: sweepOnce,
   isEnabled: isApprovalsEnabled,
   computeScopeHash,
   mapRisk: mapVerdictToRiskClass,
   argsPreview: argsPreviewFromCommand,
 };
+
+// ponytail: dynamic import avoids gate→sweeper→gate static cycle; worker calls gate port
+export async function sweepOnce(broker?: unknown): Promise<number> {
+  const m = await import("./approval-sweeper.js");
+  return m.sweepApprovalsOnce(broker);
+}
 
 export type ApprovalDecidedPayload = {
   runId: string;

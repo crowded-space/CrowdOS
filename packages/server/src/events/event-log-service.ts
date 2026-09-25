@@ -50,14 +50,15 @@ const channelWorkspaceMemo = new Map<string, string | null>();
 
 async function workspaceOfChannel(channelId: string): Promise<string | null> {
   const hit = channelWorkspaceMemo.get(channelId);
-  if (hit !== undefined) return hit;
+  // ponytail: never pin null — first-event race would split the log across scopes
+  if (hit !== undefined && hit !== null) return hit;
   // Row first (authoritative while the channel exists), then the log file
   // itself (still resolves for an orphaned log or a row-less channel).
   const ws =
     (await resolveWorkspaceIdForChannel(channelId).catch(() => null)) ??
     (await findWorkspaceIdForChannelLog("events", channelId).catch(() => null));
   if (channelWorkspaceMemo.size > 5000) channelWorkspaceMemo.clear();
-  channelWorkspaceMemo.set(channelId, ws);
+  if (ws !== null) channelWorkspaceMemo.set(channelId, ws);
   return ws;
 }
 

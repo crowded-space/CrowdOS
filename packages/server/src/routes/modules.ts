@@ -137,7 +137,7 @@ export async function moduleRoutes(app: FastifyInstance) {
     "/api/modules/model/:id",
     { schema: { params: paramIdSchema } },
     async (request, reply) => {
-      const referencingAgent = await findReferencingAgent("model", request.params.id);
+      const referencingAgent = await findReferencingAgent("model", request.params.id, workspaceIdFrom(request));
       if (referencingAgent) {
         return reply.status(409).send({
           error: "Conflict",
@@ -205,7 +205,7 @@ export async function moduleRoutes(app: FastifyInstance) {
     "/api/modules/instruction/:id",
     { schema: { params: paramIdSchema } },
     async (request, reply) => {
-      const referencingAgent = await findReferencingAgent("instruction", request.params.id);
+      const referencingAgent = await findReferencingAgent("instruction", request.params.id, workspaceIdFrom(request));
       if (referencingAgent) {
         return reply.status(409).send({
           error: "Conflict",
@@ -263,7 +263,7 @@ export async function moduleRoutes(app: FastifyInstance) {
     "/api/modules/toolkit/:id",
     { schema: { params: paramIdSchema } },
     async (request, reply) => {
-      const referencingAgent = await findReferencingAgent("toolkit", request.params.id);
+      const referencingAgent = await findReferencingAgent("toolkit", request.params.id, workspaceIdFrom(request));
       if (referencingAgent) {
         return reply.status(409).send({
           error: "Conflict",
@@ -321,7 +321,7 @@ export async function moduleRoutes(app: FastifyInstance) {
     "/api/modules/constraints/:id",
     { schema: { params: paramIdSchema } },
     async (request, reply) => {
-      const referencingAgent = await findReferencingAgent("constraints", request.params.id);
+      const referencingAgent = await findReferencingAgent("constraints", request.params.id, workspaceIdFrom(request));
       if (referencingAgent) {
         return reply.status(409).send({
           error: "Conflict",
@@ -379,7 +379,7 @@ export async function moduleRoutes(app: FastifyInstance) {
     "/api/modules/capabilities/:id",
     { schema: { params: paramIdSchema } },
     async (request, reply) => {
-      const referencingAgent = await findReferencingAgent("capabilities", request.params.id);
+      const referencingAgent = await findReferencingAgent("capabilities", request.params.id, workspaceIdFrom(request));
       if (referencingAgent) {
         return reply.status(409).send({
           error: "Conflict",

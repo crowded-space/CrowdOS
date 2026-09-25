@@ -23,6 +23,8 @@ export class PiEventBridge {
     const { agentId, channelId, broker } = ctx;
     const toolCallRecords: ToolCallRecord[] = [];
     const runtimeEvents: RuntimeEvent[] = [];
+    // ponytail: start/end arrive separately — map bridges them, add when pi-core joins them
+    const inputByCallId = new Map<string, unknown>();
     let totalUsage = { promptTokens: 0, completionTokens: 0, totalTokens: 0 };
 
     let resolveCompletion: (val: { finalContent: string; finalThoughts: string; usage: { promptTokens: number; completionTokens: number; totalTokens: number } }) => void;
@@ -85,6 +87,7 @@ export class PiEventBridge {
 
         case 'tool_call_start':
           if (event.toolCall) {
+            inputByCallId.set(event.toolCall.id, event.toolCall.arguments);
             broker.emit('tool:start', {
               callId: event.toolCall.id,
               agentId,
@@ -143,7 +146,7 @@ export class PiEventBridge {
 
             toolCallRecords.push({
               toolName: event.toolResult.name,
-              input: {},
+              input: (inputByCallId.get(event.toolResult.id as string) ?? {}) as Record<string, unknown>,
               output: event.toolResult.output || event.toolResult.error || '',
               success: event.toolResult.success,
               durationMs: event.toolResult.durationMs,

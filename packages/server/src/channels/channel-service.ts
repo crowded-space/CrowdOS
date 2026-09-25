@@ -1,4 +1,4 @@
-import { and, eq, isNull, sql } from "drizzle-orm";
+import { and, eq, isNull, or, sql } from "drizzle-orm";
 import { randomUUID } from "node:crypto";
 import { getDb, dualWrite } from "../shared/config/database.js";
 import { tierContextFor } from "../workspace/workspace-gate.js";
@@ -242,10 +242,16 @@ function mergeChannelLists(pgRows: any[], localRows: any[], limit: number, curso
   return merged.slice(0, limit);
 }
 
-export async function listChannels(opts?: { limit?: number; cursor?: string | null; db?: any }) {
+export async function listChannels(opts?: { limit?: number; cursor?: string | null; workspaceId?: string | null; db?: any }) {
   const limit = Math.min(200, Math.max(1, opts?.limit ?? 200));
   if (opts?.db) {
     const db = opts.db;
+    // §30 tenant scope: a named workspace serves scoped + legacy-global rows;
+    // no header keeps the legacy unscoped read (default folder / all rows).
+    const wsFilter =
+      opts.workspaceId && opts.workspaceId.trim()
+        ? or(eq(channels.workspaceId, opts.workspaceId), isNull(channels.workspaceId))
+        : undefined;
     let offset: number | undefined;
     let keyset: ReturnType<typeof and> | undefined;
     if (opts?.cursor) {
@@ -263,7 +269,12 @@ export async function listChannels(opts?: { limit?: number; cursor?: string | nu
       }
     }
     return db.query.channels.findMany({
-      where: (keyset as any) ?? isNull(channels.archivedAt),
+      where: and(
+        ...[
+          keyset ?? isNull(channels.archivedAt),
+          ...(wsFilter ? [wsFilter] : []),
+        ] as any[],
+      ) as any,
       orderBy: (table: any, { asc }: any) => [asc(table.position), asc(table.id)],
       limit,
       ...(offset ? { offset } : {}),
@@ -271,12 +282,20 @@ export async function listChannels(opts?: { limit?: number; cursor?: string | nu
   }
   const [pgRows, localRows] = await Promise.all([
     pgCatchNull(() =>      getDb().query.channels.findMany({
-        where: isNull(channels.archivedAt),
+        where: opts?.workspaceId && opts.workspaceId.trim()
+          ? (and(
+              isNull(channels.archivedAt),
+              or(eq(channels.workspaceId, opts.workspaceId), isNull(channels.workspaceId)),
+            ) as any)
+          : isNull(channels.archivedAt),
         orderBy: (table: any, { asc }: any) => [asc(table.position), asc(table.id)],
         limit: 200,
       }),
     ).then((rows) => rows ?? []),
-    localListChannels({ limit: 200 }),
+    // §30 tenant scope: a named workspace serves that scope's rows + legacy
+    // globals, mirroring the db-override path; no header keeps the legacy
+    // default-folder read.
+    localListChannels({ limit: 200, workspaceId: opts?.workspaceId ?? null }),
   ]);
   return mergeChannelLists(pgRows, localRows, limit, opts?.cursor ?? null);
 }
@@ -331,9 +350,13 @@ export async function createChannel(body: CreateChannelBody, dbOverride?: any, w
     // BEFORE the guards; a headerless create must never land in default.
     return { error: "category", categoryId: categoryId || "(missing workspace scope)" } as const;
   }
+  const ws = wsResolved as string;
   const dupCheck = await Promise.all([
     (async () => {
-      const rows = await localListChannels({ limit: 200 });
+      // Dup guard is workspace-scoped (§30): two workspaces may each own a
+      // null-category channel with the same name; an unscoped scan would
+      // report a cross-workspace false duplicate.
+      const rows = await localListChannels({ limit: 200, workspaceId: ws });
       return rows.some(
         (r: any) =>
           String(r.name).trim().toLowerCase() === body.name.trim().toLowerCase() &&
@@ -343,7 +366,8 @@ export async function createChannel(body: CreateChannelBody, dbOverride?: any, w
     pgCatchNull(() =>      getDb().query.channels.findFirst({
         where: (table: any, { and, eq, isNull }: any) => and(
           eq(table.name, body.name.trim().toLowerCase()),
-          categoryId ? eq(table.categoryId, categoryId) : isNull(table.categoryId)
+          categoryId ? eq(table.categoryId, categoryId) : isNull(table.categoryId),
+          eq(table.workspaceId, ws),
         ),
       }),
     ).then((r) => Boolean(r)),
@@ -357,7 +381,6 @@ export async function createChannel(body: CreateChannelBody, dbOverride?: any, w
   // channel created under a category belongs to that category's workspace
   // unless the caller named one explicitly. Deriving it here keeps the two
   // rows in the same folder instead of splitting them across scopes.
-  const ws = wsResolved as string;
   const ctx = await tierContextFor(ws);
   const pgValues = {
     id,

@@ -36,6 +36,7 @@ const DEFAULT_PERMISSIONS: AgentAuthorityPermissions = {
   accessAllChannels: false,
 };
 
+
 function mapAgentProfile(row: typeof agents.$inferSelect): AgentProfile {
   return {
     ...row,
@@ -92,6 +93,17 @@ export class AgentRegistry {
     }
     // ponytail: scope key by tenant handle — an unscoped key serves A's roster to B.
     // Union loader is cached like the old PG-only loader (same invalidation points).
+    // Tenant isolation (2026-09-25 audit fix): inside a bound PG tenant handle
+    // (runWithDb / request scope), the roster comes from that handle only —
+    // merging the file tier here would leak OTHER workspaces' local agents
+    // into every tenant's cached roster (the local store has no ALS awareness).
+    // The local-first union stays for unbound callers (pure-local mode and
+    // registry-only workspaces), which is where the file tier is truth.
+    if (dbScopeKey() !== "global") {
+      return getCachedRoster(`${dbScopeKey()}:roster:${JSON.stringify(filters)}`, async () =>
+        this.loadRoster(filters),
+      );
+    }
     return getCachedRoster(`${dbScopeKey()}:roster:${JSON.stringify(filters)}`, async () => {
       const [pgRows, localRows] = await Promise.all([
         pgCatchNull(() => this.loadRoster(filters)).then((rows) => rows ?? []),
@@ -143,13 +155,18 @@ export class AgentRegistry {
     return records.map(mapAgentProfile);
   }
 
-  async getById(id: string, dbOverride?: any): Promise<AgentProfile | null> {
+  async getById(id: string, dbOverride?: any, workspaceId?: string | null): Promise<AgentProfile | null> {
     if (dbOverride) {
       const record = await dbOverride.query.agents.findFirst({
         where: eq(agents.id, id),
       });
       return record ? mapAgentProfile(record) : null;
     }
+    // Tenant scope first: the local store resolves the row inside the caller's
+    // workspace folder; PG only fills the gap when local has nothing. Without
+    // this, duplicate ids across workspace folders resolve to the first match.
+    const scoped = (await localGetAgent(id, workspaceId).catch(() => null)) as AgentProfile | null;
+    if (scoped) return scoped;
     return (
       ((await localGetAgent(id).catch(() => null)) as AgentProfile | null) ??
       (await pgCatchNull(() =>
@@ -196,10 +213,20 @@ export class AgentRegistry {
         title: input.title,
         species: input.species,
         avatar: input.avatar,
+        l3Subtype: input.l3Subtype,
         authorityLevel: input.authorityLevel,
         modelModuleId: input.modelModuleId ?? null,
         instructionModuleId: input.instructionModuleId,
+        toolkitModuleId: input.toolkitModuleId,
+        constraintsModuleId: input.constraintsModuleId,
+        capabilitiesModuleId: input.capabilitiesModuleId,
         memorySharingPolicy: input.memorySharingPolicy,
+        isOmniscient: input.isOmniscient,
+        fallbackAgentId: input.fallbackAgentId,
+        categoryPermissions: input.categoryPermissions,
+        permissions: input.permissions
+          ? normalizePermissions(input.permissions)
+          : undefined,
         status: input.status ?? "offline",
         isTemplate: input.isTemplate ?? false,
       });
@@ -227,7 +254,21 @@ export class AgentRegistry {
       throw new Error("Only authority level 3 agents may define an l3Subtype.");
     }
     const ctx = await tierContextFor(input.workspaceId ?? null);
-    if (resolveTier(ctx).tier === "dual") {
+    const tier = resolveTier(ctx).tier;
+    if (tier === "local") {
+      // C3: a fresh local workspace has no catalog. Resolve the referenced
+      // module ids against the local store, seeding the canon defaults when
+      // missing, so "Launch Assembly" works before any module is created.
+      const { moduleGate, DEFAULT_INSTRUCTION_MODULE_ID } = await import("../modules/module-gate.js");
+      await moduleGate.ensureDefaults(input.workspaceId ?? null);
+      if (input.instructionModuleId === DEFAULT_INSTRUCTION_MODULE_ID || !(await moduleGate.instruction.get(input.instructionModuleId, input.workspaceId))) {
+        input = { ...input, instructionModuleId: DEFAULT_INSTRUCTION_MODULE_ID };
+      }
+      if (input.modelModuleId && !(await moduleGate.model.get(input.modelModuleId, input.workspaceId))) {
+        input = { ...input, modelModuleId: null };
+      }
+    }
+    if (tier === "dual") {
       // Best-effort PG validation — skips itself when the database is gone.
       await this.ensureValidReferences(input, undefined).catch((err) => {
         if (!isConnectionError(err)) throw err;
@@ -256,8 +297,14 @@ export class AgentRegistry {
     return created as AgentProfile;
   }
 
-  async update(id: string, input: UpdateAgentProfileInput, dbOverride?: any): Promise<AgentProfile | null> {
-    const existing = await this.getById(id, dbOverride);
+  async update(id: string, input: UpdateAgentProfileInput, dbOverride?: any, workspaceId?: string | null): Promise<AgentProfile | null> {
+    // Scope-then-merge: when the caller names a tenant, the row must be
+    // resolved and written inside that tenant, never the first folder that
+    // happens to contain the same agent id.
+    if (workspaceId !== undefined && workspaceId !== dbOverride) {
+      input = { ...input, workspaceId: input.workspaceId ?? workspaceId };
+    }
+    const existing = await this.getById(id, dbOverride, workspaceId);
     if (!existing) {
       return null;
     }
@@ -315,8 +362,24 @@ export class AgentRegistry {
         workspaceId: merged.workspaceId ?? null,
         name: merged.name,
         title: merged.title,
+        species: merged.species,
+        avatar: merged.avatar,
+        l3Subtype: merged.l3Subtype,
         authorityLevel: merged.authorityLevel,
+        modelModuleId: merged.modelModuleId,
+        instructionModuleId: merged.instructionModuleId,
+        toolkitModuleId: merged.toolkitModuleId,
+        constraintsModuleId: merged.constraintsModuleId,
+        capabilitiesModuleId: merged.capabilitiesModuleId,
+        memorySharingPolicy: merged.memorySharingPolicy,
+        isOmniscient: merged.isOmniscient,
+        fallbackAgentId: merged.fallbackAgentId,
+        categoryPermissions: merged.categoryPermissions,
+        permissions: merged.permissions
+          ? normalizePermissions(merged.permissions)
+          : undefined,
         status: merged.status ?? existing.status,
+        isTemplate: merged.isTemplate,
       });
 
     // Explicit handle pins PG exactly (tests/seeds/replay) with full validation.
@@ -338,7 +401,7 @@ export class AgentRegistry {
     }
 
     // Dual-boot: validate against PG only when it will actually be written.
-    const ctx = await tierContextFor(null);
+    const ctx = await tierContextFor(merged.workspaceId ?? null);
     if (resolveTier(ctx).tier === "dual") {
       await this.ensureValidReferences(merged, id).catch((err) => {
         if (!isConnectionError(err)) throw err;
@@ -368,7 +431,7 @@ export class AgentRegistry {
       skillsGate.invalidateAgentCaches(id);
     }
     invalidateRosterCache();
-    return this.getById(id);
+    return this.getById(id, undefined, workspaceId);
   }
 
   async delete(id: string, dbOverride?: any): Promise<boolean> {
@@ -379,7 +442,10 @@ export class AgentRegistry {
     }
     const existing = await this.getById(id);
     if (!existing) return false;
-    const ctx = await tierContextFor(null);
+    // Tier context from the row itself: an agent belongs to a workspace, so
+    // the delete/outbox must be attributed to that workspace — not the
+    // global scope (which left outbox entries a drain could never route).
+    const ctx = await tierContextFor(existing.workspaceId ?? null);
     const removed = await dualWrite({
       ctx,
       entity: "agent",
@@ -390,7 +456,9 @@ export class AgentRegistry {
         const db = getDb();
         await db.delete(agents).where(eq(agents.id, id));
       },
-      localWrite: () => localDeleteAgent(id),
+      // Scope the local delete to the owning workspace folder: duplicate ids
+      // across workspaces must not delete the first file that matches.
+      localWrite: () => localDeleteAgent(id, existing.workspaceId ?? null),
     });
     invalidateRosterCache();
     return removed;
@@ -420,7 +488,10 @@ export class AgentRegistry {
       await runWithDb(opts.db, () => withTransaction(write));
     } else {
       // Dual-boot: PG flip + local file flip (no runtime_states ledger locally).
-      const ctx = await tierContextFor(null);
+      // Tier context from the agent row itself so the PG leg and any outbox
+      // fallback are attributed to the owning workspace (CrowdOS §1).
+      const agent = await this.getById(agentId).catch(() => null);
+      const ctx = await tierContextFor(agent?.workspaceId ?? null);
       await dualWrite({
         ctx,
         entity: "agent",

@@ -44,7 +44,14 @@ export async function channelRoutes(app: FastifyInstance) {
     async (req: any) => {
       const limit = req.query?.limit as number | undefined;
       const cursor = req.query?.cursor ?? req.query?.offset ?? null;
-      return listChannels({ limit, cursor: cursor != null ? String(cursor) : null, db: (req as any).db });
+      // §30: thread the tenant scope so local-tier workspaces do not serve the
+      // default folder's channels to every workspace.
+      return listChannels({
+        limit,
+        cursor: cursor != null ? String(cursor) : null,
+        workspaceId: (req as any).workspaceId ?? null,
+        db: (req as any).db,
+      });
     });
 
   // POST /api/channels - Create a channel under a category

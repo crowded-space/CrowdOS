@@ -82,7 +82,7 @@ export class GoogleAdapter implements IProviderAdapter {
             const parts = json.candidates?.[0]?.content?.parts
             if (parts && Array.isArray(parts)) {
               for (const part of parts) {
-                if (part.thought) {
+                if (part.thought && typeof part.text === 'string') {
                   fullThoughts += part.text
                   onChunk({ content: part.text, isThoughts: true })
                 } else if (part.text) {

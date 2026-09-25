@@ -207,6 +207,11 @@ export class McpClientManager extends EventEmitter {
       session.status = 'error';
       session.lastError = err.message;
       this.failPending(session, err instanceof Error ? err : new Error(String(err)));
+      // A failed handshake may have already registered tools (tools/list can
+      // succeed before a later step throws). Leaving them registered would
+      // advertise a dead server's tools in the registry listing, so clean up
+      // exactly as the exit path does.
+      this.cleanupTools(session);
       this.killChild(session);
       session.process = undefined;
       throw err;

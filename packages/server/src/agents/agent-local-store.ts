@@ -72,6 +72,33 @@ function revive(row: LocalAgentRow): any {
   };
 }
 
+/** Defaults for optional agent fields on first write (mirror PG row defaults). */
+function normalizeAgentInput(input: Record<string, any>) {
+  return {
+    // modelModuleId/instructionModuleId are part of the merged shape: dropping
+    // them here silently reverted module assignments on every existing-row
+    // update (they fell back to the existing row's values, null included).
+    modelModuleId: input.modelModuleId ?? undefined,
+    instructionModuleId: input.instructionModuleId ?? undefined,
+    species: input.species ?? undefined,
+    avatar: input.avatar ?? undefined,
+    l3Subtype: input.l3Subtype ?? undefined,
+    toolkitModuleId: input.toolkitModuleId ?? undefined,
+    constraintsModuleId: input.constraintsModuleId ?? undefined,
+    capabilitiesModuleId: input.capabilitiesModuleId ?? undefined,
+    fallbackAgentId: input.fallbackAgentId ?? undefined,
+    memorySharingPolicy: input.memorySharingPolicy ?? "full",
+    isOmniscient: input.isOmniscient ?? false,
+    categoryPermissions: input.categoryPermissions ?? [],
+    permissions: input.permissions ?? {
+      spawnAgents: false,
+      patchRuntime: false,
+      accessAllChannels: false,
+    },
+    isTemplate: input.isTemplate ?? false,
+  };
+}
+
 /** Agent-id → file-name stem. Mirrors the channel-log rule. */
 function safeAgentFileId(agentId: string): string {
   return agentId.replace(/[^A-Za-z0-9_-]/g, "_");
@@ -180,10 +207,18 @@ export async function localUpsertAgent(input: {
   title: string;
   species?: string;
   avatar?: string;
+  l3Subtype?: string;
   authorityLevel: number;
   modelModuleId?: string | null;
   instructionModuleId?: string;
+  toolkitModuleId?: string;
+  constraintsModuleId?: string;
+  capabilitiesModuleId?: string;
   memorySharingPolicy?: string;
+  isOmniscient?: boolean;
+  fallbackAgentId?: string;
+  categoryPermissions?: string[];
+  permissions?: { spawnAgents: boolean; patchRuntime: boolean; accessAllChannels: boolean };
   status?: string;
   isTemplate?: boolean;
 }): Promise<any> {
@@ -211,6 +246,21 @@ export async function localUpsertAgent(input: {
         name: input.name,
         title: input.title,
         authorityLevel: input.authorityLevel,
+        ...normalizeAgentInput({
+          species: input.species ?? existing.species,
+          avatar: input.avatar ?? existing.avatar,
+          l3Subtype: input.l3Subtype ?? existing.l3Subtype,
+          modelModuleId: input.modelModuleId ?? existing.modelModuleId,
+          toolkitModuleId: input.toolkitModuleId ?? existing.toolkitModuleId,
+          constraintsModuleId: input.constraintsModuleId ?? existing.constraintsModuleId,
+          capabilitiesModuleId: input.capabilitiesModuleId ?? existing.capabilitiesModuleId,
+          fallbackAgentId: input.fallbackAgentId ?? existing.fallbackAgentId,
+          memorySharingPolicy: input.memorySharingPolicy ?? existing.memorySharingPolicy,
+          isOmniscient: input.isOmniscient ?? existing.isOmniscient,
+          categoryPermissions: input.categoryPermissions ?? existing.categoryPermissions,
+          permissions: input.permissions ?? existing.permissions,
+          isTemplate: input.isTemplate ?? existing.isTemplate,
+        }),
         status: input.status ?? existing.status,
         updatedAt: now,
       };
@@ -218,22 +268,28 @@ export async function localUpsertAgent(input: {
       result = next;
       return;
     }
+    const normalized = normalizeAgentInput(input);
     const row: LocalAgentRow = {
       id,
       workspaceId: input.workspaceId ?? null,
       name: input.name,
       title: input.title,
-      species: input.species,
-      avatar: input.avatar,
+      species: normalized.species,
+      avatar: normalized.avatar,
+      l3Subtype: normalized.l3Subtype,
       authorityLevel: input.authorityLevel,
       modelModuleId: input.modelModuleId ?? null,
       instructionModuleId: input.instructionModuleId ?? "instr-default",
-      memorySharingPolicy: input.memorySharingPolicy ?? "full",
-      isOmniscient: false,
-      categoryPermissions: [],
-      permissions: { spawnAgents: false, patchRuntime: false, accessAllChannels: false },
+      toolkitModuleId: normalized.toolkitModuleId,
+      constraintsModuleId: normalized.constraintsModuleId,
+      capabilitiesModuleId: normalized.capabilitiesModuleId,
+      memorySharingPolicy: normalized.memorySharingPolicy,
+      isOmniscient: normalized.isOmniscient,
+      fallbackAgentId: normalized.fallbackAgentId,
+      categoryPermissions: normalized.categoryPermissions,
+      permissions: normalized.permissions,
       status: input.status ?? "offline",
-      isTemplate: input.isTemplate ?? false,
+      isTemplate: normalized.isTemplate,
       archivedAt: null,
       archivedReason: null,
       createdAt: now,

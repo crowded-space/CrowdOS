@@ -70,11 +70,18 @@ export class EventBroker {
   ): string {
     const listenerId = randomUUID();
     const wrappedHandler: BrokerHandler = (event) => {
-      if (channelId && event.channelId !== channelId) {
-        return;
-      }
+      try {
+        // ponytail: payload fallback — producers often omit top-level channelId
+        const eid = event.channelId ?? (event.payload as { channelId?: string } | null)?.channelId;
+        if (channelId && eid !== channelId) {
+          return;
+        }
 
-      handler(event as BrokerEvent<TType>);
+        handler(event as BrokerEvent<TType>);
+      } catch (err) {
+        // ponytail: per-listener catch, one bad subscriber must not kill fan-out+persistence
+        console.error(`[EventBroker] listener ${String(type)} threw:`, err);
+      }
     };
 
     this.listeners.set(listenerId, { eventType: type, channelId, handler: wrappedHandler });
@@ -86,8 +93,16 @@ export class EventBroker {
 
   onAny(handler: BrokerHandler): string {
     const listenerId = randomUUID();
-    this.listeners.set(listenerId, { handler });
-    this.emitter.on("*", handler);
+    const wrapped: BrokerHandler = (event) => {
+      try {
+        handler(event);
+      } catch (err) {
+        // ponytail: per-listener catch, one bad subscriber must not kill fan-out+persistence
+        console.error("[EventBroker] onAny listener threw:", err);
+      }
+    };
+    this.listeners.set(listenerId, { handler: wrapped });
+    this.emitter.on("*", wrapped);
     this.warnIfCrowded();
     return listenerId;
   }

@@ -17,6 +17,9 @@ export interface EnqueueRunInput {
   explicitRuntime?: string | null;
   /** §6 channel pin forwarded so the worker's Router resolves it identically. */
   preferredRuntime?: string | null;
+  // ponytail: untyped by design — checkpoint shape owned by runs, queue just ferries it
+  resumeContext?: unknown;
+  resumeFrom?: unknown;
 }
 
 export interface EnqueueResult {
@@ -109,6 +112,10 @@ export async function enqueueRun(input: EnqueueRunInput): Promise<EnqueueResult 
   if (getQueueMode() !== "bullmq") return null;
   const queue = getRunsQueue();
   if (!queue) return null;
+  // ponytail: fail fast — empty keys collapse jobId to "::" and dedup returns the wrong job
+  if (!input.channelId || !input.agentId || !input.messageId) {
+    throw new Error("[queue] enqueueRun requires channelId, agentId, messageId");
+  }
   const jobId = `${input.channelId}:${input.agentId}:${input.messageId}`;
   try {
     const job = await queue.add("run", input, {

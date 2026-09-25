@@ -83,6 +83,12 @@ export async function threadRoutes(app: FastifyInstance) {
   app.post<{ Params: { threadId: string }; Body: { content: string; authorId?: string; authorName?: string } }>("/api/threads/:threadId/messages", async (request, reply) => {
     const thread = await threadGate.get(request.params.threadId);
     if (!thread) return reply.status(404).send({ error: "Not Found", message: "Thread not found" });
+    // State machine: only an ACTIVE thread accepts new messages. Posting into
+    // an archived/expired thread used to resurrect it silently (bumping
+    // lastActivityAt on a dead thread).
+    if (thread.status !== "active") {
+      return reply.status(409).send({ error: "Conflict", message: `Thread is ${thread.status}; new messages are not accepted` });
+    }
     const content = request.body.content?.trim();
     if (!content) return reply.status(400).send({ error: "Bad Request", message: "content required" });
     const mentions = await mentionParser.parseMentions(content);

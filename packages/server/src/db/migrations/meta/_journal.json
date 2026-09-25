@@ -155,6 +155,20 @@
       "when": 1789300000003,
       "tag": "0021_channels_fs_mounts",
       "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "7",
+      "when": 1790272000000,
+      "tag": "0022_skills_optional_tools_models",
+      "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "7",
+      "when": 1790320000000,
+      "tag": "0023_api_keys_key_hint",
+      "breakpoints": true
     }
   ]
 }

@@ -122,4 +122,36 @@ describe("C3 slice 2 · local workspace chat primitives (no DATABASE_URL)", () =
     expect(mount.source).toBe("none");
     expect(mount.workspaceId).toBe("ws-local");
   });
+
+  it("duplicate-name guard is workspace-scoped and list honors the tenant scope", async () => {
+    // Regression (2026-09-25 audit): the dup check scanned ALL workspaces, so
+    // a null-category channel named "general" in ws-a blocked creating one in
+    // ws-b, and an unscoped list served another workspace's channels.
+    const first = await channelGate.create(
+      { name: "general", type: "standard", createdBy: "system", categoryId: null, position: 0 } as any,
+      undefined,
+      "ws-a",
+    );
+    expect("channel" in first).toBe(true);
+
+    const second = await channelGate.create(
+      { name: "general", type: "standard", createdBy: "system", categoryId: null, position: 0 } as any,
+      undefined,
+      "ws-b",
+    );
+    expect("channel" in second).toBe(true);
+
+    // Same workspace + same name still collides.
+    const third = await channelGate.create(
+      { name: "general", type: "standard", createdBy: "system", categoryId: null, position: 0 } as any,
+      undefined,
+      "ws-a",
+    );
+    expect((third as any).error).toBe("duplicate_name");
+
+    const scopedA = await channelGate.list({ workspaceId: "ws-a" });
+    expect(scopedA).toHaveLength(1);
+    const scopedB = await channelGate.list({ workspaceId: "ws-b" });
+    expect(scopedB).toHaveLength(1);
+  });
 });

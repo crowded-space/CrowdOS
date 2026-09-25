@@ -223,7 +223,8 @@ export class OllamaAdapter implements IProviderAdapter {
     const toolCalls: RawToolCall[] = (rawToolCalls || []).map((tc: any) => ({
       id: tc.id,
       name: tc.function.name,
-      input: JSON.parse(tc.function.arguments || '{}'),
+      // ponytail: IIFE not helper, one malformed args must not kill the turn
+      input: (() => { try { return JSON.parse(tc.function.arguments || '{}') } catch { return {} } })(),
     }))
 
     if (!content && toolCalls.length === 0) {

@@ -854,6 +854,12 @@ export const skills = pgTable("skills", {
   }>().notNull().default(sql`'{"systemPromptAdditions":[],"executionGuidelines":[],"fewShotExamples":[]}'::jsonb`),
   workflowPattern: text("workflow_pattern").notNull().default("react"),
   requiredTools: jsonb("required_tools").$type<string[]>().notNull().default(jsonbArrayDefault),
+  // 0022: optionalTools/recommendedModels were accepted by the API contract
+  // (skill-validators + skill-types) but had no columns, so create/update
+  // silently dropped them. NOT NULL DEFAULT '[]': pre-migration rows read
+  // identically (mapSkill already defaulted missing values to []).
+  optionalTools: jsonb("optional_tools").$type<string[]>().notNull().default(jsonbArrayDefault),
+  recommendedModels: jsonb("recommended_models").$type<string[]>().notNull().default(jsonbArrayDefault),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });
@@ -949,6 +955,10 @@ export type ApiKeyRole = (typeof apiKeyRoleEnum.enumValues)[number];
 export const apiKeys = pgTable("api_keys", {
   id: uuid("id").primaryKey().defaultRandom(),
   keyHash: text("key_hash").notNull().unique(),
+  // 0023: fast lookup hint = sha256(plaintext key) hex. O(1) candidate
+  // selection on verify; scrypt then confirms exactly one row. Nullable:
+  // legacy rows without a hint keep the full-scan fallback.
+  keyHint: text("key_hint").unique(),
   label: text("label"),
   role: apiKeyRoleEnum("role").notNull().default("viewer"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),

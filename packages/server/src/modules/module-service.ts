@@ -77,13 +77,15 @@ function serializeRow<T extends { createdAt: Date; updatedAt: Date }>(row: T): a
 
 export type ModuleType = "model" | "instruction" | "toolkit" | "constraints" | "capabilities";
 
-export async function findReferencingAgent(moduleType: ModuleType, moduleId: string) {
+export async function findReferencingAgent(moduleType: ModuleType, moduleId: string, workspaceId?: string | null) {
   // Tier-aware: getDb() throws in Local mode (no DATABASE_URL), which turned
   // every module de-registration into a 500 before the local file store was
   // ever consulted. The registry union reads local rows and PG only when the
   // dual tier can actually serve them.
   const { agentRegistry } = await import("../agents/agent-gate.js");
-  const roster = await agentRegistry.list({});
+  // Tenant scope: an agent in workspace B must not block deleting a module in
+  // workspace A. Null scope keeps the legacy cross-workspace search.
+  const roster = await agentRegistry.list({ workspaceId: workspaceId ?? null });
   if (moduleType === "model") return roster.find((a: any) => a.modelModuleId === moduleId) ?? null;
   if (moduleType === "instruction") return roster.find((a: any) => a.instructionModuleId === moduleId) ?? null;
   if (moduleType === "toolkit") return roster.find((a: any) => a.toolkitModuleId === moduleId) ?? null;
@@ -254,6 +256,65 @@ export async function testConnectionHelper(
 // ponytail: TTL-only, no write invalidation — at most 10s stale after a mutation.
 const listAllCache = new TtlCache<Awaited<ReturnType<typeof fetchAllModules>>>(10_000, 1);
 
+// Well-known ids for the local-tier default modules, seeded by Agents on first
+// create when a fresh local workspace has no catalog (see ensureDefaultModules).
+export const DEFAULT_INSTRUCTION_MODULE_ID = "instr-default";
+export const DEFAULT_MODEL_MODULE_ID = "model-default";
+
+/**
+ * Local-tier canon defaults (C3): a fresh local workspace has no catalog, so
+ * "Launch Assembly" would reference rows that never exist. Seed the default
+ * InstructionModule/ModelModule per workspace, idempotent by well-known id,
+ * straight through the local store — the REST create path mints its own UUID
+ * (the Zod validator strips a client-supplied id), so gate create cannot
+ * express "insert with this id". Local tier only; PG keeps strict validation.
+ */
+export async function ensureDefaultModules(workspaceId?: string | null): Promise<void> {
+  const scope = workspaceId?.trim() || null;
+  if (!scope) {
+    // Nothing to seed into: the canon defaults are per-workspace rows. An
+    // unscoped caller cannot name a folder, and seeding the "default"
+    // placeholder is exactly what the store's production scope guard refuses
+    // — so skip here and let the owning store surface its tenant-guard error.
+    return;
+  }
+  if (!(await localGetInstructionModule(DEFAULT_INSTRUCTION_MODULE_ID, scope))) {
+    await localUpsertInstructionModule(
+      {
+        id: DEFAULT_INSTRUCTION_MODULE_ID,
+        label: "Default directives",
+        base: ["Follow the workspace safety policies and answer honestly."],
+        runtimePatchable: false,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      } as any,
+      scope,
+    );
+  }
+  if (!(await localGetModelModule(DEFAULT_MODEL_MODULE_ID, scope))) {
+    await localUpsertModelModule(
+      {
+        id: DEFAULT_MODEL_MODULE_ID,
+        label: "Default model",
+        provider: "google",
+        modelName: "gemini-2.0-flash",
+        apiKey: null,
+        endpointUrl: null,
+        temperature: 0.7,
+        topP: 0.9,
+        maxOutputTokens: 2048,
+        stopSequences: [],
+        maxRecentMessages: 10,
+        enableCompression: true,
+        compressionThreshold: 15,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      } as any,
+      scope,
+    );
+  }
+}
+
 export interface ListModulesOpts {
   limit?: number;
   offset?: number;
@@ -299,7 +360,15 @@ export async function listAllModules(opts?: ListModulesOpts & { workspaceId?: st
         localListConstraintsModules(opts?.workspaceId),
         localListCapabilitiesModules(opts?.workspaceId),
       ]);
-    return { modelModules, instructionModules, toolkitModules, constraintsModules, capabilitiesModules };
+    // Pagination parity with the PG tier: the same limit/offset clamps apply,
+    // so callers see one contract regardless of the effective tier.
+    return {
+      modelModules: modelModules.slice(offset, offset + limit),
+      instructionModules: instructionModules.slice(offset, offset + limit),
+      toolkitModules: toolkitModules.slice(offset, offset + limit),
+      constraintsModules: constraintsModules.slice(offset, offset + limit),
+      capabilitiesModules: capabilitiesModules.slice(offset, offset + limit),
+    };
   }
   const key = `${dbScopeKey()}:all:${limit}:${offset}`;
   const hit = listAllCache.get(key);

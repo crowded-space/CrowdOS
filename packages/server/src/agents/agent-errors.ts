@@ -2,6 +2,7 @@ import { agentRegistry } from "./agent-service.js";
 import { messageGate } from "../messages/message-gate.js";
 import type { EventBroker } from "../event-broker/event-broker-gate.js";
 import type { AgentProfile } from "./agent-types.js";
+import { randomUUID } from "node:crypto";
 
 export type AgentErrorType =
   | "LLM_API_ERROR"
@@ -39,7 +40,7 @@ export class EscalationChain {
 
     // Emit real-time escalation:created event to the projection layer
     broker.emit("escalation:created", {
-      id: `esc-${Date.now()}`,
+      id: `esc-${Date.now()}-${randomUUID().slice(0, 8)}`,
       type: errorType === "LOOP_DETECTED" ? "loop_detected" : "warning",
       agentId: agent.id,
       message: errorMessage,
@@ -80,7 +81,11 @@ export class EscalationChain {
 
     if (targetLevel !== null) {
       // Find active coordinators at targetLevel (registry branches to files locally).
-      const allAgents = await agentRegistry.list({ isTemplate: false });
+      // Tenant scope (CrowdOS §1): a failing agent escalates inside its own
+      // workspace; an unscoped legacy agent keeps the cross-workspace search.
+      const allAgents = await agentRegistry.list(
+        agent.workspaceId != null ? { isTemplate: false, workspaceId: agent.workspaceId } : { isTemplate: false },
+      );
       const targetAgent = allAgents.find(a => a.authorityLevel === targetLevel && a.status !== "offline" && a.status !== "paused");
 
       if (targetAgent) {
@@ -104,21 +109,40 @@ export class EscalationChain {
         await agentRegistry.setStatus(targetAgent.id, "working", { broker });
         broker.emit("agent:thinking", { agentId: targetAgent.id, channelId }, { channelId });
 
-        setTimeout(async () => {
-          const replyContent = `I am @${targetAgent.name}, L${targetAgent.authorityLevel} Coordinator. I have taken over the error escalation from @${agent.name}. Examining error stack and initializing fallback pipelines.`;
-          await messageGate.append(
-            {
-              channelId,
-              authorId: targetAgent.id,
-              authorName: targetAgent.name,
-              authorLevel: targetAgent.authorityLevel,
-              authorType: "agent",
-              content: replyContent,
-            },
-            { broker }
-          );
-
-          await agentRegistry.setStatus(targetAgent.id, "idle", { broker });
+        // Delayed takeover reply. Every step is individually guarded so a
+        // failed append can never leave the target stuck "working": the
+        // status reset always runs.
+        setTimeout(() => {
+          void (async () => {
+            try {
+              const replyContent = `I am @${targetAgent.name}, L${targetAgent.authorityLevel} Coordinator. I have taken over the error escalation from @${agent.name}. Examining error stack and initializing fallback pipelines.`;
+              await messageGate.append(
+                {
+                  channelId,
+                  authorId: targetAgent.id,
+                  authorName: targetAgent.name,
+                  authorLevel: targetAgent.authorityLevel,
+                  authorType: "agent",
+                  content: replyContent,
+                },
+                { broker }
+              );
+            } catch (err) {
+              console.error(
+                `[EscalationChain] Takeover reply failed for @${targetAgent.name} (${targetAgent.id}):`,
+                err instanceof Error ? err.message : err,
+              );
+            } finally {
+              await agentRegistry
+                .setStatus(targetAgent.id, "idle", { broker })
+                .catch((err) => {
+                  console.error(
+                    `[EscalationChain] Failed to reset @${targetAgent.name} (${targetAgent.id}) to idle:`,
+                    err instanceof Error ? err.message : err,
+                  );
+                });
+            }
+          })();
         }, 1200);
 
         return;

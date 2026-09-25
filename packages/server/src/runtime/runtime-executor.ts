@@ -84,7 +84,8 @@ export class RuntimeExecutor {
       }
 
       if (requestedRunId) {
-        const fetched = await runsGate.getById(requestedRunId).catch(() => null)
+        // ponytail: no .catch(()=>null) — DB error must fail loudly, not fork a duplicate run
+        const fetched = await runsGate.getById(requestedRunId)
         if (fetched) {
           run = fetched
           if (resumeContext) {
@@ -142,7 +143,7 @@ export class RuntimeExecutor {
         if (heartbeat) clearInterval(heartbeat)
       }
 
-      if (run) void this.closeRun(broker, run, result.status)
+      if (run) await this.closeRun(broker, run, result.status)
 
       // Real token accounting (P1): persist usage for budget enforcement.
       // Off the hot path — the response is already streamed/persisted; budget
@@ -170,7 +171,7 @@ export class RuntimeExecutor {
       return result
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
-      if (run) void this.closeRun(broker, run, 'failed', 'EXECUTION_FAILED')
+      if (run) await this.closeRun(broker, run, 'failed', 'EXECUTION_FAILED')
       return {
         requestId: 'error',
         agentId: agent.id,

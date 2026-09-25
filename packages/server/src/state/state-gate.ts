@@ -1,8 +1,8 @@
 // ─── State Gate (CrowdOS §28 event→reducer→state) ─────────────────────
-// Sole mutator for run + message state. Every run.status_changed flows
-// through applyRunTransition (validate via state machine → persist → emit).
-// Messages flow through applyMessage (commit → emit). Callers must not write
-// runs/messages past this gate; readers stay on runsGate/messageGate.
+// Emission point for executor-driven run transitions
+// (validate via state machine → persist → emit). Approvals/tools/sweeps
+// still call runsGate.transition directly (no fan-out); consolidating them
+// here is a follow-up.
 // Depends-on: runs-gate, messages/message-gate, event-broker-gate (gates only)
 import { runsGate } from "../runs/runs-gate.js";
 import { messageGate } from "../messages/message-gate.js";
@@ -24,6 +24,9 @@ export async function applyRunTransition(input: RunTransitionInput) {
   // Single emission point for executor-driven transitions.
   try {
     const broker = input.broker ?? (await import("../event-broker/event-broker-gate.js")).getSharedBroker();
+    if (!broker) {
+      console.warn("[stateGate] dropped run.status_changed: no shared broker registered");
+    }
     broker?.emit(
       "run.status_changed",
       {
@@ -36,8 +39,8 @@ export async function applyRunTransition(input: RunTransitionInput) {
         from: outcome.from,
         reason: outcome.reason,
         errorCode: outcome.row.errorCode,
-      } as never,
-      { channelId: outcome.row.channelId } as never,
+      },
+      { channelId: outcome.row.channelId },
     );
   } catch (err) {
     console.error("[stateGate] Failed to emit run.status_changed:", err);

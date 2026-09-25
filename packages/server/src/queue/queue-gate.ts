@@ -13,12 +13,21 @@ async function healthCheck(): Promise<{ mode: string; connected: boolean; waitin
   if (mode !== "bullmq") {
     return { mode, connected: false, waiting: 0, failed: 0 };
   }
+  // ponytail: 2s per-Redis-call cap; maxRetriesPerRequest:null queues forever on outage
+  const withTimeout = <T>(p: Promise<T>): Promise<T> =>
+    Promise.race([
+      p,
+      new Promise<never>((_, reject) => {
+        const t = setTimeout(() => reject(new Error("redis timeout")), 2000);
+        t.unref?.();
+      }),
+    ]);
   try {
     const conn = (await import("./connection.js")).getRedisConnection();
     let connected = false;
     if (conn) {
       try {
-        const pong = await conn.ping();
+        const pong = await withTimeout(conn.ping());
         connected = pong === "PONG";
       } catch {
         connected = false;
@@ -29,7 +38,7 @@ async function healthCheck(): Promise<{ mode: string; connected: boolean; waitin
     try {
       const rq = getRunsQueue();
       if (rq) {
-        const counts = await rq.getJobCounts("waiting", "failed", "active", "delayed");
+        const counts = await withTimeout(rq.getJobCounts("waiting", "failed", "active", "delayed"));
         waiting += Number(counts.waiting ?? 0) + Number(counts.active ?? 0) + Number(counts.delayed ?? 0);
         failed += Number(counts.failed ?? 0);
       }
@@ -37,7 +46,7 @@ async function healthCheck(): Promise<{ mode: string; connected: boolean; waitin
     try {
       const mq = getMaintenanceQueue();
       if (mq) {
-        const counts = await mq.getJobCounts("waiting", "failed");
+        const counts = await withTimeout(mq.getJobCounts("waiting", "failed"));
         waiting += Number(counts.waiting ?? 0);
         failed += Number(counts.failed ?? 0);
       }
@@ -46,7 +55,7 @@ async function healthCheck(): Promise<{ mode: string; connected: boolean; waitin
       const { getSchedulerQueue } = await import("./queues.js");
       const sq = getSchedulerQueue();
       if (sq) {
-        const counts = await sq.getJobCounts("waiting", "failed", "delayed");
+        const counts = await withTimeout(sq.getJobCounts("waiting", "failed", "delayed"));
         waiting += Number(counts.waiting ?? 0) + Number(counts.delayed ?? 0);
         failed += Number(counts.failed ?? 0);
       }

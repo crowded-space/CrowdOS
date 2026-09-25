@@ -472,7 +472,9 @@ export class CodingRuntime extends BaseRuntime {
         packet.authorityLevel,
         finalContent,
         false,
-        packet.runId ? { runId: packet.runId } : undefined
+        packet.runId ? { runId: packet.runId } : undefined,
+        undefined,
+        packet.workspaceId
       );
 
       await this.kernel.setAgentStatus(broker, packet.agentId, 'idle');

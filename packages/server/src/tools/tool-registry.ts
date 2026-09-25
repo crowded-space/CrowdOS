@@ -283,6 +283,13 @@ export class ToolRegistry {
         try {
           const resolved = await Guard.validatePath(args.path, await resolveToolRoot(ctx));
           const original = await fs.readFile(resolved, "utf8");
+          if (ctx?.runId) {
+            try {
+              const { runsGate } = await import("../runs/runs-gate.js");
+              const inverse = runsGate.buildCompensationInverse({ existed: true, priorContent: original, path: args.path });
+              await runsGate.addCompensation(ctx.runId as string, { toolName: "edit_file", targetPath: args.path, inverseOp: inverse });
+            } catch {}
+          }
           if (!original.includes(String(args.targetContent))) {
             return { success: false, output: "", error: `Target content not found in ${args.path}` };
           }
@@ -789,7 +796,16 @@ export class ToolRegistry {
       handler: async (args, ctx) => {
         try {
           const { readMemoryNote } = await import("../memories/memories-gate.js");
-          const agentId = args.agent_id || ctx?.agentId || "agent-raven";
+          // Isolation (§30): an agent may only open its OWN memory notes. A
+          // caller-supplied agent_id for a DIFFERENT agent would read another
+          // agent's vault (readMemoryNote scopes by agentId + noteId), so a
+          // mismatched override is ignored and the executing agent wins.
+          const agentId =
+            ctx?.agentId ||
+            (typeof args.agent_id === "string" && args.agent_id.trim() ? args.agent_id.trim() : null);
+          if (!agentId) {
+            return { success: false, output: "", error: "agentId required (via execution context)." };
+          }
           const result = await readMemoryNote(agentId, args.note_id, { updateAccess: true }, { workspaceId: ctx?.workspaceId });
 
           if (!result.ok) {
@@ -980,7 +996,10 @@ export class ToolRegistry {
       handler: async (args, ctx) => {
         try {
           const { createMemoryNote } = await import("../memories/memories-gate.js");
-          const agentId = args.agent_id || ctx?.agentId;
+          // Isolation (§30): the note is attributed to the EXECUTING agent. A
+          // caller-supplied agent_id for a different agent would let one agent
+          // write into another agent's vault, so the context identity wins.
+          const agentId = ctx?.agentId || args.agent_id;
 
           if (!agentId) return { success: false, output: "", error: "agent_id is required." };
 

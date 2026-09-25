@@ -66,6 +66,8 @@ async function handleScheduledTrigger(job: Job<ScheduledJobData>): Promise<void>
     try {
       (broker as unknown as { emit: (t: string, p: unknown, o?: unknown) => void } | null)?.emit("message:new", ephemeral as unknown as never, { channelId });
     } catch {}
+    // ponytail: DB write is the contract; ephemeral emit is best-effort. Throw so BullMQ retries.
+    throw new Error("[scheduler] message persist failed, will retry");
   }
 
   // Also emit a dedicated scheduled event for observability/consumers (additive)

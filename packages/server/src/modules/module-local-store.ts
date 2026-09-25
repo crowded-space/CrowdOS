@@ -13,6 +13,12 @@
 //
 // Rows are stored serialized (ISO date strings) and revived to Date on
 // read so consumers see the same shape the PG rows produce.
+//
+// Scope hygiene (mirrors the agent store): production callers must name the
+// workspace — an unscoped upsert would silently file the row under the
+// "default" folder. Unit tests are exempt: their explicit per-test store dir
+// (setLocalStoreDirForTests) makes unscoped writes a documented fixture
+// mechanism, not production traffic.
 
 import {
   DEFAULT_WORKSPACE_SCOPE,
@@ -35,6 +41,17 @@ const INSTRUCTION_FILE = "instruction-modules.json";
 const TOOLKIT_FILE = "toolkit-modules.json";
 const CONSTRAINTS_FILE = "constraints-modules.json";
 const CAPABILITIES_FILE = "capabilities-modules.json";
+
+/**
+ * Effective scope for an upsert. Returns the trimmed scope, the bare
+ * "default" placeholder under vitest fixtures, or null to refuse the write.
+ */
+function upsertScope(workspaceId?: string | null): string | null {
+  const trimmed = workspaceId?.trim();
+  if (trimmed) return trimmed;
+  if (process.env.VITEST !== undefined) return DEFAULT_WORKSPACE_SCOPE;
+  return null;
+}
 
 function revive<T extends { createdAt: unknown; updatedAt: unknown }>(row: T): any {
   return {
@@ -66,10 +83,12 @@ export async function localGetModelModule(id: string, workspaceId?: string | nul
 }
 
 export async function localUpsertModelModule(row: Serialized<ModelModule>, workspaceId?: string | null): Promise<void> {
+  const scope = upsertScope(workspaceId);
+  if (!scope) throw new Error("localUpsertModelModule: workspaceId is required when creating a module (refusing to write to the 'default' scope)");
   await mutateJsonArray<Serialized<ModelModule>>(
     MODEL_FILE,
     (rows) => [...rows.filter((r) => r.id !== row.id), row],
-    workspaceId ?? DEFAULT_WORKSPACE_SCOPE,
+    scope,
   );
 }
 
@@ -105,10 +124,12 @@ export async function localGetInstructionModule(id: string, workspaceId?: string
 }
 
 export async function localUpsertInstructionModule(row: Serialized<InstructionModule>, workspaceId?: string | null): Promise<void> {
+  const scope = upsertScope(workspaceId);
+  if (!scope) throw new Error("localUpsertInstructionModule: workspaceId is required when creating a module (refusing to write to the 'default' scope)");
   await mutateJsonArray<Serialized<InstructionModule>>(
     INSTRUCTION_FILE,
     (rows) => [...rows.filter((r) => r.id !== row.id), row],
-    workspaceId ?? DEFAULT_WORKSPACE_SCOPE,
+    scope,
   );
 }
 
@@ -144,10 +165,12 @@ export async function localGetToolkitModule(id: string, workspaceId?: string | n
 }
 
 export async function localUpsertToolkitModule(row: Serialized<ToolkitModule>, workspaceId?: string | null): Promise<void> {
+  const scope = upsertScope(workspaceId);
+  if (!scope) throw new Error("localUpsertToolkitModule: workspaceId is required when creating a module (refusing to write to the 'default' scope)");
   await mutateJsonArray<Serialized<ToolkitModule>>(
     TOOLKIT_FILE,
     (rows) => [...rows.filter((r) => r.id !== row.id), row],
-    workspaceId ?? DEFAULT_WORKSPACE_SCOPE,
+    scope,
   );
 }
 
@@ -183,10 +206,12 @@ export async function localGetConstraintsModule(id: string, workspaceId?: string
 }
 
 export async function localUpsertConstraintsModule(row: Serialized<ConstraintsModule>, workspaceId?: string | null): Promise<void> {
+  const scope = upsertScope(workspaceId);
+  if (!scope) throw new Error("localUpsertConstraintsModule: workspaceId is required when creating a module (refusing to write to the 'default' scope)");
   await mutateJsonArray<Serialized<ConstraintsModule>>(
     CONSTRAINTS_FILE,
     (rows) => [...rows.filter((r) => r.id !== row.id), row],
-    workspaceId ?? DEFAULT_WORKSPACE_SCOPE,
+    scope,
   );
 }
 
@@ -222,10 +247,12 @@ export async function localGetCapabilitiesModule(id: string, workspaceId?: strin
 }
 
 export async function localUpsertCapabilitiesModule(row: Serialized<CapabilitiesModule>, workspaceId?: string | null): Promise<void> {
+  const scope = upsertScope(workspaceId);
+  if (!scope) throw new Error("localUpsertCapabilitiesModule: workspaceId is required when creating a module (refusing to write to the 'default' scope)");
   await mutateJsonArray<Serialized<CapabilitiesModule>>(
     CAPABILITIES_FILE,
     (rows) => [...rows.filter((r) => r.id !== row.id), row],
-    workspaceId ?? DEFAULT_WORKSPACE_SCOPE,
+    scope,
   );
 }
 

@@ -82,6 +82,8 @@ export class SkillService {
         fewShotExamples: input.promptLayer?.fewShotExamples || [],
       },
       requiredTools: input.requiredToolIds || [],
+      optionalTools: input.optionalToolIds || [],
+      recommendedModels: input.recommendedModels || [],
       workflowPattern: input.workflowPattern || "react",
       createdAt: now,
       updatedAt: now,
@@ -109,6 +111,8 @@ export class SkillService {
       };
     }
     if (input.requiredToolIds !== undefined) setValues.requiredTools = input.requiredToolIds;
+    if (input.optionalToolIds !== undefined) setValues.optionalTools = input.optionalToolIds;
+    if (input.recommendedModels !== undefined) setValues.recommendedModels = input.recommendedModels;
     if (input.workflowPattern !== undefined) setValues.workflowPattern = input.workflowPattern;
 
     const [updated] = await db.update(skills)

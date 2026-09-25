@@ -147,9 +147,12 @@ export class AgenticRuntime extends BaseRuntime {
         // per tool; reads run concurrently (bounded), writes stay sequential in
         // call order. Results always return in request order.
         // Emit starts in call order before dispatch
-        for (const tc of executableCalls) {
+        // ponytail: one id per call — two randomUUID()s broke start/complete correlation
+        const callIds = executableCalls.map((tc) => tc.id || randomUUID());
+        for (let ci = 0; ci < executableCalls.length; ci++) {
+          const tc = executableCalls[ci];
           broker.emit('tool:start', {
-            callId: tc.id || randomUUID(),
+            callId: callIds[ci],
             agentId: packet.agentId,
             channelId: packet.channelId,
             toolName: tc.name,
@@ -211,7 +214,7 @@ export class AgenticRuntime extends BaseRuntime {
         for (let i = 0; i < executableCalls.length; i++) {
           const tc = executableCalls[i]
           const result = results[i]
-          const callId = tc.id || randomUUID()
+          const callId = callIds[i]
           const durationMs = result.durationMs ?? 0
 
           broker.emit('tool:complete', {

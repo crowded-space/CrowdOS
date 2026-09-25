@@ -1,4 +1,4 @@
-import { randomBytes, randomUUID, scrypt as scryptCb, timingSafeEqual } from "node:crypto";
+import { createHash, randomBytes, randomUUID, scrypt as scryptCb, timingSafeEqual } from "node:crypto";
 import { promisify } from "node:util";
 
 import { and, eq, isNull } from "drizzle-orm";
@@ -18,6 +18,11 @@ const scrypt = promisify(scryptCb) as (
 
 const SCRYPT_KEYLEN = 32;
 export const API_KEY_PREFIX = "crowd_";
+
+/** Fast lookup hint: sha256(plaintext) hex. Reveals nothing about a 256-bit random key; scrypt still confirms. */
+function keyHintFor(key: string): string {
+  return createHash("sha256").update(key, "utf8").digest("hex");
+}
 
 export interface ApiKeyRecord {
   id: string;
@@ -47,6 +52,7 @@ export function generateApiKey(): string {
 interface LocalKeyRow {
   id: string;
   keyHash: string;
+  keyHint?: string | null;
   label: string | null;
   role: ApiKeyRole;
   revokedAt: string | null;
@@ -61,7 +67,7 @@ const API_KEYS_FILE = "api-keys.json";
  * down). A key revoked in EITHER tier counts as revoked. Local file rows let
  * a DB-less boot stay strictly authenticated instead of failing open.
  */
-async function findActiveKeys(): Promise<(ApiKeyRecord & { keyHash: string })[]> {
+async function findActiveKeys(): Promise<(ApiKeyRecord & { keyHash: string; keyHint?: string | null })[]> {
   const [pgRows, localRows] = await Promise.all([
     (async () => {
       try {
@@ -72,6 +78,7 @@ async function findActiveKeys(): Promise<(ApiKeyRecord & { keyHash: string })[]>
             label: apiKeys.label,
             role: apiKeys.role,
             keyHash: apiKeys.keyHash,
+            keyHint: apiKeys.keyHint,
           })
           .from(apiKeys)
           .where(isNull(apiKeys.revokedAt));
@@ -110,12 +117,26 @@ async function touchLocalKey(id: string): Promise<void> {
 export async function verifyKey(key: string): Promise<ApiKeyRecord | null> {
   if (!key.startsWith(API_KEY_PREFIX)) return null;
 
+  // Perf (2026-09-25 audit fix): scrypt is deliberately expensive, so hashing
+  // every candidate made authentication cost grow with stored-key count and
+  // blew per-request budgets (observed 5s timeouts). O(1) path: the row whose
+  // sha256(key) hint matches is the ONLY candidate — verify exactly one
+  // scrypt. Rows without a hint (legacy) keep the concurrent full-scan
+  // fallback. Semantics unchanged: one matching row wins.
+  const rows = await findActiveKeys();
+  const hint = keyHintFor(key);
+  const hinted = rows.find((r) => r.keyHint === hint);
   let matched: ApiKeyRecord | null = null;
-  for (const row of await findActiveKeys()) {
-    if (await verifyHashMatch(key, row.keyHash)) {
-      matched = { id: row.id, label: row.label, role: row.role };
-      break;
+  if (hinted) {
+    if (await verifyHashMatch(key, hinted.keyHash)) {
+      matched = { id: hinted.id, label: hinted.label, role: hinted.role };
     }
+  } else {
+    const legacy = rows.filter((r) => !r.keyHint);
+    const verdicts = await Promise.all(legacy.map((row) => verifyHashMatch(key, row.keyHash)));
+    const matchIndex = verdicts.findIndex((v) => v === true);
+    const hit = matchIndex === -1 ? null : legacy[matchIndex];
+    matched = hit ? { id: hit.id, label: hit.label, role: hit.role } : null;
   }
 
   if (matched) {
@@ -140,6 +161,7 @@ export async function createApiKey(input?: {
   const key = generateApiKey();
   const keyHash = await hashApiKey(key);
   const now = new Date().toISOString();
+  const hint = keyHintFor(key);
   // Dual-boot: PG when reachable, local file always (single-tier fallback —
   // keys are auth infrastructure, not backfilled content).
   const { tier } = resolveTier({});
@@ -150,6 +172,7 @@ export async function createApiKey(input?: {
         .insert(apiKeys)
         .values({
           keyHash,
+          keyHint: hint,
           label: input?.label ?? null,
           role: input?.role ?? "viewer",
         })
@@ -164,6 +187,7 @@ export async function createApiKey(input?: {
   const localRow: LocalKeyRow = {
     id,
     keyHash,
+    keyHint: hint,
     label: input?.label ?? null,
     role: input?.role ?? "viewer",
     revokedAt: null,

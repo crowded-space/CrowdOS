@@ -16,8 +16,13 @@ export async function createThread(input: CreateThreadInput) {
     ]);
     if (!channel) return { error: "channel_not_found" as const };
     if (!parent || parent.channelId !== input.channelId) return { error: "parent_not_found" as const };
-    // If parent already in a thread, inherit root
-    void existingThread;
+    // If the parent already anchors a thread, that thread IS the thread for
+    // this message: return it idempotently instead of minting a second thread
+    // on the same parent (the previous code fetched it and voided it, so
+    // duplicate threads per parent were possible).
+    if (existingThread) {
+      return { thread: existingThread, created: false as const };
+    }
     rootId = input.parentMessageId;
   } else {
     const channel = await db.query.channels.findFirst({ where: eq(channels.id, input.channelId) });
@@ -154,5 +159,7 @@ export async function getThreadMessages(threadId: string, opts?: { limit?: numbe
 
 export async function incrementThreadMessageCount(threadId: string) {
   const db = getDb();
-  await db.update(threads).set({ messageCount: sql`${threads.messageCount} + 1`, lastActivityAt: new Date(), updatedAt: new Date() }).where(eq(threads.id, threadId));
+  // Only an active thread's counters advance; archived/expired threads stay
+  // frozen (posting is already refused at the route, this guards other callers).
+  await db.update(threads).set({ messageCount: sql`${threads.messageCount} + 1`, lastActivityAt: new Date(), updatedAt: new Date() }).where(and(eq(threads.id, threadId), eq(threads.status, "active")));
 }

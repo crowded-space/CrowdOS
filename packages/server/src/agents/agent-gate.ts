@@ -46,9 +46,10 @@ export type { ListAgentsQuery, AgentParams, CreateAgentBody, UpdateAgentBody };
 
 export const agentGate = {
   list: (filters?: AgentRegistryFilters, db?: any) => agentRegistry.list(filters, db),
-  getById: (id: string, db?: any) => agentRegistry.getById(id, db),
+  getById: (id: string, db?: any, workspaceId?: string | null) => agentRegistry.getById(id, db, workspaceId),
   create: (input: CreateAgentProfileInput, db?: any) => agentRegistry.create(input, db),
-  update: (id: string, input: UpdateAgentProfileInput, db?: any) => agentRegistry.update(id, input, db),
+  update: (id: string, input: UpdateAgentProfileInput, db?: any, workspaceId?: string | null) =>
+    agentRegistry.update(id, input, db, workspaceId),
   delete: (id: string, db?: any) => agentRegistry.delete(id, db),
   escalate: EscalationChain.escalate,
   setStatus: (agentId: string, status: AgentStatus, opts?: { broker?: any; db?: any; errorInfo?: { code: string; message: string } }) =>
