@@ -5,11 +5,10 @@ import {
   agents,
   agentInstructionStacks,
   agentSkills,
-  modelModules,
-  toolkitModules,
-  constraintsModules,
 } from "../db/schema.js";
 import { skillsGate } from "../skills/skills-gate.js";
+import { agentGate } from "../agents/agent-gate.js";
+import { moduleGate } from "../modules/module-gate.js";
 import { toolsGate } from "../tools/tools-gate.js";
 import { contextPipeline, runtimeGate } from "../runtime/context-gate.js";
 import { globalBroker } from "../shared/sockets/register-socket-server.js";
@@ -32,9 +31,10 @@ export async function studioRoutes(app: FastifyInstance) {
       }
 
       // Manifest slots are independent once the agent row is known, so fetch them in one batch.
+      // Module slots go through moduleGate (tier-aware, workspace-scoped to the agent).
       const [rawModel, stackLinks, activeSkills, resolvedToolIds, constraintsModule, toolkitModule] = await Promise.all([
         agent.modelModuleId
-          ? db.query.modelModules.findFirst({ where: eq(modelModules.id, agent.modelModuleId) })
+          ? moduleGate.model.get(agent.modelModuleId, agent.workspaceId)
           : Promise.resolve(null),
         db.query.agentInstructionStacks.findMany({
           where: and(
@@ -47,10 +47,10 @@ export async function studioRoutes(app: FastifyInstance) {
         skillsGate.getAgentSkills(agent.id),
         skillsGate.getResolvedToolsForAgent(agent.id),
         agent.constraintsModuleId
-          ? db.query.constraintsModules.findFirst({ where: eq(constraintsModules.id, agent.constraintsModuleId) })
+          ? moduleGate.constraints.get(agent.constraintsModuleId, agent.workspaceId)
           : Promise.resolve(null),
         agent.toolkitModuleId
-          ? db.query.toolkitModules.findFirst({ where: eq(toolkitModules.id, agent.toolkitModuleId) })
+          ? moduleGate.toolkit.get(agent.toolkitModuleId, agent.workspaceId)
           : Promise.resolve(null),
       ]);
 
@@ -115,13 +115,17 @@ export async function studioRoutes(app: FastifyInstance) {
         return reply.status(404).send({ statusCode: 404, error: "Not Found", message: "Agent not found" });
       }
 
-      // 1. Update Agent FKs
-      const agentUpdates: Record<string, any> = { updatedAt: new Date() };
+      // 1. Update Agent FKs through the gate: reference validation plus
+      // roster-cache invalidation belong to Agents (direct agents-table
+      // writes from other domains are forbidden).
+      const agentUpdates: { modelModuleId?: string; toolkitModuleId?: string; constraintsModuleId?: string } = {};
       if (modelModuleId !== undefined) agentUpdates.modelModuleId = modelModuleId;
       if (toolkitModuleId !== undefined) agentUpdates.toolkitModuleId = toolkitModuleId;
       if (constraintsModuleId !== undefined) agentUpdates.constraintsModuleId = constraintsModuleId;
 
-      await db.update(agents).set(agentUpdates).where(eq(agents.id, agentId));
+      if (Object.keys(agentUpdates).length > 0) {
+        await agentGate.update(agentId, agentUpdates, db);
+      }
 
       // 2. Update Instruction Stack if provided
       if (instructionModuleIds && Array.isArray(instructionModuleIds)) {

@@ -27,7 +27,14 @@ export const fakeHeartbeatDb = {
   }),
   update: () => ({
     set: () => ({
-      where: async () => {},
+      // thenable + .returning() so both `await .where(...)` and
+      // `await .where(...).returning(...)` work (sweep re-verify path)
+      where: () => {
+        const rows = [{ agentId: "updated" }];
+        const chain = Promise.resolve(rows) as Promise<typeof rows> & { returning: () => Promise<typeof rows> };
+        chain.returning = () => Promise.resolve(rows);
+        return chain;
+      },
     }),
   }),
 };

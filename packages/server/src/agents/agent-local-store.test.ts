@@ -73,7 +73,9 @@ describe("agent local store — full-field persistence (C3)", () => {
     const created = await localUpsertAgent(
       baseInput({
         species: "Crow",
+        modelModuleId: "mod-keep",
         toolkitModuleId: "tool-keep",
+        instructionModuleId: "instr-keep",
         isOmniscient: true,
         permissions: { spawnAgents: true, patchRuntime: true, accessAllChannels: true },
       }),
@@ -95,6 +97,7 @@ describe("agent local store — full-field persistence (C3)", () => {
     // Unspecified fields survive the update.
     expect(read.species).toBe("Crow");
     expect(read.toolkitModuleId).toBe("tool-keep");
+    expect(read.instructionModuleId).toBe("instr-keep");
     expect(read.isOmniscient).toBe(true);
     expect(read.permissions).toEqual({ spawnAgents: true, patchRuntime: true, accessAllChannels: true });
   });

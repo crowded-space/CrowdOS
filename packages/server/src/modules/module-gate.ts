@@ -37,12 +37,12 @@ import type {
 } from "./module-validators.js";
 import {
   findReferencingAgent,
+  findReferencingAgents,
   validateModuleReferences,
   testConnectionHelper,
   listAllModules,
   ensureDefaultModules,
   DEFAULT_INSTRUCTION_MODULE_ID,
-  DEFAULT_MODEL_MODULE_ID,
   listModelModules,
   getModelModule,
   createModelModule,
@@ -110,12 +110,12 @@ export type {
 };
 export {
   findReferencingAgent,
+  findReferencingAgents,
   validateModuleReferences,
   testConnectionHelper,
   listAllModules,
   ensureDefaultModules,
   DEFAULT_INSTRUCTION_MODULE_ID,
-  DEFAULT_MODEL_MODULE_ID,
   listModelModules,
   getModelModule,
   createModelModule,
@@ -146,9 +146,8 @@ export {
 
 export const moduleGate = {
   findReferencingAgent,
+  findReferencingAgents,
   validateReferences: validateModuleReferences,
-  testConnection: testConnectionHelper,
-  listAll: listAllModules,
   ensureDefaults: ensureDefaultModules,
   model: {
     list: listModelModules,

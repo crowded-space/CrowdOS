@@ -163,8 +163,8 @@ export interface BrokerEventMap {
   "budget:warning": BudgetWarningEventPayload;
   "budget:exceeded": BudgetExceededEventPayload;
   "workspace:sync": Record<string, never>;
-  "tool:start": { callId?: string; agentId: string; channelId: string; toolName: string; input: any };
-  "tool:complete": { callId?: string; agentId: string; channelId: string; toolName: string; output?: string; error?: string; success: boolean; durationMs?: number; structuredToolCall?: StructuredToolCall };
+  "tool:start": { callId?: string; agentId: string; channelId: string; toolName: string; input: any; runId?: string | null };
+  "tool:complete": { callId?: string; agentId: string; channelId: string; toolName: string; output?: string; error?: string; success: boolean; durationMs?: number; structuredToolCall?: StructuredToolCall; runId?: string | null };
   "run.status_changed": RunStatusChangedEventPayload;
   "run.queued": RunQueuedEventPayload;
   "run.compensations": RunCompensationsEventPayload;

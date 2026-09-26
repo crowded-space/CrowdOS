@@ -1,59 +1,24 @@
-import { createSwarmTasks, updateSwarmTaskStatus, listSwarmTasksByRun, getSwarmTaskById, deleteSwarmTasksByRun, resetSwarmRepositoryForTests } from "./swarm-repository.js";
-import { generateSwarmPlan, parsePlanJson, buildFallbackLinearPlan, buildSupervisorPrompt } from "./swarm-planner.js";
+// Swarm domain gate — the ONLY file outside ./Swarm/ may import.
+// Ports = what production consumes (swarm-runtime.ts). Test-only helpers and
+// delegation internals are imported directly by in-domain tests.
+import { createSwarmTasks, listSwarmTasksByRun, deleteSwarmTasksByRun } from "./swarm-repository.js";
+import { generateSwarmPlan } from "./swarm-planner.js";
 import { dispatchSwarmTasks } from "./swarm-dispatcher.js";
-import type { WorkerExecutor } from "./swarm-dispatcher.js";
 import { aggregateSwarmOutputs } from "./swarm-aggregator.js";
 import { verifySwarm } from "./swarm-verifier.js";
 import { resolveWorker, loadWorkerCandidates } from "./swarm-worker-resolver.js";
-import type { SwarmPlan, SwarmPlanTask, SwarmTaskRow, SwarmTaskStatus, SwarmWorkerResult, SwarmAggregationResult, SwarmVerificationResult, SwarmReport } from "./swarm-types.js";
 import { isSwarmV1Enabled } from "./swarm-types.js";
-import {
-  createDelegation,
-  getDelegationByChild,
-  listDelegationsByParent,
-  updateDelegationSummary,
-  listAllDelegations,
-  resetDelegationRepositoryForTests,
-} from "./delegation-repository.js";
-import type { DelegationRow } from "./delegation-repository.js";
-import {
-  delegate,
-  completeDelegation,
-  summarizeChildResult,
-  getChainDepth,
-  getVisitedSet,
-  estimateTokens,
-  getMaxDepth,
-  isGuardDisabled,
-  DelegationRejectedError,
-  MAX_SUBAGENT_RETURN_TOKENS,
-  MAX_SUBAGENT_RETURN_CHARS,
-} from "./delegation-service.js";
-
-export type { SwarmPlan, SwarmPlanTask, SwarmTaskRow, SwarmTaskStatus, SwarmWorkerResult, SwarmAggregationResult, SwarmVerificationResult, SwarmReport };
-export type { WorkerExecutor };
-export type { DelegationRow };
-export { DelegationRejectedError };
 
 export const swarmGate = {
   isV1Enabled: isSwarmV1Enabled,
 
   // Repository
   createTasks: createSwarmTasks,
-  updateTaskStatus: updateSwarmTaskStatus,
   listByRun: listSwarmTasksByRun,
-  getById: getSwarmTaskById,
   deleteByRun: deleteSwarmTasksByRun,
-  resetForTests: () => {
-    resetSwarmRepositoryForTests();
-    resetDelegationRepositoryForTests();
-  },
 
   // Planner
   plan: generateSwarmPlan,
-  parsePlanJson,
-  buildFallbackPlan: buildFallbackLinearPlan,
-  buildSupervisorPrompt,
 
   // Dispatcher
   dispatch: dispatchSwarmTasks,
@@ -67,22 +32,4 @@ export const swarmGate = {
 
   // Verifier
   verify: verifySwarm,
-
-  // Delegation contracts (SW-2)
-  createDelegation,
-  getDelegationByChild,
-  listDelegationsByParent,
-  updateDelegationSummary,
-  listAllDelegations,
-  resetDelegationForTests: resetDelegationRepositoryForTests,
-  delegate,
-  completeDelegation,
-  summarizeChildResult,
-  getChainDepth,
-  getVisitedSet,
-  estimateTokens,
-  getMaxDepth,
-  isGuardDisabled,
-  MAX_SUBAGENT_RETURN_TOKENS,
-  MAX_SUBAGENT_RETURN_CHARS,
 };

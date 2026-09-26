@@ -55,16 +55,7 @@ export interface SwarmVerificationResult {
   usage?: { promptTokens: number; completionTokens: number; totalTokens: number };
 }
 
-export interface SwarmReport {
-  plan: SwarmPlan;
-  tasks: SwarmTaskRow[];
-  aggregation: SwarmAggregationResult;
-  verification: SwarmVerificationResult;
-  finalStatus: "completed" | "failed";
-  swarmRunId: string;
-  honestSummary: string;
-}
-
 export function isSwarmV1Enabled(): boolean {
-  return process.env.SWARM_V1 === "true";
+  // Lenient match mirrors runtime-router: "True"/" TRUE " enable, not just "true".
+  return String(process.env.SWARM_V1 ?? "").trim().toLowerCase() === "true";
 }

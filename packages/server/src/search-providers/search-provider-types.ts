@@ -18,19 +18,3 @@ export interface SearchOptions {
   signal?: AbortSignal
   timeoutMs?: number
 }
-
-export interface EvidenceBundle {
-  query: string
-  subQuestions: string[]
-  sources: SearchResult[]
-  rawCount: number
-  dedupedCount: number
-  dedupeDetails: Array<{
-    url: string
-    reason: string
-    duplicateOf?: string
-    snippetSimilarity?: number
-  }>
-  freshnessSorted: boolean
-  generatedAt: string
-}

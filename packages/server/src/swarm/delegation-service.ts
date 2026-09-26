@@ -29,6 +29,10 @@ export function getMaxDepth(): number {
 }
 
 export function isGuardDisabled(): boolean {
+  // Explicit opt-out, or the documented rollback SWARM_MAX_DEPTH=99 (env.ts).
+  // NOTE: any depth >=99 disables (1000 included) — intentional, keep in sync
+  // with shared/config/env.ts which documents 99 as the rollback value.
+  if (String(process.env.SWARM_GUARD_DISABLED ?? "").trim().toLowerCase() === "true") return true;
   return getMaxDepth() >= 99;
 }
 
@@ -80,6 +84,7 @@ export async function summarizeChildResult(
   }
   const truncatedSummary = fullOutput.slice(0, MAX_SUBAGENT_RETURN_CHARS) + `\n…[truncated ${fullOutput.length - MAX_SUBAGENT_RETURN_CHARS} chars, full output stored as artifact]`;
   let artifactRef: string | null = null;
+  if (!opts.workspaceId) console.warn("[delegation] no workspaceId for artifact, using \"default\" scope");
   try {
     const { artifactsGate } = await import("../artifacts/artifacts-gate.js");
     const art = await artifactsGate.create({
@@ -95,13 +100,14 @@ export async function summarizeChildResult(
       },
     });
     artifactRef = (art as unknown as { id: string }).id ?? null;
-  } catch {
+  } catch (err) {
     // Hermetic / DB-unavailable fallback — still produce deterministic pointer
-    artifactRef = `artifact:${opts.childRunId}:${Date.now().toString(36)}`;
+    console.warn("[delegation] artifact store failed, using fallback ref:", err instanceof Error ? err.message : err);
+    artifactRef = `artifact:${opts.childRunId}:${randomUUID().slice(0, 8)}`;
     // Best-effort: do not throw, parent still gets pointer
   }
   if (!artifactRef) {
-    artifactRef = `artifact:${opts.childRunId}:${Date.now().toString(36)}`;
+    artifactRef = `artifact:${opts.childRunId}:${randomUUID().slice(0, 8)}`;
   }
   const summaryWithPointer = `${truncatedSummary}\n[artifact:${artifactRef}]`;
   return { summary: summaryWithPointer, artifactRef, truncated: true };
@@ -163,10 +169,15 @@ export async function delegate(input: {
           childRunId,
           depth: newDepth,
           taskId: taskId ?? null,
+          // Socket fan-out scopes on payload.workspaceId (same pattern as
+          // artifacts) — without it delegation events fall to the global room.
+          workspaceId: input.workspaceId ?? null,
         },
         { channelId: undefined } as unknown as never
       );
-    } catch {}
+    } catch {
+      console.warn("[delegation] broker emit delegation:start failed");
+    }
   }
 
   return row;
@@ -197,9 +208,25 @@ export async function completeDelegation(input: {
     // Verify parent matches if row exists (defensive, not cycle)
     delegation = await updateDelegationSummary(delegation.id, summary);
   } else {
-    // No prior delegate() call — create row lazily (e.g., inline child execution)
+    // No prior delegate() call — create row lazily (e.g., inline child execution).
+    // Same guards as delegate(): cycle check + depth check, not depth-only.
+    const visited = await getVisitedSet(parentRunId);
+    if (visited.has(childRunId)) {
+      throw new DelegationRejectedError(
+        "cycle",
+        `delegation rejected: cycle detected — child ${childRunId} is ancestor of parent ${parentRunId} (visited: ${[...visited].join(",")})`
+      );
+    }
     const parentDepth = await getChainDepth(parentRunId);
     const newDepth = parentDepth + 1;
+    const maxDepth = getMaxDepth();
+    if (!isGuardDisabled() && newDepth > maxDepth) {
+      throw new DelegationRejectedError(
+        "depth",
+        `delegation rejected: max depth ${maxDepth} exceeded (attempted depth ${newDepth} from parent ${parentRunId} -> child ${childRunId})`,
+        { depth: newDepth, maxDepth }
+      );
+    }
     delegation = await createDelegation({ parentRunId, childRunId, depth: newDepth, summary });
   }
 
@@ -212,10 +239,13 @@ export async function completeDelegation(input: {
           childRunId,
           summary,
           artifactRef: artifactRef ?? null,
+          workspaceId: workspaceId ?? null,
         },
         { channelId: undefined } as unknown as never
       );
-    } catch {}
+    } catch {
+      console.warn("[delegation] broker emit delegation:completed failed");
+    }
   }
 
   return { summary, artifactRef, truncated, delegation };

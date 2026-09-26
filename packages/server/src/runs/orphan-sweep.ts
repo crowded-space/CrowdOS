@@ -1,8 +1,8 @@
-import { inArray, lt, and, asc } from "drizzle-orm";
-import { getDb, runWithDb } from "../shared/config/database.js";
+import { inArray, lt, and, asc, or } from "drizzle-orm";
+import { getDb, isDatabaseConfigured, runWithDb } from "../shared/config/database.js";
 import { forEachWorkspaceDb } from "../workspace/workspace-gate.js";
-import { runs, type RunCheckpoint } from "../db/schema.js";
-import { applyTransition, getRunById } from "./runs-repository.js";
+import { runs } from "../db/schema.js";
+import { applyTransition } from "./runs-repository.js";
 import type { EventBroker } from "../event-broker/event-broker-gate.js";
 
 const ORPHAN_AFTER_MS = (() => {
@@ -10,13 +10,20 @@ const ORPHAN_AFTER_MS = (() => {
   return Number.isFinite(raw) && raw >= 10_000 ? raw : 60_000;
 })();
 
+// Non-heartbeating states (created = queued-to-BullMQ wait, queued = waiting for
+// pickup) sit still until an executor touches them, so the 60s live threshold
+// would reap a merely-slow queue. ponytail: 10× derived factor, no env flag —
+// raise this to its own ORPHAN_PENDING_AFTER_MS if backlogs outrun 10 min.
+const PENDING_ORPHAN_AFTER_MS = ORPHAN_AFTER_MS * 10;
+const PENDING_ORPHAN_STATUSES = ["created", "queued"] as const;
+
 function resolveSweepIntervalMs(): number {
   const raw = Number(process.env.ORPHAN_SWEEP_MS);
   if (Number.isFinite(raw) && raw >= 5_000) return raw;
   return 30_000;
 }
 
-const ORPHAN_CANDIDATE_STATUSES: Array<(typeof runs.$inferSelect)["status"]> = [
+const LIVE_ORPHAN_STATUSES: Array<(typeof runs.$inferSelect)["status"]> = [
   // P01: waiting_for_approval intentionally excluded — approval waits (up to
   // 5min) + long LLM calls outlive the 60s threshold; live runs stay fresh
   // via the 15s touchRunHeartbeat in runtime-executor.
@@ -27,7 +34,6 @@ const ORPHAN_CANDIDATE_STATUSES: Array<(typeof runs.$inferSelect)["status"]> = [
   "retrying",
   "compacting",
   "verifying",
-  "queued",
   // Self-heal: a crash between the orphaned→resumable hops (or between
   // cancelling→cancelled in cancelRun) strands these rows forever since the
   // second hop never ran. Re-select them so the next sweep finishes the move.
@@ -53,14 +59,20 @@ function emitStatus(broker: EventBroker, row: { id: string; agentId: string; cha
 
 export async function sweepOrphanedRuns(broker: EventBroker): Promise<number> {
   const cutoff = new Date(Date.now() - ORPHAN_AFTER_MS);
+  const pendingCutoff = new Date(Date.now() - PENDING_ORPHAN_AFTER_MS);
   let swept = 0;
   const sweepOneDb = async () => {
-    const db = getDb();
     try {
+      const db = getDb();
       const stale = await db
         .select()
         .from(runs)
-        .where(and(inArray(runs.status, ORPHAN_CANDIDATE_STATUSES as never), lt(runs.updatedAt, cutoff)))
+        .where(
+          or(
+            and(inArray(runs.status, LIVE_ORPHAN_STATUSES as never), lt(runs.updatedAt, cutoff)),
+            and(inArray(runs.status, PENDING_ORPHAN_STATUSES as never), lt(runs.updatedAt, pendingCutoff))
+          )
+        )
         .orderBy(asc(runs.updatedAt))
         .limit(50)
         .for("update", { skipLocked: true });
@@ -96,6 +108,10 @@ export async function sweepOrphanedRuns(broker: EventBroker): Promise<number> {
     }
   };
   await forEachWorkspaceDb((db) => runWithDb(db, sweepOneDb));
+  // Workspace-less creates land on the shared handle (resolveDb's fallback);
+  // sweep it too or those rows are immortal. Best-effort: no DATABASE_URL
+  // configured means nothing to sweep.
+  if (isDatabaseConfigured()) await sweepOneDb();
   return swept;
 }
 
@@ -109,20 +125,4 @@ export function startRunOrphanSweeper(broker: EventBroker): void {
   timer = setInterval(() => { void sweepOrphanedRuns(broker); }, interval);
   timer.unref?.();
   console.log(`[orphanSweep] Active — sweep every ${interval}ms, orphan threshold ${ORPHAN_AFTER_MS}ms`);
-}
-
-export function stopRunOrphanSweeper(): void {
-  if (timer) {
-    clearInterval(timer);
-    timer = null;
-  }
-  started = false;
-}
-
-export function resetOrphanSweepForTests(): void {
-  if (timer) {
-    clearInterval(timer);
-    timer = null;
-  }
-  started = false;
 }

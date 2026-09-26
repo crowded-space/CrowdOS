@@ -90,6 +90,7 @@ function normalizeAgentInput(input: Record<string, any>) {
     memorySharingPolicy: input.memorySharingPolicy ?? "full",
     isOmniscient: input.isOmniscient ?? false,
     categoryPermissions: input.categoryPermissions ?? [],
+    contextTokenCap: input.contextTokenCap ?? undefined,
     permissions: input.permissions ?? {
       spawnAgents: false,
       patchRuntime: false,
@@ -158,7 +159,11 @@ export async function localListAgents(filters?: {
     for (const row of rows) {
       // Isolation: a scoped row is visible only in its own workspace; legacy
       // rows without a workspaceId stay visible everywhere until backfilled.
-      if (filters?.workspaceId && row.workspaceId && row.workspaceId !== filters.workspaceId) continue;
+      // An explicit null scope mirrors the PG leg's `IS NULL` filter (rows
+      // without a workspaceId); an undefined scope keeps the legacy fan-out.
+      if (filters?.workspaceId === null) {
+        if (row.workspaceId != null) continue;
+      } else if (filters?.workspaceId && row.workspaceId && row.workspaceId !== filters.workspaceId) continue;
       byId.set(row.id, row);
     }
   }
@@ -188,16 +193,19 @@ export async function localGetAgent(id: string, workspaceId?: string | null): Pr
   return null;
 }
 
-export async function localSetAgentStatus(id: string, status: string, workspaceId?: string | null): Promise<void> {
+export async function localSetAgentStatus(id: string, status: string, workspaceId?: string | null): Promise<boolean> {
+  let found = false;
   await withStoreLock(`agents:${id}`, async () => {
     for (const scope of scopesFor(workspaceId)) {
       const path = agentFilePath(scope, id);
       const row = await readJsonFile<LocalAgentRow>(path).catch(() => null);
       if (!row || row.id !== id) continue;
       await writeJsonFile(path, { ...row, status, updatedAt: new Date().toISOString() });
+      found = true;
       return;
     }
   });
+  return found;
 }
 
 export async function localUpsertAgent(input: {
@@ -205,22 +213,26 @@ export async function localUpsertAgent(input: {
   workspaceId?: string | null;
   name: string;
   title: string;
-  species?: string;
-  avatar?: string;
-  l3Subtype?: string;
+  // Nullable-clearable: null clears, undefined keeps existing (update path).
+  species?: string | null;
+  avatar?: string | null;
+  l3Subtype?: string | null;
   authorityLevel: number;
   modelModuleId?: string | null;
   instructionModuleId?: string;
-  toolkitModuleId?: string;
-  constraintsModuleId?: string;
-  capabilitiesModuleId?: string;
+  toolkitModuleId?: string | null;
+  constraintsModuleId?: string | null;
+  capabilitiesModuleId?: string | null;
   memorySharingPolicy?: string;
   isOmniscient?: boolean;
-  fallbackAgentId?: string;
+  fallbackAgentId?: string | null;
   categoryPermissions?: string[];
   permissions?: { spawnAgents: boolean; patchRuntime: boolean; accessAllChannels: boolean };
   status?: string;
   isTemplate?: boolean;
+  // Nullable clears: null clears the field, ONLY undefined keeps existing.
+  // (Callers type these as non-null; null flows through at runtime.)
+  contextTokenCap?: number | null;
 }): Promise<any> {
   if (input.id === undefined && (!input.workspaceId || !String(input.workspaceId).trim()) && process.env.VITEST === undefined) {
     // Tenant guard (QA audit 2026-09-23): a created agent without a scope
@@ -239,6 +251,13 @@ export async function localUpsertAgent(input: {
   let result: LocalAgentRow | null = null;
   await withStoreLock(`agents:${id}`, async () => {
     const existing = await readJsonFile<LocalAgentRow>(path).catch(() => null);
+    // Tenant guard, create-side: the outer guard only fires when no id is
+    // passed, but service create() always passes id=randomUUID() — so an
+    // unscoped CREATE used to slip through to the "default" folder. Updates
+    // (existing row, same id) keep their scope and are exempt.
+    if ((!existing || existing.id !== id) && (!input.workspaceId || !String(input.workspaceId).trim()) && process.env.VITEST === undefined) {
+      throw new Error("localUpsertAgent: workspaceId is required when creating an agent (refusing to write to the 'default' scope)");
+    }
     if (existing && existing.id === id) {
       const next: LocalAgentRow = {
         ...existing,
@@ -246,20 +265,24 @@ export async function localUpsertAgent(input: {
         name: input.name,
         title: input.title,
         authorityLevel: input.authorityLevel,
+        // Null clears (NOT ?? existing): an explicit null must clear the
+        // field, only undefined keeps the stored value.
         ...normalizeAgentInput({
-          species: input.species ?? existing.species,
-          avatar: input.avatar ?? existing.avatar,
-          l3Subtype: input.l3Subtype ?? existing.l3Subtype,
+          species: input.species !== undefined ? input.species : existing.species,
+          avatar: input.avatar !== undefined ? input.avatar : existing.avatar,
+          l3Subtype: input.l3Subtype !== undefined ? input.l3Subtype : existing.l3Subtype,
           modelModuleId: input.modelModuleId ?? existing.modelModuleId,
-          toolkitModuleId: input.toolkitModuleId ?? existing.toolkitModuleId,
-          constraintsModuleId: input.constraintsModuleId ?? existing.constraintsModuleId,
-          capabilitiesModuleId: input.capabilitiesModuleId ?? existing.capabilitiesModuleId,
-          fallbackAgentId: input.fallbackAgentId ?? existing.fallbackAgentId,
+          instructionModuleId: input.instructionModuleId ?? existing.instructionModuleId,
+          toolkitModuleId: input.toolkitModuleId !== undefined ? input.toolkitModuleId : existing.toolkitModuleId,
+          constraintsModuleId: input.constraintsModuleId !== undefined ? input.constraintsModuleId : existing.constraintsModuleId,
+          capabilitiesModuleId: input.capabilitiesModuleId !== undefined ? input.capabilitiesModuleId : existing.capabilitiesModuleId,
+          fallbackAgentId: input.fallbackAgentId !== undefined ? input.fallbackAgentId : existing.fallbackAgentId,
           memorySharingPolicy: input.memorySharingPolicy ?? existing.memorySharingPolicy,
           isOmniscient: input.isOmniscient ?? existing.isOmniscient,
           categoryPermissions: input.categoryPermissions ?? existing.categoryPermissions,
           permissions: input.permissions ?? existing.permissions,
           isTemplate: input.isTemplate ?? existing.isTemplate,
+          contextTokenCap: input.contextTokenCap !== undefined ? input.contextTokenCap : existing.contextTokenCap,
         }),
         status: input.status ?? existing.status,
         updatedAt: now,
@@ -267,6 +290,11 @@ export async function localUpsertAgent(input: {
       await writeJsonFile(path, next);
       result = next;
       return;
+    }
+    // Filename collision: safeAgentFileId maps distinct ids (a/b vs a_b) to
+    // one file. Blind overwrite would destroy the other agent's row.
+    if (existing && existing.id !== id) {
+      throw new Error(`localUpsertAgent: filename collision for id "${id}" (maps to another agent's file)`);
     }
     const normalized = normalizeAgentInput(input);
     const row: LocalAgentRow = {
@@ -292,6 +320,7 @@ export async function localUpsertAgent(input: {
       isTemplate: normalized.isTemplate,
       archivedAt: null,
       archivedReason: null,
+      contextTokenCap: normalized.contextTokenCap ?? null,
       createdAt: now,
       updatedAt: now,
     };

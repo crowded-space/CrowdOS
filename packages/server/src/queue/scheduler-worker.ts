@@ -99,7 +99,8 @@ async function schedulerProcessor(job: Job<ScheduledJobData>): Promise<unknown> 
   if (kind === "scheduled:trigger" || kind === "scheduled:cron" || (job.data as ScheduledJobData)?.task) {
     return handleScheduledTrigger(job as Job<ScheduledJobData>);
   }
-  return handleScheduledTrigger(job as Job<ScheduledJobData>);
+  // ponytail: fail loud — the old fallthrough fabricated "Scheduled task: undefined" in #general
+  throw new Error(`[scheduler] unknown job name=${job.name} kind=${kind ?? "none"}`);
 }
 
 export function getSchedulerWorker(): Worker | null {

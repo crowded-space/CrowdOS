@@ -1,4 +1,10 @@
-import type { SwarmTaskRow, SwarmWorkerResult, SwarmAggregationResult } from "./swarm-types.js";
+import type { SwarmTaskRow, SwarmTaskStatus, SwarmWorkerResult, SwarmAggregationResult } from "./swarm-types.js";
+
+const TASK_STATUSES = new Set<string>(["pending", "running", "completed", "failed", "blocked"]);
+
+function isSwarmTaskStatus(value: string): value is SwarmTaskStatus {
+  return TASK_STATUSES.has(value);
+}
 
 function dedupeAndConflicts(outputs: string[]): { dedupedLines: string[]; dedupeNotes: string[]; conflictNotes: string[] } {
   const allLines: string[] = [];
@@ -21,14 +27,21 @@ function dedupeAndConflicts(outputs: string[]): { dedupedLines: string[]; dedupe
   if (dupCount > 0) dedupeNotes.push(`Deduped ${dupCount} duplicate line(s) from worker outputs.`);
   const conflictNotes: string[] = [];
   if (outputs.length > 1) {
-    // Simple conflict heuristic: if distinct outputs are non-identical and share no lines, note potential divergence.
+    // Conflict heuristic on real overlap: a line present in two or more distinct
+    // outputs. Counting duplicate lines instead (deduped.length < allLines.length)
+    // reported "diverged" for outputs that only repeated lines within themselves.
     const distinct = [...new Set(outputs.map((o) => (o ?? "").trim()).filter(Boolean))];
     if (distinct.length > 1) {
-      const hasOverlap = deduped.length < allLines.length;
-      if (!hasOverlap) {
+      const lineCounts = new Map<string, number>();
+      for (const out of distinct) {
+        const seenInOutput = new Set(out.split("\n").map((l) => l.trim()).filter(Boolean));
+        for (const line of seenInOutput) lineCounts.set(line, (lineCounts.get(line) ?? 0) + 1);
+      }
+      const sharedLines = [...lineCounts.values()].filter((c) => c > 1).length;
+      if (sharedLines === 0) {
         conflictNotes.push("Worker outputs diverged with no overlapping lines — manual review advised for consistency.");
-      } else if (distinct.length > 1) {
-        conflictNotes.push("Multiple worker outputs merged — checked for overlap, no contradictions fabricated.");
+      } else {
+        conflictNotes.push(`Multiple worker outputs merged — ${sharedLines} line(s) shared across distinct outputs; no contradictions fabricated.`);
       }
     }
   }
@@ -49,17 +62,19 @@ export function aggregateSwarmOutputs(
   for (const task of tasks) {
     const id = (task as { id: string }).id;
     const res = results.get(id);
-    const rowStatus = (task as SwarmTaskRow).status ?? (res?.status === "completed" ? "completed" : res?.status === "failed" ? "failed" : "pending");
+    const rawStatus = (task as { status?: string }).status;
+    const rowStatus: SwarmTaskStatus = (rawStatus && isSwarmTaskStatus(rawStatus) ? rawStatus : res?.status === "completed" ? "completed" : res?.status === "failed" ? "failed" : "pending");
     if (!res) {
       // No result — treat as failed if row says failed/blocked else pending
       const reason = (task as SwarmTaskRow).outputRef ?? "no worker result (task not dispatched)";
-      if (rowStatus === "failed" || rowStatus === "blocked") {
-        failedTasks.push({ id, reason });
-        if (rowStatus === "blocked") blockedTasks.push({ id, reason });
+      // Blocked is its own bucket: pushing it into failedTasks as well made the
+      // honest summary report the same task twice.
+      if (rowStatus === "blocked") {
+        blockedTasks.push({ id, reason });
       } else {
-        failedTasks.push({ id, reason: "missing worker result — treated as failed (no fabricated success)" });
+        failedTasks.push({ id, reason: rowStatus === "failed" ? reason : "missing worker result — treated as failed (no fabricated success)" });
       }
-      perTaskSections.push({ id, status: rowStatus as any, output: null, error: reason });
+      perTaskSections.push({ id, status: rowStatus, output: null, error: reason });
       continue;
     }
     if (res.status === "completed") {
@@ -69,10 +84,16 @@ export function aggregateSwarmOutputs(
       perTaskSections.push({ id, status: "completed", output: out, error: null });
     } else {
       const reason = res.error ?? (task as SwarmTaskRow).outputRef ?? "worker failed";
-      failedTasks.push({ id, reason });
-      // Detect blocked phrasing
-      if (String(reason).toLowerCase().includes("blocked")) blockedTasks.push({ id, reason });
-      perTaskSections.push({ id, status: "failed", output: res.output ?? null, error: reason });
+      // Blocked tasks carry a "blocked:" reason prefix (dispatcher marks them
+      // failed in the result map); prefix-match, not substring — a worker output
+      // mentioning the word "blocked" must not count.
+      if (rowStatus === "blocked" || /^blocked:/i.test(reason.trim())) {
+        blockedTasks.push({ id, reason });
+        perTaskSections.push({ id, status: "blocked", output: res.output ?? null, error: reason });
+      } else {
+        failedTasks.push({ id, reason });
+        perTaskSections.push({ id, status: "failed", output: res.output ?? null, error: reason });
+      }
     }
   }
 

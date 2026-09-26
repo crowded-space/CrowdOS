@@ -88,13 +88,24 @@ describe("swarm worker resolution (§22/§31)", () => {
     const soloL3 = agent("agent-solo", "Solo", 3);
     const r = resolveWorker("agent-solo", [soloL3], { requestingAgent: soloL3 });
     expect(r.agent.id).toBe("agent-solo");
-    expect(r.matchKind).toBe("id");
+    // Default exclusion: the requester is never picked via id match — it lands
+    // on the disclosed last-resort path instead.
+    expect(r.matchKind).toBe("requesting-agent");
+    expect(r.honestSubstitution).toMatch(/no separate L3 worker configured/);
   });
 
   it("reports a stated substitution for a single-tier L3 workspace", () => {
     const soloL3 = agent("agent-solo", "Solo", 3);
     const r = resolveWorker("missing", [soloL3], { requestingAgent: soloL3 });
+    expect(r.matchKind).toBe("requesting-agent");
+    expect(r.honestSubstitution).toMatch(/no separate L3 worker configured/);
+  });
+
+  it("never uses the requesting L3 as its own worker while another L3 exists", () => {
+    const boss = agent("agent-boss", "Boss", 3);
+    const r = resolveWorker("agent-boss", [boss, WORKER_A, WORKER_B], { requestingAgent: boss });
+    expect(r.agent.id).not.toBe("agent-boss");
     expect(r.matchKind).toBe("any-l3");
-    expect(r.honestSubstitution).toMatch(/is not a known agent/);
+    expect(r.honestSubstitution).toMatch(/requesting agent/);
   });
 });

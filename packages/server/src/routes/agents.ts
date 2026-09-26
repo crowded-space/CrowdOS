@@ -101,7 +101,7 @@ export async function agentRoutes(app: FastifyInstance) {
     async (request, reply) => {
       try {
         const wsId = workspaceIdFrom(request);
-        const previous = await agentGate.getById(request.params.id, (request as any).db);
+        const previous = await agentGate.getById(request.params.id, (request as any).db, wsId);
         const updated = await agentGate.update(request.params.id, { ...request.body, workspaceId: wsId }, (request as any).db, wsId);
         if (!updated) {
           return reply.status(404).send({
@@ -146,7 +146,7 @@ export async function agentRoutes(app: FastifyInstance) {
           message: "Agent not found",
         });
       }
-      const deleted = await agentGate.delete(request.params.id, (request as any).db);
+      const deleted = await agentGate.delete(request.params.id, (request as any).db, wsId);
       if (!deleted) {
         return reply.status(404).send({
           statusCode: 404,

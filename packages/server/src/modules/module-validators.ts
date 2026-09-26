@@ -2,49 +2,51 @@ import { z } from "zod";
 
 export const providerEngineSchema = z.enum(["google", "openai", "anthropic", "ollama", "custom"]);
 
+const nonEmptyUpdate = { message: "Update body must not be empty" };
+
 export const modelModuleSchema = z.object({
   label: z.string().min(1),
   provider: providerEngineSchema,
   modelName: z.string().min(1),
-  apiKey: z.string().nullable().optional(),
-  endpointUrl: z.string().nullable().optional(),
-  temperature: z.number(),
-  topP: z.number(),
-  maxOutputTokens: z.number().int(),
+  apiKey: z.string().min(1).nullable().optional(),
+  endpointUrl: z.string().url().nullable().optional(),
+  temperature: z.number().min(0).max(2),
+  topP: z.number().min(0).max(1),
+  maxOutputTokens: z.number().int().min(1).max(1_000_000),
   stopSequences: z.array(z.string()).optional(),
-  maxRecentMessages: z.number().int(),
+  maxRecentMessages: z.number().int().min(1).max(10_000),
   enableCompression: z.boolean().optional(),
-  compressionThreshold: z.number().int(),
-  costPer1k: z.number().nullable().optional()
+  compressionThreshold: z.number().int().min(0),
+  costPer1k: z.number().min(0).nullable().optional()
 });
-export const updateModelModuleSchema = modelModuleSchema.partial();
+export const updateModelModuleSchema = modelModuleSchema.partial().refine((o) => Object.keys(o).length > 0, nonEmptyUpdate);
 
 export const instructionModuleSchema = z.object({
   label: z.string().min(1),
   base: z.array(z.string()).optional(),
   runtimePatchable: z.boolean().optional()
 });
-export const updateInstructionModuleSchema = instructionModuleSchema.partial();
+export const updateInstructionModuleSchema = instructionModuleSchema.partial().refine((o) => Object.keys(o).length > 0, nonEmptyUpdate);
 
 export const toolkitModuleSchema = z.object({
   label: z.string().min(1),
   tools: z.array(z.string()).optional()
 });
-export const updateToolkitModuleSchema = toolkitModuleSchema.partial();
+export const updateToolkitModuleSchema = toolkitModuleSchema.partial().refine((o) => Object.keys(o).length > 0, nonEmptyUpdate);
 
 export const constraintsModuleSchema = z.object({
   label: z.string().min(1),
   rules: z.array(z.string()).optional(),
   disallowedActions: z.array(z.string()).optional()
 });
-export const updateConstraintsModuleSchema = constraintsModuleSchema.partial();
+export const updateConstraintsModuleSchema = constraintsModuleSchema.partial().refine((o) => Object.keys(o).length > 0, nonEmptyUpdate);
 
 export const capabilitiesModuleSchema = z.object({
   label: z.string().min(1),
   skills: z.array(z.string()).optional(),
   functionSchemas: z.array(z.record(z.string(), z.any())).optional()
 });
-export const updateCapabilitiesModuleSchema = capabilitiesModuleSchema.partial();
+export const updateCapabilitiesModuleSchema = capabilitiesModuleSchema.partial().refine((o) => Object.keys(o).length > 0, nonEmptyUpdate);
 
 export const paramIdSchema = z.object({
   id: z.string().min(1)

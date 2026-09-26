@@ -24,7 +24,9 @@ export const TERMINAL_RUN_STATES = ["completed", "failed", "cancelled"] as const
 export type TerminalRunState = (typeof TERMINAL_RUN_STATES)[number];
 
 const TRANSITIONS: Record<RunState, readonly RunState[]> = {
-  created: ["queued", "starting", "cancelling", "failed"],
+  // created covers the queue-wait: fresh runs park here while queued to BullMQ,
+  // so the sweeper must be able to reap a non-heartbeating one like any other.
+  created: ["queued", "starting", "cancelling", "failed", "orphaned"],
   queued: ["starting", "cancelling", "failed", "orphaned"],
   starting: ["running", "cancelling", "failed", "orphaned"],
   running: [

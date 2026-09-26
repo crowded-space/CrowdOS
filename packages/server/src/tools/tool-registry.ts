@@ -1,12 +1,11 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { eq, isNull, sql } from "drizzle-orm";
+import { sql } from "drizzle-orm";
 import { Guard } from "./safety/guard.js";
 import { execHardened } from "./safety/hardened-exec.js";
 import { messageGate } from "../messages/message-gate.js";
 import { globalBroker } from "../shared/sockets/register-socket-server.js";
 import { getDb } from "../shared/config/database.js";
-import { agents } from "../db/schema.js";
 import type { ToolDefinition, ToolResult, ToolExecutionContext } from "./tool-types.js";
 
 // TOOL-1 · Honest tools — flag-gated rollback: when disabled the tools are
@@ -34,6 +33,12 @@ const QUERY_ALLOWED_TABLES = new Set<string>([
 ]);
 const QUERY_BLOCKED_RE =
   /\b(insert|update|delete|drop|create|alter|truncate|grant|revoke|call|execute|vacuum|reindex|cluster|comment|copy|load|security|do)\b/i;
+// 2026-09-26 audit fix: file-read / DB-link / config-exfil functions are not
+// verbs, so QUERY_BLOCKED_RE missed `SELECT lo_export(…) FROM agents` and
+// `WHERE name = pg_read_file(…)`. Blocked regardless of how harmless the
+// statement's shape looks.
+const QUERY_FUNC_BLOCKED_RE =
+  /\b(pg_read_file|pg_read_binary_file|pg_ls_dir|pg_stat_file|pg_logdir_error|lo_import|lo_export|dblink(?:_\w+)?|query_to_xml\w*|current_setting|set_config|pg_terminate_backend|pg_cancel_backend)\b/i;
 
 function extractTableNames(sql: string): string[] {
   const out: string[] = [];
@@ -155,8 +160,42 @@ export class ToolRegistry {
     this.registerNativeTools();
   }
 
-  register(tool: ToolDefinition): void {
+  register(tool: ToolDefinition, opts?: { overwrite?: boolean }): void {
+    if (!tool?.name) throw new Error("Tool registration requires def.name");
+    // Loud (not silent) overwrite. Tests legitimately swap probes onto the
+    // shared singleton and reconnects re-register, so same-registry replaces
+    // only warn. The one hard refusal is an MCP server squatting a NATIVE
+    // tool name (e.g. a compromised server shadowing "read_file"): that needs
+    // an explicit opt-in, never an accident.
+    if (this.tools.has(tool.name) && !opts?.overwrite) {
+      const prev = this.tools.get(tool.name);
+      const prevId = `${prev?.sourceType ?? "?"}:${prev?.sourceId ?? prev?.id ?? "?"}`;
+      const nextId = `${tool.sourceType}:${tool.sourceId ?? tool.id}`;
+      if (prev?.sourceType === "native" && tool.sourceType === "mcp") {
+        throw new Error(`Tool "${tool.name}" is native (${prevId}) — refusing MCP shadow ${nextId} (pass { overwrite: true } to replace).`);
+      }
+      console.warn(`[tools] re-registering "${tool.name}": ${prevId} -> ${nextId}.`);
+    }
     this.tools.set(tool.name, tool);
+  }
+
+  cancelSchedule(id: string): boolean {
+    const rec = activeSchedules.get(id);
+    if (!rec) return false;
+    if (rec.timer) clearTimeout(rec.timer);
+    if (rec.interval) clearInterval(rec.interval);
+    // BullMQ repeatable: best-effort scheduler removal; map delete is the local guarantee.
+    void (async () => {
+      try {
+        const { queueGate } = await import("../queue/queue-gate.js");
+        if (queueGate.mode() === "bullmq") {
+          const q = queueGate.getSchedulerQueue() as unknown as { removeJobScheduler?: (jid: string) => Promise<unknown> } | null;
+          await q?.removeJobScheduler?.(id);
+        }
+      } catch {}
+    })();
+    activeSchedules.delete(id);
+    return true;
   }
 
   unregister(toolName: string): boolean {
@@ -177,7 +216,9 @@ export class ToolRegistry {
       all = all.filter(t => t.category === filters.category);
     }
     if (filters?.authLevel !== undefined) {
-      all = all.filter(t => (t.authLevelRequired ?? 3) <= filters.authLevel!);
+      // Fail-closed default: a tool without an explicit authLevelRequired is
+      // treated as L0-only (same as authLevelRequired: 0), never as universal.
+      all = all.filter(t => (t.authLevelRequired ?? 0) <= filters.authLevel!);
     }
     return all;
   }
@@ -203,8 +244,13 @@ export class ToolRegistry {
       handler: async (args, ctx) => {
         try {
           const resolved = await Guard.validatePath(args.path, await resolveToolRoot(ctx));
+          const MAX_READ_BYTES = 1_048_576; // 1MB — same cap as read_workspace_local
+          const st = await fs.stat(resolved).catch(() => null);
+          if (st && st.size > MAX_READ_BYTES) {
+            return { success: false, output: "", error: `File is ${st.size} bytes, over the ${MAX_READ_BYTES}-byte read cap: ${args.path}` };
+          }
           const content = await fs.readFile(resolved, "utf8");
-          return { success: true, output: content };
+          return { success: true, output: content.length > MAX_READ_BYTES ? `${content.slice(0, MAX_READ_BYTES)}…[truncated]` : content };
         } catch (err: any) {
           return { success: false, output: "", error: err.message || String(err) };
         }
@@ -293,7 +339,9 @@ export class ToolRegistry {
           if (!original.includes(String(args.targetContent))) {
             return { success: false, output: "", error: `Target content not found in ${args.path}` };
           }
-          const updated = original.replace(String(args.targetContent), String(args.replacementContent));
+          // Function replacement-string semantics: `$&`/`$1` in the replacement
+          // must stay literal, else a target containing `$&` corrupts the edit.
+          const updated = original.replace(String(args.targetContent), () => String(args.replacementContent));
           await fs.writeFile(resolved, updated, "utf8");
           return { success: true, output: `Edited ${args.path}` };
         } catch (err: any) {
@@ -404,6 +452,8 @@ export class ToolRegistry {
       handler: async (args, ctx) => {
         Guard.validateCommand(args.command);
         const cwd = await resolveToolRoot(ctx);
+        // CRITICAL-2: whitelisted safe bases take path args — jail them too.
+        await Guard.validateCommandPaths(args.command, cwd);
         return await execHardened({
           command: args.command,
           cwd,
@@ -435,6 +485,8 @@ export class ToolRegistry {
           return { success: false, output: "", error: `Command '${args.command}' is not in the safe whitelist.` };
         }
         const cwd = await resolveToolRoot(ctx);
+        // CRITICAL-2: whitelisted safe bases take path args — jail them too.
+        await Guard.validateCommandPaths(args.command, cwd);
         return await execHardened({
           command: args.command,
           cwd,
@@ -508,12 +560,21 @@ export class ToolRegistry {
             if (QUERY_BLOCKED_RE.test(rawInput)) {
               throw new Error("Mutation blocked: read-only queries only.");
             }
+            // File/DB-link/exfiltration function blocklist
+            if (QUERY_FUNC_BLOCKED_RE.test(rawInput)) {
+              throw new Error("Blocked function: file read/export, DB-link, and config-exfil primitives are not allowed in read-only queries.");
+            }
             // Block multiple statements (semicolon followed by content)
             if (hasMultipleStatements(rawInput)) {
               throw new Error("Multiple statements not allowed.");
             }
-            // Allowlist check — every FROM/JOIN target must be in allowed set
+            // Allowlist check — every FROM/JOIN target must be in allowed set.
+            // SELECT without FROM/JOIN (e.g. SELECT version(), pg_sleep()) has
+            // no targets but is not harmless — require at least one allowlisted table.
             const targets = extractTableNames(rawInput);
+            if (/^\s*select\b/i.test(rawInput) && targets.length === 0) {
+              throw new Error("SELECT requires at least one allowlisted table (bare SELECT blocked).");
+            }
             for (const t of targets) {
               const base = t.split(".").pop()!.replace(/"/g, "").replace(/'/g, "").toLowerCase();
               if (base && !QUERY_ALLOWED_TABLES.has(base)) {
@@ -599,13 +660,13 @@ export class ToolRegistry {
             const delayRaw = args?.delaySeconds;
             const id = `sched-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
 
-            // Cron path — repeatable BullMQ job (preferred) or inline setInterval fallback
+            // Cron path — repeatable BullMQ job (preferred) or inline setInterval fallback.
+            // Inline fallback only supports "*/N * * * *" (else error); BullMQ path
+            // accepts what BullMQ accepts.
             if (cronRaw) {
-              // Basic cron sanity — BullMQ/ cron-parser will validate detail; we do minimal shape check
-              if (!/^[\d*\/,\-\s]+$/.test(cronRaw) && !cronRaw.includes("*")) {
-                // allow cron aliases like "@every 10s" is NOT supported — keep strict
-                // but permit standard 5/6 field crons with digits/*/,-
-              }
+              const INLINE_CRON_RE = /^\*\/(\d+)\s+\*\s+\*\s+\*\s+\*$/;
+              const looksLikeCron = /^[\d*\/,\-\s]+$/.test(cronRaw) || /^@/.test(cronRaw);
+              if (!looksLikeCron) throw new Error(`Invalid cron expression: "${cronRaw}".`);
               try {
                 const { queueGate } = await import("../queue/queue-gate.js");
                 if (queueGate.mode() === "bullmq") {
@@ -641,15 +702,15 @@ export class ToolRegistry {
                 const msg = e instanceof Error ? e.message : String(e);
                 console.warn("[scheduler] bullmq cron schedule failed, falling back to inline interval:", msg);
               }
-              // Inline fallback: honest interval firing real broker events
-              const intervalMs = 60_000; // fallback fires every 60s when cron parsing not available inline; still honest
-              // Best: try to parse "*/N * * * *" minute-step or "* * * * *" — simplified for testability
-              let stepMs: number | null = null;
-              const m = cronRaw.match(/^\*\/(\d+)\s+\*\s+\*\s+\*\s+\*$/);
-              if (m) stepMs = Number(m[1]) * 60_000;
-              const effectiveIntervalMs = stepMs ?? intervalMs;
+              // Inline fallback only supports "*/N * * * *" — anything else errors
+              // (no silent 60s fallback).
+              const m = cronRaw.match(INLINE_CRON_RE);
+              if (!m) throw new Error(`Unsupported cron for inline fallback (use "*/N * * * *" or bullmq mode): "${cronRaw}".`);
+              const effectiveIntervalMs = Math.min(Number(m[1]) * 60_000, 2_147_483_647);
               const interval = setInterval(() => {
-                void honestSchedulerEmit(channelId, task, message, workspaceId).catch(() => {});
+                void honestSchedulerEmit(channelId, task, message, workspaceId).catch((err) => {
+                  console.error("[scheduler] inline emit failed", err);
+                });
               }, effectiveIntervalMs);
               // Unref so tests/process can exit; still fires
               (interval as unknown as { unref?: () => void }).unref?.();
@@ -660,7 +721,8 @@ export class ToolRegistry {
             // One-shot delayed path
             const delaySeconds = delayRaw != null ? Number(delayRaw) : 0;
             if (!Number.isFinite(delaySeconds) || delaySeconds < 0) throw new Error("delaySeconds must be a non-negative number.");
-            const delayMs = Math.max(0, Math.round(delaySeconds * 1000));
+            // Clamp: setTimeout overflows past 2^31-1 ms (~24.8d) and fires in 1ms.
+            const delayMs = Math.min(Math.max(0, Math.round(delaySeconds * 1000)), 2_147_483_647);
 
             try {
               const { queueGate } = await import("../queue/queue-gate.js");
@@ -1070,6 +1132,7 @@ export class ToolRegistry {
         required: [],
       },
       dangerLevel: "safe",
+      authLevelRequired: 3, // explicit: discovery/expansion is universal (was fail-open via undefined)
       handler: async (args, ctx) => {
         try {
           const { capabilitiesGate } = await import("../capabilities/capabilities-gate.js");
@@ -1201,6 +1264,7 @@ export class ToolRegistry {
         required: [],
       },
       dangerLevel: "safe",
+      authLevelRequired: 3, // explicit: skill expansion is universal (was fail-open via undefined)
       handler: async (args, ctx) => {
         try {
           const { skillsGate } = await import("../skills/skills-gate.js");

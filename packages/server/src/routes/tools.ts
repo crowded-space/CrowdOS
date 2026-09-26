@@ -1,8 +1,13 @@
 ﻿import type { FastifyInstance } from "fastify";
 import { toolsGate } from "../tools/tools-gate.js";
+import { authGate } from "../shared/auth/auth-gate.js";
 import { maybeSend304 } from "../shared/core/http-cache.js";
 
 export async function toolRoutes(app: FastifyInstance) {
+  // Mirrors observability.ts: strict admin only when admin auth is configured,
+  // so the loopback desktop app keeps working on tokenless setups.
+  const adminPreHandler = process.env.WORKSPACE_ADMIN_TOKEN ? authGate.requireAdmin : undefined;
+
   // GET /api/tools — list omits parameters blobs (use GET /:name for full schema)
   app.get<{ Querystring: { category?: string; authLevel?: number; limit?: number } }>(
     "/api/tools",
@@ -55,6 +60,7 @@ export async function toolRoutes(app: FastifyInstance) {
   app.post<{ Body: { agentId?: string; toolName: string; args: Record<string, any> } }>(
     "/api/tools/execute-test",
     {
+      preHandler: adminPreHandler,
       config: { rateLimit: { max: 10, timeWindow: 60_000 } },
     },
     async (request) => {

@@ -4,7 +4,6 @@ import { getDb } from "../config/database.js";
 import {
   channels,
   messages,
-  modelModules,
   channelIndex,
   compressedSummaries,
   categories,
@@ -12,6 +11,7 @@ import {
 import type { EventBroker } from "../../event-broker/event-broker-gate.js";
 import type { AgentProfile } from "../../agents/agent-gate.js";
 import { agentGate } from "../../agents/agent-gate.js";
+import { moduleGate } from "../../modules/module-gate.js";
 import { messageGate } from "../../messages/message-gate.js";
 import { TokenTracker } from "./token-tracker.js";
 import { LoopArbiter } from "./loop-arbiter.js";
@@ -228,9 +228,7 @@ Available commands:
     });
     const routedModuleId = routingDecision.moduleId ?? librarianAgent.modelModuleId ?? null;
 
-    const modelModule = routedModuleId
-      ? await db.query.modelModules.findFirst({ where: eq(modelModules.id, routedModuleId) })
-      : null;
+    const modelModule = routedModuleId ? await moduleGate.model.get(routedModuleId) : null;
 
     if (modelModule && modelModule.apiKey) {
       try {

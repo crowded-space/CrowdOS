@@ -27,15 +27,23 @@ const KNOWN_VIOLATIONS = [
     note: "gate->sweeper->gate cycle blocks a plain re-export; needs an approvals-owned restructure",
   },
   {
-    file: join("runtime", "runtimes", "swarm-runtime.ts"),
-    imports: "../../swarm/swarm-worker-resolver.js",
-    note: "resolveWorker/loadWorkerCandidates are not re-exported by swarm-gate.ts",
+    file: "routes/workspace.ts",
+    imports: "../channels/channel-local-store.js",
+    note: "TODO(workspace): local channel seeding must go through the channels gate (dynamic imports are now checked)",
+  },
+  {
+    file: "worker.ts",
+    imports: "./approvals/approval-sweeper.js",
+    note: "TODO(approvals): sweeper entry must be re-exported from approvals-gate.js (dynamic imports are now checked)",
   },
 ];
 
 function isKnownViolation(file, spec) {
-  const rel = file.slice(SRC.length + 1);
-  return KNOWN_VIOLATIONS.some((k) => k.file === rel && k.imports === spec);
+  // Compare slash-normalized paths so entries are portable across OSes.
+  const rel = file.slice(SRC.length + 1).split(sep).join("/");
+  return KNOWN_VIOLATIONS.some(
+    (k) => k.file.split(sep).join("/") === rel && k.imports === spec,
+  );
 }
 
 // Domains are derived dynamically: any top-level src folder containing at
@@ -62,6 +70,10 @@ const EXTRA_ALLOWED = {
 };
 
 const IMPORT_RE = /(?:import|export)[^'"]*from\s*['"](\.[^'"]+)['"]/g;
+// Dynamic `import("./internal.js")` is the same rule as a static import —
+// it just hides from IMPORT_RE. Without this the gate rule was trivially
+// bypassed (routes/workspace.ts pulled agent internals until this task).
+const DYN_IMPORT_RE = /import\s*\(\s*['"](\.[^'"]+)['"]\s*\)/g;
 
 function walk(dir, out = []) {
   for (const name of readdirSync(dir)) {
@@ -86,20 +98,16 @@ function isEntryOf(domain, target) {
 }
 
 const violations = [];
+// Cross-domain test imports are violations of AGENTS.md §2 too, but they are
+// e2e harnesses wiring real providers; reported non-fatally (see below).
+const testViolations = [];
 let knownHit = false;
 const files = walk(SRC);
 
-for (const file of files) {
-  // Domain standard: tests inside a domain may import internals directly;
-  // cross-domain test imports via gates are tested separately. Exempt test
-  // files from this lint to avoid false positives on e2e harnesses that
-  // deliberately wire real providers (e.g., Swarm e2e). See check-events
-  // for the parallel exemption of test files.
-  if (file.includes(".test.") || file.includes(".spec.")) continue;
-  const content = readFileSync(file, "utf8");
+function scanRegex(content, file, re, sink) {
   let m;
-  IMPORT_RE.lastIndex = 0;
-  while ((m = IMPORT_RE.exec(content))) {
+  re.lastIndex = 0;
+  while ((m = re.exec(content))) {
     const spec = m[1];
     if (!spec.startsWith("./") && !spec.startsWith("../")) continue;
     if (!/\.(js|ts)$/.test(spec)) continue;
@@ -118,12 +126,20 @@ for (const file of files) {
       knownHit = true;
       continue;
     }
-    violations.push({
+    sink.push({
       file: file.slice(SRC.length + 1),
       imports: spec,
       shouldBe: DOMAINS[targetDomain].map((g) => `./${g}.js`).join(" | "),
     });
   }
+}
+
+for (const file of files) {
+  const content = readFileSync(file, "utf8");
+  const isTest = file.includes(".test.") || file.includes(".spec.");
+  const sink = isTest ? testViolations : violations;
+  scanRegex(content, file, IMPORT_RE, sink);
+  scanRegex(content, file, DYN_IMPORT_RE, sink);
 }
 
 if (violations.length > 0) {
@@ -137,6 +153,14 @@ if (violations.length > 0) {
 console.log(
   `Gate rule OK: scanned ${files.length} files across ${Object.keys(DOMAINS).length} domains (${Object.keys(DOMAINS).join(", ")}), 0 violations.`
 );
+if (testViolations.length > 0) {
+  console.warn(
+    `Gate rule TEST-ONLY findings (non-fatal, ${testViolations.length}): cross-domain tests import past gates — route via the gate when touching the file:`
+  );
+  for (const v of testViolations) {
+    console.warn(`  ${v.file} -> '${v.imports}' (use '${v.shouldBe}')`);
+  }
+}
 if (knownHit) {
   console.warn(
     `Gate rule NOTE: ${KNOWN_VIOLATIONS.length} pre-existing violation(s) allowlisted (enforced for new code, not yet fixed):`

@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
@@ -160,5 +160,106 @@ describe("module delete guard in Local mode (no DATABASE_URL)", () => {
     // is nothing to seed.
     await expect(moduleGate.ensureDefaults(null)).resolves.toBeUndefined();
     await expect(moduleGate.ensureDefaults(undefined)).resolves.toBeUndefined();
+  });
+});
+
+describe("module store hardening", () => {
+  const modelRow = (id: string, extra: Record<string, unknown> = {}) => ({
+    id,
+    label: id,
+    provider: "google",
+    modelName: "gemini-2.0-flash",
+    apiKey: null,
+    endpointUrl: null,
+    temperature: 0.7,
+    topP: 0.9,
+    maxOutputTokens: 2048,
+    stopSequences: [],
+    maxRecentMessages: 10,
+    enableCompression: true,
+    compressionThreshold: 15,
+    createdAt: new Date(),
+    updatedAt: new Date(),
+    ...extra,
+  });
+
+  it("corrupt module file is never overwritten (upsert and delete refuse)", async () => {
+    const storeDir = join(dir, "ws-x", "vfs", ".crowdos");
+    mkdirSync(storeDir, { recursive: true });
+    const file = join(storeDir, "model-modules.json");
+    const garbage = "{ this is not json";
+    writeFileSync(file, garbage, "utf8");
+
+    await expect(localUpsertModelModule(modelRow("mod-x") as any, "ws-x")).rejects.toMatchObject({
+      code: "MODULE_STORE_CORRUPT",
+    });
+    await expect(moduleGate.model.remove("mod-x", "ws-x")).rejects.toMatchObject({
+      code: "MODULE_STORE_CORRUPT",
+    });
+    // The corrupt bytes must survive both refused writes.
+    expect(readFileSync(file, "utf8")).toBe(garbage);
+    // Reads stay tolerant: get surfaces null instead of throwing.
+    await expect(moduleGate.model.get("mod-x", "ws-x")).resolves.toBeNull();
+  });
+
+  it("empty limit falls back to the default page size, not 1", async () => {
+    for (const id of ["mod-p1", "mod-p2", "mod-p3"]) {
+      await localUpsertModelModule(modelRow(id) as any, "ws-p");
+    }
+    const empty = await moduleGate.model.list({ limit: "" as any, workspaceId: "ws-p" });
+    expect(empty.length).toBe(3);
+    // Explicit 0 is inside the documented 1-500 range, so it clamps to 1.
+    const zero = await moduleGate.model.list({ limit: 0 as any, workspaceId: "ws-p" });
+    expect(zero.length).toBe(1);
+  });
+
+  it("unscoped get reads only the default folder (no cross-workspace fan-out)", async () => {
+    await localUpsertModelModule(modelRow("mod-a") as any, "ws-a");
+    expect(await moduleGate.model.get("mod-a", "ws-a")).not.toBeNull();
+    expect(await moduleGate.model.get("mod-a", "ws-a ")).not.toBeNull(); // trimmed
+    expect(await moduleGate.model.get("mod-a")).toBeNull();
+    expect(await moduleGate.model.get("mod-a", null)).toBeNull();
+  });
+
+  it("echoing the redacted mask back on update keeps the stored key", async () => {
+    const created = await moduleGate.model.create(modelRow("mod-k", { apiKey: "sk-real-key-123" }) as any, "ws-k");
+    const stored = (await moduleGate.model.get("mod-k", "ws-k"))!.apiKey;
+    expect(stored).toBeTruthy();
+    expect(stored).toBe(created.apiKey); // encrypt() ran once; later writes must not re-encrypt it
+
+    for (const mask of ["••••••••", "••••", "[REDACTED]"]) {
+      const updated = await moduleGate.model.update("mod-k", { apiKey: mask } as any, "ws-k");
+      expect(updated!.apiKey).toBe(stored);
+      expect((await moduleGate.model.get("mod-k", "ws-k"))!.apiKey).toBe(stored);
+    }
+    // Explicit null is still a clear.
+    const cleared = await moduleGate.model.update("mod-k", { apiKey: null } as any, "ws-k");
+    expect(cleared!.apiKey).toBeNull();
+    expect(created.id).toBe("mod-k");
+  });
+
+  it("findReferencingAgents returns every blocker, scoped and unscoped", async () => {
+    await localUpsertModelModule(modelRow("mod-many") as any, "ws-a");
+    for (const [id, ws, name] of [
+      ["agent-a", "ws-a", "first-user"],
+      ["agent-b", "ws-b", "second-user"],
+    ] as const) {
+      await localUpsertAgent({
+        id,
+        workspaceId: ws,
+        name,
+        title: "T",
+        authorityLevel: 1,
+        modelModuleId: "mod-many",
+        instructionModuleId: "instr-default",
+        memorySharingPolicy: "full",
+        status: "idle",
+        isTemplate: false,
+      });
+    }
+    const unscoped = await moduleGate.findReferencingAgents("model", "mod-many", null);
+    expect(unscoped.map((a: any) => a.name).sort()).toEqual(["first-user", "second-user"]);
+    const scoped = await moduleGate.findReferencingAgents("model", "mod-many", "ws-a");
+    expect(scoped.map((a: any) => a.name)).toEqual(["first-user"]);
   });
 });

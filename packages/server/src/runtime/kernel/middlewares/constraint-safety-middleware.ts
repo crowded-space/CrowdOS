@@ -1,7 +1,5 @@
-﻿import { eq } from "drizzle-orm";
-import { getDb } from "../../../shared/config/database.js";
-import { constraintsModules } from "../../../db/schema.js";
-import type { IContextMiddleware, MutableContextPacket, ContextBuildContext } from "../context-types.js";
+﻿import type { IContextMiddleware, MutableContextPacket, ContextBuildContext } from "../context-types.js";
+import { moduleGate } from "../../../modules/module-gate.js";
 import { SOURCE_INTEGRITY_POINTER } from "./identity-authority-middleware.js";
 
 export class ConstraintSafetyMiddleware implements IContextMiddleware {
@@ -19,10 +17,7 @@ export class ConstraintSafetyMiddleware implements IContextMiddleware {
     ];
 
     if (agent.constraintsModuleId) {
-      const db = getDb();
-      const mod = await db.query.constraintsModules.findFirst({
-        where: eq(constraintsModules.id, agent.constraintsModuleId),
-      });
+      const mod = await moduleGate.constraints.get(agent.constraintsModuleId, ctx.workspaceId);
       if (mod?.disallowedActions && Array.isArray(mod.disallowedActions)) {
         for (const action of mod.disallowedActions) {
           safetyRules.push(`Disallowed Action: ${action}`);

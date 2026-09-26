@@ -37,9 +37,13 @@ async function processRunJob(job: Job<RunJobData>): Promise<unknown> {
   // stalled. Real fix = useWorkerThreads/child-process pool (bigger redesign,
   // deliberately not done here).
   let iteration = 0;
+  // ponytail: runId-keyed filter; runId-less emitters (coding bridge) count as before — no regression
+  const wantRunId = (runId as string | undefined) ?? null;
   const hbListenerId = broker.onAny((event) => {
     try {
       if ((event as unknown as { type?: string }).type !== "tool:complete") return;
+      const er = (event as unknown as { runId?: string | null }).runId;
+      if (er !== undefined && er !== wantRunId) return;
       iteration += 1;
       void Promise.resolve(
         job.updateProgress({ iteration, runId: (runId as string | undefined) ?? null }),

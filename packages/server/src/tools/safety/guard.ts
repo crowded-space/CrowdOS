@@ -80,16 +80,28 @@ const ASK_PATTERNS: Array<{ pattern: RegExp; reason: string }> = [
   { pattern: /\bkill\b|\bpkill\b|\btaskkill\b/, reason: "Process termination" },
   { pattern: /\benv\b|\bprintenv\b/, reason: "Environment inspection" },
   { pattern: />\s*\S+/, reason: "File redirection" },
+  // 2026-09-26 audit fix: input redirection could feed a blacklisted file into a
+  // whitelisted command (`cat < .env`) without ever touching the `>` ASK rule.
+  { pattern: /<\s*\S+/, reason: "Input redirection" },
   { pattern: /\|\s*\w+/, reason: "Shell pipeline" },
   { pattern: /\bchmod\b|\bchown\b|\bicacls\b/, reason: "Permission change" },
   { pattern: /\bcrontab\b/, reason: "Scheduled job modification" },
 ];
 
+// 2026-09-26 audit fix: credential-shaped names added (.npmrc/.netrc/id_rsa/*.pem/secrets.*);
+// `*` entries glob-match the lowercase basename only (legacy entries also scan path segments).
+const SENSITIVE_FILE_BLACKLIST = [
+  "credentials.json", "package-lock.json", ".git",
+  ".npmrc", ".netrc", "id_rsa", "*.pem", "secrets.*",
+];
+
 export class Guard {
   // ponytail: TtlCache FIFO eviction (Map insertion order, O(1)) — old sort-by-timestamp was O(n log n).
   private static existsCache = new TtlCache<boolean>(5_000, 200);
-  // ponytail: root realpath cached 60s — per-op realpathSync blocked the loop.
-  private static rootRealCache = new TtlCache<string>(60_000, 200);
+  // ponytail: root realpath cached 5s (was 60s) — a longer window lets a
+  // symlink swap validate against a stale root. Per-op realpathSync blocked
+  // the loop, so a short cache stays instead of none.
+  private static rootRealCache = new TtlCache<string>(5_000, 200);
   private static async cachedExists(p: string): Promise<boolean> {
     const cached = Guard.existsCache.get(p);
     if (cached !== undefined) return cached;
@@ -174,6 +186,16 @@ export class Guard {
     }
   }
 
+  private static isBlacklistedFile(filename: string, fullPathForSegScan: string): boolean {
+    return SENSITIVE_FILE_BLACKLIST.some((bf) => {
+      if (bf.includes("*")) {
+        const re = new RegExp(`^${bf.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*")}$`, "i");
+        return re.test(filename);
+      }
+      return filename === bf || fullPathForSegScan.includes(`${path.sep}${bf}${path.sep}`);
+    });
+  }
+
   static async validatePath(targetPath: string, workspaceRoot?: string): Promise<string> {
     const root = await Guard.getWorkspaceDir(workspaceRoot);
 
@@ -210,17 +232,16 @@ export class Guard {
     }
 
     const filename = path.basename(candidateReal).toLowerCase();
-    const blacklistedFiles = ["credentials.json", "package-lock.json", ".git"];
     const isEnvFile = filename === ".env" || filename.startsWith(".env.");
     const lowerCandidate =
       process.platform === "win32" ? candidateReal.toLowerCase() : candidateReal;
-    if (
-      isEnvFile ||
-      blacklistedFiles.some((bf) => filename === bf || lowerCandidate.includes(`${path.sep}${bf}${path.sep}`))
-    ) {
+    if (isEnvFile || Guard.isBlacklistedFile(filename, lowerCandidate)) {
       throw new Error(`Access Denied: File "${filename}" is in the system blacklist.`);
     }
 
+    // ponytail: TOCTOU ceiling — the caller opens `candidateReal` after this
+    // return; a symlink swap in that window is not closed here. Close it by
+    // opening first (O_NOFOLLOW) and validating the fd if that ever matters.
     return candidateReal;
   }
 
@@ -230,17 +251,15 @@ export class Guard {
     const normalizedRoot = path.normalize(root).toLowerCase();
     const normalizedTarget = path.normalize(absolutePath).toLowerCase();
 
-    if (!normalizedTarget.startsWith(normalizedRoot)) {
+    // Separator-aware prefix: bare startsWith lets /sandbox/ws-evil pass a
+    // /sandbox/ws jail. Exact match or separator-terminated prefix only.
+    if (normalizedTarget !== normalizedRoot && !normalizedTarget.startsWith(normalizedRoot + path.sep)) {
       throw new Error(`Access Denied: Path "${targetPath}" breaks out of workspace directory.`);
     }
 
     const filename = path.basename(absolutePath).toLowerCase();
-    const blacklistedFiles = ["credentials.json", "package-lock.json", ".git"];
     const isEnvFile = filename === ".env" || filename.startsWith(".env.");
-    if (
-      isEnvFile ||
-      blacklistedFiles.some((bf) => filename === bf || normalizedTarget.includes(`${path.sep}${bf}${path.sep}`))
-    ) {
+    if (isEnvFile || Guard.isBlacklistedFile(filename, normalizedTarget)) {
       throw new Error(`Access Denied: File "${filename}" is in the system blacklist.`);
     }
 
@@ -275,8 +294,11 @@ export class Guard {
   }
 
   private static splitSegments(command: string): string[] {
+    // 2026-09-26 audit fix: bare `&`/`;` are separators too — `git status & node evil.js`
+    // previously stayed ONE segment and classified via git's read-only subcommand
+    // (CRITICAL-1). `&&` alternative first so two-char operators win over the class.
     return command
-      .split(/&&|\|\||;|\||\n|\r\n/g)
+      .split(/&&|[;&|\n\r]/g)
       .map((s) => s.trim())
       .filter(Boolean);
   }
@@ -435,5 +457,41 @@ export class Guard {
 
   static isCommandWhitelisted(command: string): boolean {
     return Guard.evaluateCommand(command).decision === "ALLOW";
+  }
+
+  /**
+   * CRITICAL-2 (2026-09-26): the ALLOW-safe bases (cat/head/dir/…) accept
+   * path arguments but never ran them through `validatePath`, so a whitelisted
+   * command could read `.env` or `../` out of the jail. `evaluateCommand` is
+   * sync (tests call it sync), so this is a separate async pass the terminal
+   * handlers await before spawning — one throw = Access Denied, same wording
+   * as the file tools.
+   */
+  static async validateCommandPaths(command: string, workspaceRoot?: string): Promise<void> {
+    for (const segment of Guard.splitSegments(command)) {
+      const tokens = Guard.tokenizeCommand(segment);
+      if (tokens.length === 0) continue;
+      if (!SAFE_BASES.has(Guard.baseName(tokens[0]))) continue;
+      for (const raw of tokens.slice(1)) {
+        for (const candidate of Guard.pathLikeArgs(raw)) {
+          await Guard.validatePath(candidate, workspaceRoot); // throws Access Denied
+        }
+      }
+    }
+  }
+
+  private static pathLikeArgs(token: string): string[] {
+    if (!token) return [];
+    // win32 command switches (`dir /a`, `findstr /i`, `tree /f`) are not paths.
+    if (process.platform === "win32" && /^\/[a-zA-Z](:[a-zA-Z0-9._-]+)?$/.test(token)) return [];
+    if (token.startsWith("-")) {
+      // `--flag=path` still carries a path — validate the value half.
+      const eq = token.indexOf("=");
+      return eq > 0 && eq < token.length - 1 ? [token.slice(eq + 1)] : [];
+    }
+    const looksLikePath =
+      token.includes("/") || token.includes("\\") || token.includes(".") ||
+      token.includes("~") || token.includes(":");
+    return looksLikePath ? [token] : [];
   }
 }

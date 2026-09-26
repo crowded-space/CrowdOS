@@ -17,12 +17,14 @@ export type WorkerExecutor = (
  */
 export const DEFAULT_SWARM_CONCURRENCY = 4;
 
+export const MAX_SWARM_CONCURRENCY = 32;
+
 export function resolveSwarmConcurrency(): number {
   const raw = process.env.SWARM_MAX_CONCURRENCY?.trim();
   if (!raw) return DEFAULT_SWARM_CONCURRENCY;
   const n = Number(raw);
   if (!Number.isFinite(n) || n < 1) return DEFAULT_SWARM_CONCURRENCY;
-  return Math.floor(n);
+  return Math.min(MAX_SWARM_CONCURRENCY, Math.floor(n));
 }
 
 /** Per-task wall-clock ceiling. A hung worker must not stall the whole DAG. */
@@ -101,7 +103,12 @@ export interface DispatchInput {
 }
 
 function validateDag(tasks: SwarmPlanTask[]): string | null {
-  const ids = new Set(tasks.map((t) => t.id));
+  const seen = new Set<string>();
+  for (const t of tasks) {
+    if (seen.has(t.id)) return `duplicate task id ${t.id}`;
+    seen.add(t.id);
+  }
+  const ids = seen;
   for (const t of tasks) {
     for (const dep of t.dependsOn) {
       if (!ids.has(dep)) return `task ${t.id} dependsOn unknown ${dep}`;
@@ -135,11 +142,22 @@ async function defaultWorkerExecutor(
   throw new Error(`No worker executor provided for swarm task ${task.id} — inject executor via SwarmRuntime or test harness (honest fallback, not mocked)`);
 }
 
+/**
+ * Plans come from an LLM and are not trusted: an unbounded fan-out is an
+ * unbounded provider bill. 50 is far past any real DAG and turns a runaway
+ * plan into a loud failure instead of 500 simultaneous tool loops.
+ */
+export const MAX_SWARM_TASKS = 50;
+
 export async function dispatchSwarmTasks(input: DispatchInput): Promise<Map<string, SwarmWorkerResult>> {
   const { plan, runId, packet, broker, abortSignal } = input;
   const workerExecutor = input.workerExecutor ?? defaultWorkerExecutor;
   const maxConcurrency = input.maxConcurrency ?? resolveSwarmConcurrency();
   const taskTimeoutMs = input.taskTimeoutMs ?? resolveTaskTimeoutMs();
+
+  if (plan.tasks.length > MAX_SWARM_TASKS) {
+    throw new Error(`[swarmDispatcher] plan has ${plan.tasks.length} tasks (max ${MAX_SWARM_TASKS})`);
+  }
 
   const dagError = validateDag(plan.tasks);
   if (dagError) {
@@ -152,20 +170,53 @@ export async function dispatchSwarmTasks(input: DispatchInput): Promise<Map<stri
 
   const isAborted = () => abortSignal?.aborted === true || packet.abortSignal?.aborted === true;
 
+  const persistStatus = async (taskId: string, next: "running" | "completed" | "failed" | "blocked", outputRef?: string) => {
+    await updateSwarmTaskStatus(runId, taskId, next, outputRef).catch((e) => console.warn(`[swarmDispatcher] persist ${next} failed for ${taskId}:`, (e as Error)?.message || e));
+  };
+
   // lease reuse: keep agent working during dispatch
+  type SwarmLease = { agentId: string; cleanup: () => void };
+  const g = global as unknown as { __swarmLeaseCleanup?: SwarmLease };
+  let finalizeLease: (() => void) | null = null;
   try {
     const { markAgentWorking, markAgentIdle } = await import("../shared/core/agent-heartbeat.js");
     markAgentWorking(packet.agentId);
-    // Ensure idle on exit
-    const finalize = () => markAgentIdle(packet.agentId);
-    // Attach one-time
-    (global as unknown as { __swarmLeaseCleanup?: () => void }).__swarmLeaseCleanup = finalize;
-  } catch {}
+    const lease: SwarmLease = {
+      agentId: packet.agentId,
+      cleanup: () => {
+        // Only the current owner drops the lease: an earlier dispatch finishing
+        // late must not idle an agent a newer dispatch is still using.
+        if (g.__swarmLeaseCleanup !== lease) return;
+        g.__swarmLeaseCleanup = undefined;
+        markAgentIdle(packet.agentId);
+      },
+    };
+    // A leftover cleanup for a DIFFERENT agent releases that agent (no orphan
+    // lease). For the SAME agent it would delete the lease just registered and
+    // hand a live agent to the orphan sweeper, so it is skipped.
+    const prev = g.__swarmLeaseCleanup;
+    if (prev && prev.agentId !== packet.agentId) {
+      try { prev.cleanup(); } catch (e) { console.warn("[swarmDispatcher] previous lease cleanup failed:", (e as Error)?.message || e); }
+    }
+    g.__swarmLeaseCleanup = lease;
+    finalizeLease = lease.cleanup;
+  } catch (e) { console.warn("[swarmDispatcher] lease markAgentWorking failed:", (e as Error)?.message || e); }
 
+  // Dispatch body runs in a closure so the lease is released in a finally —
+  // including the iteration-guard throw, which previously leaked the lease.
+  const runDispatch = async (): Promise<Map<string, SwarmWorkerResult>> => {
   let iterationGuard = 0;
   while (true) {
     if (isAborted()) break;
-    if (iterationGuard++ > 100) break; // safety
+    if (iterationGuard++ > 100) {
+      for (const t of plan.tasks.filter((t) => status.get(t.id) === "pending")) {
+        status.set(t.id, "failed");
+        const reason = "swarm dispatcher iteration guard exceeded (possible scheduler stall)";
+        results.set(t.id, { taskId: t.id, status: "failed", error: reason });
+        await persistStatus(t.id, "failed", reason);
+      }
+      throw new Error("[swarmDispatcher] iteration guard exceeded (>100 rounds) — remaining tasks marked failed");
+    }
     const pending = plan.tasks.filter((t) => status.get(t.id) === "pending");
     if (pending.length === 0) break;
 
@@ -186,7 +237,9 @@ export async function dispatchSwarmTasks(input: DispatchInput): Promise<Map<stri
       status.set(t.id, "blocked");
       const reason = `blocked: dependency failed (${t.dependsOn.filter((d) => failedIds.has(d)).join(",")})`;
       results.set(t.id, { taskId: t.id, status: "failed", error: reason });
-      await updateSwarmTaskStatus(t.id, "failed", reason).catch(() => {});
+      // Persist as "blocked" (not "failed"): the row's own status is what a
+      // reader sees after the run, and "blocked" is in the swarm_task_status enum.
+      await persistStatus(t.id, "blocked", reason);
     }
     if (newlyBlocked.length > 0) continue;
 
@@ -201,7 +254,7 @@ export async function dispatchSwarmTasks(input: DispatchInput): Promise<Map<stri
         status.set(t.id, "blocked");
         const reason = `blocked: unsatisfied dependencies ${t.dependsOn.join(",")}`;
         results.set(t.id, { taskId: t.id, status: "failed", error: reason });
-        await updateSwarmTaskStatus(t.id, "failed", reason).catch(() => {});
+        await persistStatus(t.id, "blocked", reason);
       }
       break;
     }
@@ -212,7 +265,7 @@ export async function dispatchSwarmTasks(input: DispatchInput): Promise<Map<stri
     // Mark running before dispatch (lease tracking via status)
     for (const t of batch) {
       status.set(t.id, "running");
-      await updateSwarmTaskStatus(t.id, "running").catch(() => {});
+      await persistStatus(t.id, "running");
     }
 
     // Bounded fan-out (P2): every worker is a full LLM call plus tool loop.
@@ -227,7 +280,10 @@ export async function dispatchSwarmTasks(input: DispatchInput): Promise<Map<stri
         let childRunId: string | null = null;
         let delegated = false;
         if (runId) {
-          childRunId = `${runId}::${task.id}::${randomUUID().slice(0, 8)}`;
+          // delegations.child_run_id is uuid-typed (FK to runs.id), so the child
+          // id must be a real uuid — a composite `${runId}::${taskId}::...` was
+          // rejected by the column. Task linkage stays on delegations.task_id.
+          childRunId = randomUUID();
           try {
             await delegateDelegation({
               parentRunId: runId,
@@ -288,15 +344,9 @@ export async function dispatchSwarmTasks(input: DispatchInput): Promise<Map<stri
         const outStr = typeof output === "string" ? output : String(output ?? "");
         status.set(task.id, "completed");
         results.set(task.id, { taskId: task.id, status: "completed", output: outStr, durationMs });
-        await updateSwarmTaskStatus(task.id, "completed", outStr.slice(0, 20000)).catch(() => {});
-        // reuse run heartbeat leases: touch checkpoint watermark
-        try {
-          if (runId) {
-            const { runsGate } = await import("../runs/runs-gate.js");
-            // touch checkpoint with watermark = completed count proxy (not seq) — honest heartbeat reuse
-            await runsGate.touchCheckpoint(runId, { watermarkSeq: results.size }).catch(() => {});
-          }
-        } catch {}
+        await persistStatus(task.id, "completed", outStr.slice(0, 20000));
+        // NOTE: no runs checkpoint watermark here — watermarkSeq is the tool-call
+        // resume cursor owned by agentic-runtime; writing results.size corrupts it.
       } else {
         const reason = settled.error as unknown as { task?: SwarmPlanTask; error?: string; durationMs?: number };
         const errMsg = typeof reason === "object" && reason && "error" in reason
@@ -307,16 +357,34 @@ export async function dispatchSwarmTasks(input: DispatchInput): Promise<Map<stri
           ? Number((reason as { durationMs: number }).durationMs)
           : undefined;
         results.set(task.id, { taskId: task.id, status: "failed", error: errMsg, durationMs });
-        await updateSwarmTaskStatus(task.id, "failed", errMsg.slice(0, 5000)).catch(() => {});
+        await persistStatus(task.id, "failed", errMsg.slice(0, 5000));
       }
-      if (isAborted()) break;
+      // NOTE: no abort break here — every settled result is persisted, otherwise
+      // an abort mid-batch discarded completed work and left rows stuck in
+      // "running". The loop top stops the next round instead.
     }
   }
 
-  try {
-    const { markAgentIdle } = await import("../shared/core/agent-heartbeat.js");
-    markAgentIdle(packet.agentId);
-  } catch {}
+  if (isAborted()) {
+    // Abort leaves tasks pending (never dispatched) or running (abandoned):
+    // settle them so no row sits in a non-terminal state and aggregation sees
+    // the truth.
+    for (const t of plan.tasks) {
+      const s = status.get(t.id);
+      if (s !== "pending" && s !== "running") continue;
+      const reason = s === "running" ? "aborted before completion" : "aborted before dispatch";
+      status.set(t.id, "failed");
+      results.set(t.id, { taskId: t.id, status: "failed", error: reason });
+      await persistStatus(t.id, "failed", reason);
+    }
+  }
 
   return results;
+  };
+
+  try {
+    return await runDispatch();
+  } finally {
+    if (finalizeLease) finalizeLease();
+  }
 }

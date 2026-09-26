@@ -1,6 +1,7 @@
 import { eq, sql, desc, and, gte, lte, inArray } from "drizzle-orm";
 import { getDb } from "../shared/config/database.js";
 import { tokenUsageLog, modelModules, runs } from "../db/schema.js";
+import { moduleGate } from "../modules/module-gate.js";
 import { logMetric } from "../shared/core/structured-log.js";
 
 /**
@@ -255,17 +256,13 @@ export async function getPerRunRollup(opts: {
 
 export async function getCostDashboard(opts: { limit?: number } = {}): Promise<CostDashboard> {
   const limit = clampObsLimit(opts.limit);
-  const db = getDb();
   // One ledger fetch batched with the model-meta lookup; rollups derive pure from the same rows.
   const [entries, modelRows] = await Promise.all([
     getPerRunCostLedger({ limit }),
-    db
-      .select({ id: modelModules.id, provider: modelModules.provider, modelName: modelModules.modelName })
-      .from(modelModules)
-      .then(
-        (rows) => rows,
-        () => [] as never[],
-      ),
+    moduleGate.model.list().then(
+      (rows) => rows,
+      () => [] as never[],
+    ),
   ]);
   const byRun = rollupFromEntries(entries);
   await attachRunMeta(byRun);

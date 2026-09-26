@@ -28,6 +28,8 @@ import type { SkillCategory, MarkdownSkill, SkillParseResult } from "./markdown-
 import { SKILL_CATEGORIES } from "./markdown-skill-types.js";
 import type { SkillWorkflowPattern } from "./skill-types.js";
 
+export const MAX_SKILL_BODY_CHARS = 50_000;
+
 const FRONT_MATTER_RE = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?/;
 const WORKFLOW_PATTERNS: readonly SkillWorkflowPattern[] = ["react", "plan_execute", "evaluator_optimizer"];
 
@@ -59,18 +61,26 @@ function parseList(raw: string): string[] {
     .filter(Boolean);
 }
 
-function parseScalarFrontMatter(block: string): Record<string, string> {
+function parseScalarFrontMatter(block: string): { values: Record<string, string>; foldedKeys: string[] } {
   const out: Record<string, string> = {};
+  const foldedKeys: string[] = [];
   for (const line of block.split(/\r?\n/)) {
     const trimmed = line.trim();
     if (!trimmed || trimmed.startsWith("#")) continue;
     const sep = trimmed.indexOf(":");
     if (sep <= 0) continue;
     const key = trimmed.slice(0, sep).trim().toLowerCase();
-    const value = trimmed.slice(sep + 1).trim();
-    if (key) out[key] = value;
+    if (!key) continue;
+    let value = trimmed.slice(sep + 1).trim();
+    // YAML rule: an unquoted ` #` starts a trailing comment; quoted values are kept verbatim.
+    if (!/^["']/.test(value)) {
+      const commentAt = value.search(/\s#/);
+      if (commentAt > 0) value = value.slice(0, commentAt).trim();
+    }
+    out[key] = value;
+    if (/^[|>][+-]?$/.test(value)) foldedKeys.push(key);
   }
-  return out;
+  return { values: out, foldedKeys };
 }
 
 /** Slugify a filename into a stable id fallback. */
@@ -89,10 +99,17 @@ export function parseMarkdownSkill(raw: string, filePath: string): SkillParseRes
   if (!match) {
     return { skill: null, error: `${filePath}: missing front-matter block (--- ... ---)` };
   }
-  const fm = parseScalarFrontMatter(match[1]);
+  const { values: fm, foldedKeys } = parseScalarFrontMatter(match[1]);
   const body = text.slice(match[0].length).trim();
 
-  const categoryRaw = (fm.category ?? "").toLowerCase();
+  if (foldedKeys.length > 0) {
+    return {
+      skill: null,
+      error: `${filePath}: folded/multi-line value for "${foldedKeys[0]}" is not supported (write it on one line)`,
+    };
+  }
+
+  const categoryRaw = unquote(fm.category ?? "").toLowerCase();
   if (!isCategory(categoryRaw)) {
     return {
       skill: null,
@@ -117,10 +134,21 @@ export function parseMarkdownSkill(raw: string, filePath: string): SkillParseRes
     workflowPattern = workflowRaw;
   }
 
-  // enabled defaults to true; an explicit falsy value opts the skill out.
-  const enabledRaw = unquote(fm.enabled ?? "").toLowerCase();
-  const enabled = !(enabledRaw === "false" || enabledRaw === "no" || enabledRaw === "0");
+  if (!description) {
+    return { skill: null, error: `${filePath}: description is required (one line, shown during discovery)` };
+  }
 
+  // enabled defaults to true when absent/empty; an explicit falsy value opts out.
+  const enabledRaw = unquote(fm.enabled ?? "").toLowerCase();
+  const enabled = !(
+    enabledRaw === "false" ||
+    enabledRaw === "no" ||
+    enabledRaw === "0" ||
+    enabledRaw === "off" ||
+    enabledRaw === "disabled"
+  );
+
+  const truncated = body.length > MAX_SKILL_BODY_CHARS;
   return {
     skill: {
       id,
@@ -131,7 +159,8 @@ export function parseMarkdownSkill(raw: string, filePath: string): SkillParseRes
       tools: parseList(fm.tools ?? ""),
       workflowPattern,
       enabled,
-      body,
+      body: truncated ? body.slice(0, MAX_SKILL_BODY_CHARS) : body,
+      truncated: truncated || undefined,
       path: filePath,
     },
   };

@@ -64,7 +64,9 @@ export class SwarmRuntime extends BaseRuntime {
       // 2. Persist swarm_tasks DAG
       try {
         await swarmGate.deleteByRun(runId)
-      } catch {}
+      } catch (err) {
+        console.warn('[SwarmRuntime] deleteByRun failed (stale rows may remain):', (err as Error)?.message || err)
+      }
       await swarmGate.createTasks(runId, plan.tasks)
 
       if (packet.abortSignal?.aborted) {
@@ -152,7 +154,7 @@ export class SwarmRuntime extends BaseRuntime {
         runId,
         packet,
         broker,
-        workerExecutor: workerExecutor as any,
+        workerExecutor,
         abortSignal: packet.abortSignal,
       })
 
@@ -163,11 +165,11 @@ export class SwarmRuntime extends BaseRuntime {
         runId,
         dependsOn: t.dependsOn,
         assigneeTemplate: t.assigneeTemplate,
-        status: (dispatchResults.get(t.id)?.status === 'completed' ? 'completed' : 'failed') as any,
+        status: dispatchResults.get(t.id)?.status === 'completed' ? 'completed' as const : 'failed' as const,
         outputRef: dispatchResults.get(t.id)?.output ?? dispatchResults.get(t.id)?.error ?? null,
         createdAt: new Date(),
         updatedAt: new Date(),
-      } as any)), dispatchResults)
+      })), dispatchResults)
 
       // 5. Verifier pass (independent model via cheap tier) gates COMPLETED
       const verification = await swarmGate.verify({
@@ -296,7 +298,9 @@ export class SwarmRuntime extends BaseRuntime {
       console.error(`[SwarmRuntime] Error:`, err)
       try {
         await this.kernel.setAgentStatus(broker, packet.agentId, 'idle')
-      } catch {}
+      } catch (err) {
+        console.warn('[SwarmRuntime] setAgentStatus idle failed after error:', (err as Error)?.message || err)
+      }
       return await this.buildFailedResult(packet, err, broker)
     }
   }

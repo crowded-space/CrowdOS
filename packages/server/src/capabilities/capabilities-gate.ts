@@ -3,7 +3,6 @@
 // Sole import surface for the Capabilities domain (Domain Facade Standard).
 
 import {
-  listDescriptors,
   visibleFor,
   expand,
   getDescriptor,
@@ -20,6 +19,9 @@ import type {
   VisibleCapability,
 } from "./capability-types.js";
 
+// NOTE: CAPABILITY_DOMAINS / BUILTIN_CAPABILITIES / mergeManifest are re-exported
+// for tests and diagnostics only. External domains should use `capabilitiesGate`.
+/** @internal pure merge helper, pinned by unit tests — not a runtime port. */
 export { CAPABILITY_DOMAINS, BUILTIN_CAPABILITIES, mergeManifest };
 export type {
   CapabilityDescriptor,
@@ -31,8 +33,6 @@ export type {
 };
 
 export const capabilitiesGate = {
-  /** All descriptors (built-in vocabulary + workspace manifest overlay). */
-  list: (workspaceId?: string | null) => listDescriptors(workspaceId),
   /** Discovery-first view for an agent: id + domain + summary, no schemas. */
   visibleFor: (agentId: string, workspaceId?: string | null) => visibleFor(agentId, workspaceId),
   /** Lazy expansion: full tool schemas for one capability, agent-scoped. */

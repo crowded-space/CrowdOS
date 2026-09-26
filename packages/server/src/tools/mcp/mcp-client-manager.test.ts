@@ -131,6 +131,38 @@ describe("McpClientManager SEC-6 hygiene", () => {
     expect(seen["PUBLIC_FLAG"]).toBe("ping");
   });
 
+  it("stale exit from a previous connection's child does not tear down a reconnect", async () => {
+    const id = await start(makeConfig());
+    expect(mcpClientManager.getStatus(id)?.status).toBe("connected");
+
+    type TestSession = {
+      process?: { emit: (event: string, code: number | null, signal: null) => boolean } | undefined;
+    };
+    const sessions = (mcpClientManager as unknown as { sessions: Map<string, TestSession> })
+      .sessions;
+    const session = sessions.get(id)!;
+    const oldChild = session.process!;
+    expect(oldChild).toBeTruthy();
+
+    await mcpClientManager.disconnect(id);
+    expect(mcpClientManager.getStatus(id)?.status).toBe("disconnected");
+
+    const status = await mcpClientManager.connect(id);
+    expect(status.status).toBe("connected");
+    const newChild = session.process;
+    expect(newChild).toBeTruthy();
+    expect(newChild).not.toBe(oldChild);
+
+    // Late event from the dead child (the reconnect race window).
+    oldChild.emit("exit", 0, null);
+
+    expect(mcpClientManager.getStatus(id)?.status).toBe("connected");
+    expect(session.process).toBe(newChild);
+
+    const result = await getTool(id, "echo_env").handler({ names: [] }, ctx);
+    expect(result.success).toBe(true);
+  });
+
   it("speaks content-length framing when a server opts in", async () => {
     const clId = await start(
       makeConfig({

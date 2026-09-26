@@ -235,7 +235,7 @@ export default function AgentStudioModal({ agentId, open, onClose }: AgentStudio
                       </span>
                     </div>
                     <span className="text-[10px] text-zinc-500 font-mono">
-                      Active: {modelModules.find(m => m.id === selectedModelId)?.name || 'Default Gemini Flash'}
+                      Active: {modelModules.find(m => m.id === selectedModelId)?.name || 'Unassigned'}
                     </span>
                   </div>
 
@@ -247,7 +247,7 @@ export default function AgentStudioModal({ agentId, open, onClose }: AgentStudio
                         onChange={(e) => setSelectedModelId(e.target.value)}
                         className="w-full bg-zinc-900 border border-zinc-800 rounded px-2.5 py-1.5 text-zinc-200 text-xs font-mono outline-none focus:border-zinc-700 cursor-pointer"
                       >
-                        <option value="">Default (Google Gemini 2.0 Flash)</option>
+                        <option value="">No model (unassigned)</option>
                         {modelModules.map(m => (
                           <option key={m.id} value={m.id}>{m.name} ({m.provider})</option>
                         ))}

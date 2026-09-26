@@ -13,23 +13,60 @@ export type AgentErrorType =
   | "CONTEXT_OVERFLOW"
   | "BUDGET_EXCEEDED";
 
-export class AgentError extends Error {
-  constructor(
-    public errorType: AgentErrorType,
-    message: string,
-    public errorCode?: number
-  ) {
-    super(message);
-    this.name = "AgentError";
-  }
+// Spread load across eligible escalation targets: first-match always picks
+// the alphabetically-first coordinator. Random among eligible instead.
+function pickEscalationTarget(allAgents: AgentProfile[], targetLevel: 0 | 1 | 2 | 3): AgentProfile | undefined {
+  const eligible = allAgents.filter(
+    (a) => a.authorityLevel === targetLevel && a.status !== "offline" && a.status !== "paused"
+  );
+  if (eligible.length === 0) return undefined;
+  return eligible[Math.floor(Math.random() * eligible.length)];
+}
+
+// Pending takeover replies, keyed by target agent id. A restart before the
+// 1.2s delay used to leave the target "working" until the orphan sweep; now
+// the handle is tracked (unref'd so it never holds the loop open) and a new
+// escalation for the same target supersedes the pending one.
+const pendingTakeovers = new Map<string, ReturnType<typeof setTimeout>>();
+
+function queueTakeoverReply(targetAgentId: string, reply: () => void): void {
+  const prev = pendingTakeovers.get(targetAgentId);
+  if (prev) clearTimeout(prev);
+  const handle = setTimeout(() => {
+    pendingTakeovers.delete(targetAgentId);
+    reply();
+  }, 1200);
+  (handle as unknown as { unref?: () => void }).unref?.();
+  pendingTakeovers.set(targetAgentId, handle);
 }
 
 export class EscalationChain {
   /**
    * Escalates an agent error to the higher authority level:
    * L3 Worker/Supervisor -> L2 Coordinator -> L1 CEO -> User Notification
+   *
+   * Never rejects: callers reach this from bare async timers (librarian
+   * runtime) where a rejection would become an unhandled crash. Failures are
+   * logged and the chain simply stops where it broke.
    */
   static async escalate(
+    broker: EventBroker,
+    agent: AgentProfile,
+    channelId: string,
+    errorType: AgentErrorType,
+    errorMessage: string
+  ): Promise<void> {
+    try {
+      await EscalationChain.run(broker, agent, channelId, errorType, errorMessage);
+    } catch (err) {
+      console.error(
+        `[EscalationChain] Escalation failed for @${agent.name} (${agent.id}):`,
+        err instanceof Error ? err.message : err,
+      );
+    }
+  }
+
+  private static async run(
     broker: EventBroker,
     agent: AgentProfile,
     channelId: string,
@@ -86,7 +123,7 @@ export class EscalationChain {
       const allAgents = await agentRegistry.list(
         agent.workspaceId != null ? { isTemplate: false, workspaceId: agent.workspaceId } : { isTemplate: false },
       );
-      const targetAgent = allAgents.find(a => a.authorityLevel === targetLevel && a.status !== "offline" && a.status !== "paused");
+      const targetAgent = pickEscalationTarget(allAgents, targetLevel);
 
       if (targetAgent) {
         escalatedTo = targetAgent.id;
@@ -112,7 +149,7 @@ export class EscalationChain {
         // Delayed takeover reply. Every step is individually guarded so a
         // failed append can never leave the target stuck "working": the
         // status reset always runs.
-        setTimeout(() => {
+        queueTakeoverReply(targetAgent.id, () => {
           void (async () => {
             try {
               const replyContent = `I am @${targetAgent.name}, L${targetAgent.authorityLevel} Coordinator. I have taken over the error escalation from @${agent.name}. Examining error stack and initializing fallback pipelines.`;
@@ -143,7 +180,7 @@ export class EscalationChain {
                 });
             }
           })();
-        }, 1200);
+        });
 
         return;
       }

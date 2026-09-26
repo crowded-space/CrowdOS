@@ -160,9 +160,9 @@ async function emitRuntimeSnapshot(target: any): Promise<void> {
     // (dual-write keeps them mirroring PG), so the snapshot never depends on
     // a database being up.
     const { listWorkspaceRecords } = await import("../../workspace/workspace-gate.js");
-    const { localListAgents } = await import("../../agents/agent-local-store.js");
+    const { agentGate } = await import("../../agents/agent-gate.js");
     const records = await listWorkspaceRecords().catch(() => []);
-    const roster = await localListAgents({}).catch(() => []);
+    const roster = await agentGate.listLocalAgents({}).catch(() => []);
     if (!records.some((w: any) => w.databaseUrl?.trim())) {
       const memUsedMb = Math.round(process.memoryUsage().heapUsed / 1024 / 1024);
       target.emit("runtime:snapshot", {

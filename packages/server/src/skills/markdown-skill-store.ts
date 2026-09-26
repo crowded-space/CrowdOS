@@ -21,11 +21,13 @@
 import { promises as fs } from "node:fs";
 import { join } from "node:path";
 
-import { resolveLocalStoreDir, searchableWorkspaceScopes } from "../shared/core/local-file.js";
+import { resolveLocalStoreDir } from "../shared/core/local-file.js";
 import { parseMarkdownSkill } from "./markdown-skill-parser.js";
 import type { MarkdownSkill, SkillSummary, SkillLoadReport } from "./markdown-skill-types.js";
 
 export type { SkillLoadReport };
+
+const MAX_SKILL_FILE_BYTES = 256 * 1024;
 
 function skillsDir(workspaceId?: string | null): string {
   return join(resolveLocalStoreDir(workspaceId), "skills");
@@ -48,11 +50,27 @@ async function loadDir(dir: string): Promise<{ skills: MarkdownSkill[]; errors: 
   for (const name of entries.sort()) {
     if (!/\.md$/i.test(name)) continue;
     const full = join(dir, name);
+    try {
+      const stat = await fs.stat(full);
+      if (stat.size > MAX_SKILL_FILE_BYTES) {
+        errors.push(full + ": exceeds " + MAX_SKILL_FILE_BYTES + " byte cap (" + stat.size + " bytes), skipped");
+        continue;
+      }
+    } catch (err: any) {
+      // Vanished between readdir and stat: not a reportable failure.
+      if (err?.code === "ENOENT") continue;
+      errors.push(full + ": " + (err?.message ?? String(err)));
+      continue;
+    }
     let raw: string;
     try {
       raw = await fs.readFile(full, "utf8");
     } catch (err: any) {
       errors.push(full + ": " + (err?.message ?? String(err)));
+      continue;
+    }
+    if (Buffer.byteLength(raw, "utf8") > MAX_SKILL_FILE_BYTES) {
+      errors.push(full + ": exceeds " + MAX_SKILL_FILE_BYTES + " byte cap, skipped");
       continue;
     }
     const parsed = parseMarkdownSkill(raw, full);
@@ -76,26 +94,19 @@ async function loadDir(dir: string): Promise<{ skills: MarkdownSkill[]; errors: 
  * Load and parse every skill file. Never throws: an unreadable directory is an
  * empty skill set, which is the honest answer for a workspace with no skills.
  *
- * Without a workspace id, every registered workspace is merged (first wins on a
- * duplicate id, in registry order) — the same rule the directory scan uses.
+ * Nullish/empty workspace id resolves the DEFAULT scope folder only — the same
+ * rule as `resolveLocalStoreDir(null)` — never a fan-out across workspaces:
+ * discovery/expansion must not leak another workspace's skill bodies.
  */
 export async function loadSkills(workspaceId?: string | null): Promise<SkillLoadReport> {
-  const scopes: Array<string | null> = workspaceId && workspaceId.trim()
-    ? [workspaceId]
-    : searchableWorkspaceScopes();
-  const skills: MarkdownSkill[] = [];
-  const errors: string[] = [];
-  const seen = new Set<string>();
-  for (const scope of scopes) {
-    const report = await loadDir(skillsDir(scope));
-    errors.push(...report.errors);
-    for (const skill of report.skills) {
-      if (seen.has(skill.id)) continue;
-      seen.add(skill.id);
-      skills.push(skill);
-    }
+  const scope = workspaceId && workspaceId.trim() ? workspaceId.trim() : null;
+  const report = await loadDir(skillsDir(scope));
+  // Discovery/expansion callers destructure { skills } only, so dropped parse
+  // errors would vanish silently — this is where they surface.
+  for (const reason of report.errors) {
+    console.warn("[skills] skill file skipped:", reason);
   }
-  return { skills, errors };
+  return report;
 }
 
 /** Only the enabled skills — the set the system offers to agents. */
@@ -144,8 +155,11 @@ export async function getSkill(skillId: string, workspaceId?: string | null): Pr
  * Compose several skills into one workflow body (§20 "Skills are composable").
  *
  * Returns the concatenated Markdown of every skill that resolved, in the order
- * requested, plus the ids that did not. Order is preserved because composition
- * order is semantically meaningful (a later skill may refine an earlier one).
+ * requested, plus the ids that did not. `missing` covers both absent and
+ * disabled ids; `disabled` is the subset that exists but is opted out, so a
+ * caller can tell "unknown" from "installed but disabled". Order is preserved
+ * because composition order is semantically meaningful (a later skill may
+ * refine an earlier one).
  */
 export async function composeSkills(
   skillIds: readonly string[],
@@ -154,14 +168,19 @@ export async function composeSkills(
   body: string;
   resolved: string[];
   missing: string[];
+  disabled: string[];
 }> {
+  const { skills } = await loadSkills(workspaceId);
+  const byId = new Map(skills.map((s) => [s.id, s]));
   const resolved: string[] = [];
   const missing: string[] = [];
+  const disabled: string[] = [];
   const blocks: string[] = [];
   for (const id of skillIds) {
-    const skill = await getSkill(id, workspaceId);
-    if (!skill) {
+    const skill = byId.get(id);
+    if (!skill || !skill.enabled) {
       missing.push(id);
+      if (skill) disabled.push(id);
       continue;
     }
     resolved.push(skill.id);
@@ -169,5 +188,6 @@ export async function composeSkills(
       "## Skill: " + skill.name + " (" + skill.category + (skill.topic ? " / " + skill.topic : "") + ")\n\n" + skill.body,
     );
   }
-  return { body: blocks.join("\n\n---\n\n"), resolved, missing };
+  return { body: blocks.join("\n\n---\n\n"), resolved, missing, disabled };
 }
+

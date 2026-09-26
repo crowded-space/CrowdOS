@@ -92,10 +92,14 @@ describe("SEC-3 · Guard.validatePath (anchored prefix + realpath)", () => {
     await expect(Guard.validatePath(".env", root)).rejects.toThrow(/blacklist/);
   });
 
-  it("legacy validatePath keeps the old (vulnerable) prefix behavior behind LEGACY_GUARD", async () => {
+  it("legacy validatePath rejects sibling-prefix escapes even behind LEGACY_GUARD", async () => {
     vi.stubEnv("LEGACY_GUARD", "true");
     try {
-      await expect(Guard.validatePath(path.join(evilSibling, "secrets.txt"), root)).resolves.toBeTruthy();
+      // Regression pin (2026-09-25 audit): bare startsWith let
+      // <root>-evil pass a <root> jail. Separator-aware prefix only.
+      await expect(Guard.validatePath(path.join(evilSibling, "secrets.txt"), root)).rejects.toThrow(
+        /breaks out/
+      );
     } finally {
       vi.unstubAllEnvs();
     }
@@ -191,6 +195,78 @@ describe("SEC-3 · Command policy classification", () => {
 
     it("allows chained fully-benign segments", () => {
       expect(verdictOf("git status && git log --oneline -3")).toBe("ALLOW");
+    });
+  });
+
+  describe("2026-09-26 audit fix (CRITICAL-1) — bare &/;/| separators", () => {
+    it("git status & node evil.js is not ALLOW (segment split sees the interpreter)", () => {
+      const verdict = Guard.evaluateCommand("git status & node evil.js");
+      expect(verdict.decision).not.toBe("ALLOW");
+      expect(verdict.decision).toBe("ASK");
+      expect(verdict.reason).toMatch(/Interpreter execution/);
+    });
+
+    it("git status; node evil.js and git status | node evil.js split per segment", () => {
+      expect(verdictOf("git status; node evil.js")).toBe("ASK");
+      expect(verdictOf("git status | node evil.js")).toBe("ASK");
+      expect(Guard.evaluateCommand("git status; node evil.js").reason).toMatch(
+        /Interpreter execution/
+      );
+    });
+
+    it("bare-& with a destructive segment still DENYs", () => {
+      expect(verdictOf("git status & rm -rf /")).toBe("DENY");
+    });
+
+    it("input redirection < is ASK (feeds blacklisted files into whitelisted commands)", () => {
+      const verdict = Guard.evaluateCommand("cat < secrets.txt");
+      expect(verdict.decision).toBe("ASK");
+      expect(verdict.reason).toMatch(/Input redirection/);
+    });
+
+    it("backtick command substitution is DENY", () => {
+      expect(verdictOf("echo `whoami`")).toBe("DENY");
+      expect(Guard.evaluateCommand("echo `whoami`").reason).toMatch(/Command substitution/);
+    });
+  });
+
+  describe("2026-09-26 audit fix (CRITICAL-2) · validateCommandPaths", () => {
+    let baseDir: string;
+    let root: string;
+
+    beforeEach(() => {
+      baseDir = fs.mkdtempSync(path.join(os.tmpdir(), "guard-cmdpath-"));
+      root = path.join(baseDir, "project");
+      fs.mkdirSync(root);
+      fs.writeFileSync(path.join(root, "hello.txt"), "hello");
+      fs.writeFileSync(path.join(root, ".env"), "TOKEN=1");
+    });
+
+    afterEach(() => {
+      fs.rmSync(baseDir, { recursive: true, force: true });
+    });
+
+    it("rejects cat .env (whitelisted base reading a blacklisted file)", async () => {
+      await expect(Guard.validateCommandPaths("cat .env", root)).rejects.toThrow(/blacklist/);
+    });
+
+    it("rejects ../ traversal out of the workspace", async () => {
+      await expect(Guard.validateCommandPaths("cat ../outside.txt", root)).rejects.toThrow(
+        /breaks out/
+      );
+    });
+
+    it("rejects traversal in any segment of a chained command", async () => {
+      await expect(
+        Guard.validateCommandPaths("git status; head ../secrets.txt", root)
+      ).rejects.toThrow(/breaks out/);
+    });
+
+    it("accepts bare commands and in-workspace path args", async () => {
+      await expect(Guard.validateCommandPaths("ls", root)).resolves.toBeUndefined();
+      await expect(Guard.validateCommandPaths("cat hello.txt", root)).resolves.toBeUndefined();
+      await expect(Guard.validateCommandPaths("grep -r todo src", root)).resolves.toBeUndefined();
+      await expect(Guard.validateCommandPaths("head -n 5 hello.txt", root)).resolves.toBeUndefined();
     });
   });
 

@@ -13,7 +13,7 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { localStoreDirsForTests, setLocalStoreDirForTests } from "../shared/core/local-file.js";
 import { parseMarkdownSkill } from "./markdown-skill-parser.js";
@@ -30,7 +30,11 @@ let dir: string;
 function skillFile(slug: string, content: string): void {
   // Canon: skills live at <workspaceFolder>/vfs/.crowdos/skills/. The unscoped
   // default workspace is the folder these tests write into.
-  const skillsDir = join(localStoreDirsForTests().crowdos, "skills");
+  skillFileIn(null, slug, content);
+}
+
+function skillFileIn(workspaceId: string | null, slug: string, content: string): void {
+  const skillsDir = join(localStoreDirsForTests(workspaceId).crowdos, "skills");
   mkdirSync(skillsDir, { recursive: true });
   writeFileSync(join(skillsDir, `${slug}.md`), content, "utf8");
 }
@@ -107,7 +111,7 @@ describe("§20 front-matter parsing", () => {
   });
 
   it("rejects a category outside the §20 taxonomy", () => {
-    const bad = ["---", "name: X", "category: wizardry", "---", "body"].join("\n");
+    const bad = ["---", "name: X", "category: wizardry", "description: d", "---", "body"].join("\n");
     const { skill, error } = parseMarkdownSkill(bad, "/ws/skills/bad.md");
     expect(skill).toBeNull();
     expect(error).toContain("category must be one of cognitive, operational, swarm");
@@ -120,19 +124,19 @@ describe("§20 front-matter parsing", () => {
   });
 
   it("rejects an unknown workflowPattern rather than guessing", () => {
-    const bad = ["---", "name: X", "category: cognitive", "workflowPattern: telepathy", "---", "b"].join("\n");
+    const bad = ["---", "name: X", "category: cognitive", "description: d", "workflowPattern: telepathy", "---", "b"].join("\n");
     const { skill, error } = parseMarkdownSkill(bad, "/ws/skills/w.md");
     expect(skill).toBeNull();
     expect(error).toContain("workflowPattern must be one of");
   });
 
   it("falls back to the filename slug when no id is given", () => {
-    const { skill } = parseMarkdownSkill(["---", "name: Nameless", "category: cognitive", "---", "b"].join("\n"), "/ws/skills/my-skill.md");
+    const { skill } = parseMarkdownSkill(["---", "name: Nameless", "category: cognitive", "description: d", "---", "b"].join("\n"), "/ws/skills/my-skill.md");
     expect(skill!.id).toBe("my-skill");
   });
 
   it("honours enabled: false", () => {
-    const md = ["---", "id: off", "name: Off", "category: cognitive", "enabled: false", "---", "b"].join("\n");
+    const md = ["---", "id: off", "name: Off", "category: cognitive", "description: d", "enabled: false", "---", "b"].join("\n");
     expect(parseMarkdownSkill(md, "/ws/skills/off.md").skill!.enabled).toBe(false);
   });
 
@@ -171,7 +175,7 @@ describe("§20 store: discovery without bodies", () => {
 
   it("excludes disabled skills from the enabled set", async () => {
     skillFile("on", FRONTEND_MD);
-    skillFile("off", ["---", "id: off", "name: Off", "category: cognitive", "enabled: false", "---", "b"].join("\n"));
+    skillFile("off", ["---", "id: off", "name: Off", "category: cognitive", "description: d", "enabled: false", "---", "b"].join("\n"));
     expect((await loadEnabledSkills()).skills.map((s) => s.id)).toEqual(["frontend"]);
   });
 
@@ -205,7 +209,7 @@ describe("§20 lazy expansion and composition", () => {
 
   it("returns null for an unknown or disabled skill", async () => {
     skillFile("on", FRONTEND_MD);
-    skillFile("off", ["---", "id: off", "name: Off", "category: cognitive", "enabled: false", "---", "b"].join("\n"));
+    skillFile("off", ["---", "id: off", "name: Off", "category: cognitive", "description: d", "enabled: false", "---", "b"].join("\n"));
     expect(await getSkill("nope")).toBeNull();
     expect(await getSkill("off")).toBeNull();
     expect(await getSkill("")).toBeNull();
@@ -227,6 +231,47 @@ describe("§20 lazy expansion and composition", () => {
     expect(composed.resolved).toEqual(["frontend"]);
     expect(composed.missing).toEqual(["ghost"]);
     expect(composed.body).toContain("Frontend body.");
+  });
+
+  it("separates disabled ids from unknown ids in a composition", async () => {
+    skillFile("frontend", FRONTEND_MD);
+    skillFile("off", ["---", "id: off", "name: Off", "category: cognitive", "description: d", "enabled: false", "---", "b"].join("\n"));
+    const composed = await composeSkills(["frontend", "off", "ghost"]);
+    expect(composed.resolved).toEqual(["frontend"]);
+    expect(composed.missing).toEqual(["off", "ghost"]);
+    expect(composed.disabled).toEqual(["off"]);
+    expect(composed.body).not.toContain("Off");
+  });
+});
+
+describe("workspace scoping", () => {
+  it("null/other workspaces never read another workspace's skill folder", async () => {
+    skillFile("debugging", DEBUGGING_MD);
+    skillFileIn("ws-b", "frontend", FRONTEND_MD);
+
+    expect((await listSummaries({ workspaceId: null })).map((s) => s.id)).toEqual(["debugging"]);
+    expect((await listSummaries({ workspaceId: "ws-a" })).map((s) => s.id)).toEqual([]);
+    expect((await listSummaries({ workspaceId: "ws-b" })).map((s) => s.id)).toEqual(["frontend"]);
+
+    // Expansion and composition obey the same boundary.
+    expect(await getSkill("frontend", null)).toBeNull();
+    expect(await getSkill("debugging", "ws-b")).toBeNull();
+    const composed = await composeSkills(["frontend", "debugging"], null);
+    expect(composed.resolved).toEqual(["debugging"]);
+    expect(composed.missing).toEqual(["frontend"]);
+  });
+});
+
+describe("discovery diagnostics", () => {
+  it("logs every skipped file so parse errors never vanish silently", async () => {
+    skillFile("broken", "no front matter at all");
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    await getSkill("anything");
+    expect(warn).toHaveBeenCalledWith(
+      "[skills] skill file skipped:",
+      expect.stringContaining("missing front-matter"),
+    );
+    warn.mockRestore();
   });
 });
 

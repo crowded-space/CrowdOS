@@ -6,7 +6,7 @@ export interface ModelModule {
   label: string;
   provider: ProviderEngine;
   modelName: string;
-  apiKey?: string;
+  apiKey?: string | null;
   endpointUrl?: string;
   temperature: number;
   topP: number;
@@ -15,6 +15,7 @@ export interface ModelModule {
   maxRecentMessages: number;
   enableCompression: boolean;
   compressionThreshold: number;
+  costPer1k?: number | null;
   createdAt: Date;
   updatedAt: Date;
 }

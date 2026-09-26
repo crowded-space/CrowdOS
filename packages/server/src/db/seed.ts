@@ -7,7 +7,6 @@ import { closeDatabaseConnection, ensurePgVectorExtension, getDb } from "../shar
 import {
   agents,
   channels,
-  modelModules,
   instructionModules,
   toolkitModules,
   workspaceSettings,
@@ -19,34 +18,9 @@ export async function seed(): Promise<void> {
 
   const db = getDb();
 
-  // â”€â”€â”€ Default Model Module â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-  const existingModelModule = await db.query.modelModules.findFirst({
-    where: eq(modelModules.label, "Default Gemini Model"),
-  });
-
-  let modelModuleId: string;
-  if (!existingModelModule) {
-    modelModuleId = randomUUID();
-    await db.insert(modelModules).values({
-      id: modelModuleId,
-      label: "Default Gemini Model",
-      provider: "google",
-      modelName: "gemini-2.0-flash",
-      temperature: 0.7,
-      topP: 0.95,
-      maxOutputTokens: 8192,
-      stopSequences: [],
-      maxRecentMessages: 50,
-      enableCompression: true,
-      compressionThreshold: 100,
-      createdAt: new Date(),
-      updatedAt: new Date(),
-    });
-    console.log("Seeded default model module.");
-  } else {
-    modelModuleId = existingModelModule.id;
-    console.log("Default model module already exists.");
-  }
+  // No default model module is seeded: a fresh workspace starts with zero
+  // model providers by contract. Agents below are created unassigned (null).
+  const modelModuleId: string | null = null;
 
   // ─── Default Instruction Module ─────────────────────────────────────
   const existingInstructionModule = await db.query.instructionModules.findFirst({

@@ -14,7 +14,7 @@ export async function mcpRoutes(app: FastifyInstance) {
     "/api/mcp/servers",
     async (request, reply) => {
       try {
-        await toolsGate.registerMcpServer({ ...request.body, envVars: encryptRecordValues(request.body.envVars) });
+        await toolsGate.registerMcpServer({ ...request.body, envVars: encryptRecordValues(request.body.envVars) ?? undefined });
         globalBroker?.emit("workspace:sync", {});
         return reply.status(201).send({ success: true, server: toolsGate.getMcpStatus(request.body.id) });
       } catch (err: any) {

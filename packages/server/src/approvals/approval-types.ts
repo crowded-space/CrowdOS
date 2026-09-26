@@ -62,8 +62,9 @@ export function isApprovalsEnabled(): boolean {
   return process.env.APPROVALS_ENABLED === "true";
 }
 
-export function computeScopeHash(toolName: string, argsPreview: Record<string, unknown> | null | undefined): string {
-  const payload = JSON.stringify({ tool: toolName, args: argsPreview ?? null });
+// args must be the FULL tool arguments (not the 500-char display preview) so a scope grant cannot be reused for a different command.
+export function computeScopeHash(toolName: string, args: Record<string, unknown> | null | undefined): string {
+  const payload = JSON.stringify({ tool: toolName, args: args ?? null });
   return createHash("sha256").update(payload).digest("hex").slice(0, 16);
 }
 

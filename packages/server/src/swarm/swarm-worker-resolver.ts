@@ -61,7 +61,8 @@ function substituteForNonWorker(
   eligible: readonly AgentProfile[],
 ): ResolvedWorker | null {
   if (eligible.length === 0) return null;
-  const picked = eligible[0];
+  // Spread load: random among eligible, never eligible[0] (thundering herd).
+  const picked = eligible[Math.floor(Math.random() * eligible.length)];
   return {
     agent: picked,
     matchKind: "any-l3",
@@ -80,7 +81,13 @@ export function resolveWorker(
   candidates: readonly AgentProfile[],
   opts: { requestingAgent: AgentProfile; excludeIds?: ReadonlySet<string> },
 ): ResolvedWorker {
-  const exclude = opts.excludeIds ?? new Set<string>();
+  // Default exclusion: the orchestrator is never picked as a worker of its own
+  // swarm. A caller that passes excludeIds explicitly controls the set (and can
+  // include the requester); with no set, exclude the requesting agent so a plan
+  // naming itself cannot pile every task onto one agent. The last-resort
+  // single-tier fallback below still consults the EXPLICIT set only, so a
+  // solo-L3 workspace keeps working.
+  const exclude = opts.excludeIds ?? new Set<string>([opts.requestingAgent.id]);
   const requested = typeof assigneeTemplate === "string" ? assigneeTemplate.trim() : "";
 
   const eligible = candidates.filter(
@@ -88,19 +95,30 @@ export function resolveWorker(
   );
 
   if (requested) {
-    const byId = candidates.find((a) => a.id === requested && !exclude.has(a.id));
+    const explicit = opts.excludeIds;
+    const usable = (a: AgentProfile): boolean => (explicit ? !explicit.has(a.id) : a.id !== opts.requestingAgent.id);
+    // Lookup ignores the DEFAULT exclusion so naming the orchestrator still
+    // yields the accurate "not the worker tier" substitution; only USING a
+    // match as a worker respects it (the requester never runs its own swarm).
+    const byId = candidates.find((a) => a.id === requested && !(explicit?.has(a.id) ?? false));
     if (byId) {
-      if (byId.authorityLevel === WORKER_AUTHORITY_LEVEL) return { agent: byId, matchKind: "id" };
-      const sub = substituteForNonWorker(requested, byId, eligible);
-      if (sub) return sub;
+      if (byId.authorityLevel === WORKER_AUTHORITY_LEVEL) {
+        if (usable(byId)) return { agent: byId, matchKind: "id" };
+      } else {
+        const sub = substituteForNonWorker(requested, byId, eligible);
+        if (sub) return sub;
+      }
     }
 
     const wanted = normalize(requested);
-    const byName = candidates.find((a) => normalize(a.name) === wanted && !exclude.has(a.id));
+    const byName = candidates.find((a) => normalize(a.name) === wanted && !(explicit?.has(a.id) ?? false));
     if (byName) {
-      if (byName.authorityLevel === WORKER_AUTHORITY_LEVEL) return { agent: byName, matchKind: "name" };
-      const sub = substituteForNonWorker(requested, byName, eligible);
-      if (sub) return sub;
+      if (byName.authorityLevel === WORKER_AUTHORITY_LEVEL) {
+        if (usable(byName)) return { agent: byName, matchKind: "name" };
+      } else {
+        const sub = substituteForNonWorker(requested, byName, eligible);
+        if (sub) return sub;
+      }
     }
 
     const levelMatch = requested.match(LEVEL_RE);
@@ -108,7 +126,7 @@ export function resolveWorker(
       const level = Number(levelMatch[1]);
       const atLevel = candidates.filter((a) => a.authorityLevel === level && !exclude.has(a.id));
       if (atLevel.length > 0) {
-        const picked = atLevel[0];
+        const picked = atLevel[Math.floor(Math.random() * atLevel.length)];
         if (level === WORKER_AUTHORITY_LEVEL) return { agent: picked, matchKind: "level" };
         return {
           agent: picked,
@@ -122,13 +140,20 @@ export function resolveWorker(
   // The planner named something unusable (or nothing). Fan out to a real L3
   // worker rather than re-running the orchestrator.
   if (eligible.length > 0) {
-    const picked = eligible[0];
+    const picked = eligible[Math.floor(Math.random() * eligible.length)];
+    // A default-excluded requester reads as "excluded", not "unknown" — say so.
+    const namedRequester =
+      requested !== "" &&
+      (normalize(requested) === normalize(opts.requestingAgent.id) ||
+        normalize(requested) === normalize(opts.requestingAgent.name));
     return {
       agent: picked,
       matchKind: "any-l3",
-      honestSubstitution: requested
-        ? `assignee "${requested}" is not a known agent — used L3 worker ${picked.name} (${picked.id})`
-        : `no assignee in plan — used L3 worker ${picked.name} (${picked.id})`,
+      honestSubstitution: namedRequester
+        ? `plan assigned the requesting agent ${opts.requestingAgent.name} (${opts.requestingAgent.id}) — used L3 worker ${picked.name} (${picked.id})`
+        : requested
+          ? `assignee "${requested}" is not a known agent — used L3 worker ${picked.name} (${picked.id})`
+          : `no assignee in plan — used L3 worker ${picked.name} (${picked.id})`,
     };
   }
 
@@ -136,7 +161,7 @@ export function resolveWorker(
   // the exact fake-delegation defect this module removes, so the requesting
   // agent is used ONLY when it is itself an L3 (a single-tier workspace), and
   // the substitution is stated plainly.
-  if (opts.requestingAgent.authorityLevel === WORKER_AUTHORITY_LEVEL && !exclude.has(opts.requestingAgent.id)) {
+  if (opts.requestingAgent.authorityLevel === WORKER_AUTHORITY_LEVEL && (opts.excludeIds ? !opts.excludeIds.has(opts.requestingAgent.id) : true)) {
     return {
       agent: opts.requestingAgent,
       matchKind: "requesting-agent",
@@ -165,8 +190,9 @@ export class WorkerUnavailableError extends Error {
  * worker can never be pulled from another workspace's roster.
  */
 export async function loadWorkerCandidates(workspaceId: string | null | undefined): Promise<AgentProfile[]> {
-  const roster = await agentGate
-    .list({ isTemplate: false, workspaceId: workspaceId ?? undefined })
-    .catch(() => [] as AgentProfile[]);
+  // Real roster errors rethrow: swallowing them produced the misleading
+  // "no L3 agent exists in this workspace" failure for a DB outage. The
+  // caller's error path reports the actual cause.
+  const roster = await agentGate.list({ isTemplate: false, workspaceId: workspaceId ?? undefined });
   return roster.filter((a) => a.status !== "offline" && a.status !== "paused");
 }

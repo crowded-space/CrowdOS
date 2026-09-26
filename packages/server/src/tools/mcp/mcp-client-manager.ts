@@ -9,6 +9,7 @@ import {
 } from "./mcp-types.js";
 import type { ToolDefinition, ToolResult, ToolExecutionContext, ToolDangerLevel } from "../tool-types.js";
 import { toolRegistry } from "../tool-registry.js";
+import { killProcessTree } from "../safety/hardened-exec.js";
 import { isSensitiveKey, redactLogPayload } from "../../shared/core/redact.js";
 import { decryptRecordValues } from "../../shared/core/secret-box.js";
 
@@ -151,8 +152,27 @@ function extractFrames(framing: McpFraming, buffer: Buffer): { messages: string[
 
 export class McpClientManager extends EventEmitter {
   private sessions: Map<string, McpProcessSession> = new Map();
+  // In-flight connects: two concurrent connect() calls for one server must
+  // share one handshake, not spawn two children (orphan + double-register).
+  private connecting: Map<string, Promise<McpServerStatus>> = new Map();
 
   async registerServer(config: McpServerConfig): Promise<void> {
+    // Shape validation at the trust boundary. NOTE: stdio spawn of an
+    // arbitrary command is inherent to MCP (servers ARE local processes) and
+    // the HTTP layer is loopback-trusted single-user by design (see routes);
+    // this validation rejects malformed configs, not the model itself.
+    if (!config || typeof config.id !== "string" || !config.id.trim()) {
+      throw new Error("MCP server registration requires a non-empty string id.");
+    }
+    if (/[./\\]/.test(config.id)) throw new Error(`MCP server id "${config.id}" must not contain path separators.`);
+    if (config.transport === "stdio") {
+      if (typeof config.command !== "string" || !config.command.trim()) {
+        throw new Error(`MCP server '${config.id}': stdio transport requires a non-empty command.`);
+      }
+      if (config.args !== undefined && (!Array.isArray(config.args) || !config.args.every((a) => typeof a === "string"))) {
+        throw new Error(`MCP server '${config.id}': args must be an array of strings.`);
+      }
+    }
     if (this.sessions.has(config.id)) {
       await this.disconnect(config.id);
     }
@@ -187,6 +207,8 @@ export class McpClientManager extends EventEmitter {
     if (session.status === 'connected') {
       return this.getStatus(serverId)!;
     }
+    const inflight = this.connecting.get(serverId);
+    if (inflight) return inflight;
 
     session.status = 'connecting';
     session.lastError = undefined;
@@ -194,15 +216,23 @@ export class McpClientManager extends EventEmitter {
     session.stdinBuffer = Buffer.alloc(0);
 
     try {
-      if (session.config.transport === 'stdio') {
-        await this.connectStdio(session);
-      } else {
-        throw new Error(`Transport '${session.config.transport}' not yet fully implemented in mock/prototype mode`);
-      }
+      const task = (async (): Promise<McpServerStatus> => {
+        if (session.config.transport === 'stdio') {
+          await this.connectStdio(session);
+        } else {
+          throw new Error(`Transport '${session.config.transport}' not yet fully implemented in mock/prototype mode`);
+        }
 
-      session.consecutiveFailures = 0;
-      session.status = 'connected';
-      return this.getStatus(serverId)!;
+        session.consecutiveFailures = 0;
+        session.status = 'connected';
+        return this.getStatus(serverId)!;
+      })();
+      this.connecting.set(serverId, task);
+      try {
+        return await task;
+      } finally {
+        this.connecting.delete(serverId);
+      }
     } catch (err: any) {
       session.status = 'error';
       session.lastError = err.message;
@@ -226,19 +256,29 @@ export class McpClientManager extends EventEmitter {
       env: buildChildEnv(session.config),
       stdio: ['pipe', 'pipe', 'pipe'],
       shell: false,
+      // POSIX: own process group so killProcessTree(-pid) reaches grandchildren
+      // (pipes stay attached). Windows: detached would give the child its own
+      // console and sever stdio; taskkill /T covers the tree without it.
+      detached: process.platform !== 'win32',
+      windowsHide: true,
     });
 
     session.process = child;
 
+    // Stale-child guards: a reconnect replaces session.process, so late events
+    // from the previous child must not tear down the new session's state.
     child.stdout?.on('data', (chunk: Buffer) => {
+      if (session.process !== child) return;
       this.handleStdioData(session, chunk);
     });
 
     child.stderr?.on('data', (chunk: Buffer) => {
+      if (session.process !== child) return;
       console.warn(`[MCP:${session.config.id}:stderr]`, chunk.toString('utf-8'));
     });
 
     child.on('error', (err) => {
+      if (session.process !== child) return;
       session.lastError = err.message;
       if (session.exited) return;
       session.exited = true;
@@ -251,6 +291,7 @@ export class McpClientManager extends EventEmitter {
     });
 
     child.on('exit', (code, signal) => {
+      if (session.process !== child) return;
       if (session.exited) return;
       session.exited = true;
       if (session.status !== 'error') session.status = 'disconnected';
@@ -393,7 +434,11 @@ export class McpClientManager extends EventEmitter {
   private killChild(session: McpProcessSession): void {
     const child = session.process;
     if (!child || child.exitCode !== null || child.signalCode !== null) return;
-    try { child.kill('SIGTERM'); } catch { return; }
+    // Tree kill (grandchildren orphaned otherwise) — same killer as hardened exec.
+    if (child.pid) {
+      try { killProcessTree(child.pid); } catch { /* best-effort */ }
+    }
+    try { child.kill('SIGTERM'); } catch { /* best-effort */ }
     const t = setTimeout(() => {
       try { if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL'); } catch {}
     }, KILL_ESCALATION_MS);

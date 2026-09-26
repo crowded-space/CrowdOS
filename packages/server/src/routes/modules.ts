@@ -72,8 +72,12 @@ function workspaceIdFrom(request: any): string | null {
 
 function parseListQuery(query: unknown): { limit: number; offset: number } {
   const q = (query ?? {}) as { limit?: unknown; offset?: unknown };
-  const rawLimit = Number(q.limit);
-  const rawOffset = Number(q.offset);
+  // Number("")/Number(null) are 0 (finite): an empty query-string limit used
+  // to clamp to 1 row instead of the documented default of 500.
+  const num = (v: unknown): number =>
+    v === null || v === undefined || v === "" ? Number.NaN : Number(v);
+  const rawLimit = num(q.limit);
+  const rawOffset = num(q.offset);
   const limit = Number.isFinite(rawLimit) ? Math.min(500, Math.max(1, Math.floor(rawLimit))) : 500;
   const offset = Number.isFinite(rawOffset) ? Math.max(0, Math.floor(rawOffset)) : 0;
   return { limit, offset };

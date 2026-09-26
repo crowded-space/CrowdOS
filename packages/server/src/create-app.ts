@@ -373,7 +373,7 @@ export async function buildServer(opts?: BuildServerOptions): Promise<BuiltServe
   if (!skipTimers && !isBullMqApi) {
     startBudgetReconciler();
     try {
-      await (runsGate as unknown as { startRunOrphanSweeper: (b: unknown) => Promise<void> }).startRunOrphanSweeper(eventBroker);
+      await runsGate.startRunOrphanSweeper(eventBroker);
     } catch {}
     try {
       startApprovalSweeper(eventBroker);

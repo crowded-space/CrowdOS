@@ -1,12 +1,10 @@
 import { randomUUID } from "node:crypto";
 import { and, asc, desc, eq, gt, inArray, isNull, or } from "drizzle-orm";
 import { getDb } from "../shared/config/database.js";
+import { moduleGate } from "../modules/module-gate.js";
 import {
   agents,
   channels,
-  modelModules,
-  instructionModules,
-  toolkitModules,
   tools,
   runtimeOverrides,
   messages,
@@ -53,27 +51,21 @@ export class MemoryBuilder {
     if (!agent) {
       throw new Error(`Agent not found with id: ${input.agentId}`);
     }
-    // 2. Fetch Modules
+    // 2. Fetch Modules — via moduleGate (tier-aware: file store local, PG dual)
     if (!agent.modelModuleId) {
       throw new Error(`ModelModule not configured for agent: ${agent.id}`);
     }
-    const modelModule = await db.query.modelModules.findFirst({
-      where: eq(modelModules.id, agent.modelModuleId),
-    });
+    const modelModule = await moduleGate.model.get(agent.modelModuleId, agent.workspaceId);
     if (!modelModule) {
       throw new Error(`ModelModule not found with id: ${agent.modelModuleId}`);
     }
-    const instructionModule = await db.query.instructionModules.findFirst({
-      where: eq(instructionModules.id, agent.instructionModuleId),
-    });
+    const instructionModule = await moduleGate.instruction.get(agent.instructionModuleId, agent.workspaceId);
     if (!instructionModule) {
       throw new Error(`InstructionModule not found with id: ${agent.instructionModuleId}`);
     }
     let allowedToolsList: any[] = [];
     if (agent.toolkitModuleId) {
-      const toolkitModule = await db.query.toolkitModules.findFirst({
-        where: eq(toolkitModules.id, agent.toolkitModuleId),
-      });
+      const toolkitModule = await moduleGate.toolkit.get(agent.toolkitModuleId, agent.workspaceId);
       if (toolkitModule && toolkitModule.tools.length > 0) {
         allowedToolsList = await db.query.tools.findMany({
           where: inArray(tools.id, toolkitModule.tools),

@@ -491,28 +491,8 @@ export async function seedWorkspacePresets(
 ): Promise<void> {
   const now = new Date();
 
-  // 1. Model & Instruction Modules (required by agents foreign keys)
-  try {
-    const existingModel = await db.query.modelModules.findFirst({
-      where: (table: any, { eq }: any) => eq(table.id, "mod-model-default"),
-    });
-    if (!existingModel) {
-      await db.insert(schema.modelModules).values({
-        id: "mod-model-default",
-        label: "Default Gemini Profile",
-        provider: "google",
-        modelName: "gemini-2.5-flash",
-        temperature: 0.7,
-        topP: 0.95,
-        maxOutputTokens: 4096,
-        maxRecentMessages: 50,
-        compressionThreshold: 100,
-        createdAt: now,
-        updatedAt: now,
-      });
-    }
-  } catch {}
-
+  // 1. Instruction Module (required by agents foreign keys). No model module
+  // is seeded: fresh workspaces start with zero model providers by contract.
   try {
     const existingInst = await db.query.instructionModules.findFirst({
       where: (table: any, { eq }: any) => eq(table.id, "mod-inst-default"),
@@ -633,7 +613,7 @@ export async function seedWorkspacePresets(
         species: "Owl",
         authorityLevel: 2,
         avatar: "🦉",
-        modelModuleId: "mod-model-default",
+        modelModuleId: null,
         instructionModuleId: "mod-inst-default",
         memorySharingPolicy: "none",
         isOmniscient: false,

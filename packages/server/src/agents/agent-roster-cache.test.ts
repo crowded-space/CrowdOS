@@ -8,6 +8,7 @@ vi.mock("../shared/config/database.js", () => ({
   ensurePgVectorExtension: async () => {},
   closeDatabaseConnection: async () => {},
   runWithDb: <T>(db: unknown, fn: () => T): T => fn(),
+  withTransaction: async <T>(fn: (tx: unknown) => Promise<T>) => fn(buildRosterTestDb()),
   dbScopeKey: () => "global",
   isDatabaseConfigured: () => true,
   isConnectionError: () => false,
@@ -27,6 +28,7 @@ import { join } from "node:path";
 import { Column, Param, SQL, StringChunk } from "drizzle-orm";
 import * as schemaModule from "../db/schema.js";
 import { setLocalStoreDirForTests } from "../shared/core/local-file.js";
+import { localUpsertAgent } from "./agent-local-store.js";
 import { agentRegistry } from "./agent-service.js";
 
 let rosterLocalDir: string | null = null;
@@ -358,5 +360,28 @@ describe("PERF-2 · roster TTL cache", () => {
     const cached = await agentRegistry.list({ isTemplate: false });
     expect(cached.map((a) => a.id)).toEqual(["a-live"]);
     expect(agentsFindManyCalls.count).toBe(1);
+  });
+});
+
+describe("tenant-scoped getById (CRITICAL-1: no cross-workspace fallback)", () => {
+  it("never resolves or deletes an agent owned by another workspace folder", async () => {
+    await localUpsertAgent({
+      id: "foreign-1",
+      workspaceId: "ws-b",
+      name: "foreign",
+      title: "Foreign",
+      authorityLevel: 1,
+      modelModuleId: null,
+      instructionModuleId: "instr-1",
+      memorySharingPolicy: "full",
+    });
+
+    expect(await agentRegistry.getById("foreign-1", undefined, "ws-a")).toBeNull();
+    expect(await agentRegistry.getById("foreign-1", undefined, "ws-b")).not.toBeNull();
+    // Explicit legacy callers (no scope) keep the cross-workspace fan-out.
+    expect(await agentRegistry.getById("foreign-1")).not.toBeNull();
+
+    expect(await agentRegistry.delete("foreign-1", undefined, "ws-a")).toBe(false);
+    expect(await agentRegistry.delete("foreign-1", undefined, "ws-b")).toBe(true);
   });
 });

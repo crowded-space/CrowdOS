@@ -1,4 +1,4 @@
-﻿import type { FastifyInstance } from "fastify";
+import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import {
   skillsGate,
@@ -17,6 +17,22 @@ function emitWorkspaceSync(): void {
 
 function isForeignKeyViolation(err: unknown): boolean {
   return Boolean(err && typeof err === "object" && (err as { code?: string }).code === "23503");
+}
+
+// Validation-shaped failures stay 400 (they are the client's to fix); a
+// DB outage or anything else from the service is a 500, not a client error.
+function errorStatus(err: any): number {
+  if (err?.name === "ZodError" || err?.statusCode === 400) return 400;
+  return 500;
+}
+
+function errorReply(err: any): { statusCode: number; error: string; message: string } {
+  const statusCode = errorStatus(err);
+  return {
+    statusCode,
+    error: statusCode === 400 ? "Bad Request" : "Internal Server Error",
+    message: err?.message ?? String(err),
+  };
 }
 
 const agentSkillParamsSchema = z.object({
@@ -64,7 +80,8 @@ export async function skillRoutes(app: FastifyInstance) {
         emitWorkspaceSync();
         return reply.status(201).send(skill);
       } catch (err: any) {
-        return reply.status(400).send({ statusCode: 400, error: "Bad Request", message: err.message });
+        const body = errorReply(err);
+        return reply.status(body.statusCode).send(body);
       }
     }
   );
@@ -82,7 +99,8 @@ export async function skillRoutes(app: FastifyInstance) {
         emitWorkspaceSync();
         return skill;
       } catch (err: any) {
-        return reply.status(400).send({ statusCode: 400, error: "Bad Request", message: err.message });
+        const body = errorReply(err);
+        return reply.status(body.statusCode).send(body);
       }
     }
   );

@@ -38,7 +38,8 @@ export function killProcessTree(pid: number): void {
       spawn("taskkill", ["/pid", String(pid), "/T", "/F"], {
         stdio: "ignore",
         windowsHide: true,
-      });
+        // spawn failures surface on 'error'; an unhandled one crashes the server
+      }).on("error", () => {});
     } catch {
       /* best-effort */
     }
@@ -84,12 +85,27 @@ export async function execHardened(options: HardenedExecOptions): Promise<Harden
 
     let stdout = "";
     let stderr = "";
-    child.stdout?.on("data", (chunk: Buffer) => {
-      stdout += chunk.toString("utf8");
-    });
-    child.stderr?.on("data", (chunk: Buffer) => {
-      stderr += chunk.toString("utf8");
-    });
+    let truncatedByCap = false;
+    // Cap DURING accumulation: clipping only at finish lets `yes|cat /dev/zero`
+    // OOM the server before the clip runs. Kill the tree on exceed.
+    const onData = (chunk: Buffer, sink: "out" | "err") => {
+      if (truncatedByCap) return;
+      const text = chunk.toString("utf8");
+      if (sink === "out") {
+        stdout += text;
+        if (stdout.length > maxBufferChars) {
+          truncatedByCap = true;
+          stdout = stdout.slice(0, maxBufferChars);
+          killTree();
+          finish({ success: false, output: stdout, error: `Output exceeded ${maxBufferChars} chars; process tree terminated.` });
+        }
+      } else {
+        stderr += text;
+        if (stderr.length > maxBufferChars) stderr = stderr.slice(0, maxBufferChars);
+      }
+    };
+    child.stdout?.on("data", (chunk: Buffer) => onData(chunk, "out"));
+    child.stderr?.on("data", (chunk: Buffer) => onData(chunk, "err"));
 
     let timer: NodeJS.Timeout | undefined;
     const finish = (result: HardenedExecResult) => {

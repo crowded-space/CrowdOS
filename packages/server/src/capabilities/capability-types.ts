@@ -41,8 +41,9 @@ export type CapabilitySource = "builtin" | "manifest";
  * A capability as DATA (the §21 "externalized" property).
  *
  * `tools` is the lazy-expansion payload: the registry tool ids that realize
- * the capability. A capability with no live tools is NOT exposed to agents —
- * see capability-service’s availability filter. The document’s vocabulary is
+ * the capability. A capability with no tool that is live, authorized, and
+ * within the agent's authority level is NOT exposed to agents — see
+ * capability-service's availability filter. The document’s vocabulary is
  * larger than today’s implementation, and advertising an unrealized capability
  * would be a lie the model then acts on.
  */
@@ -65,7 +66,12 @@ export interface VisibleCapability {
   id: string;
   domain: CapabilityDomain;
   summary: string;
-  /** True when the capability has ≥1 live tool for this agent. */
+  /**
+   * Always true as advertised: a descriptor with no live, authorized,
+   * authority-level-usable tool is excluded from `visibleFor` entirely, so
+   * false is never returned. Kept because the packet shape and consumers
+   * assert the key (dropping it needs a runtime test change).
+   */
   available: boolean;
 }
 

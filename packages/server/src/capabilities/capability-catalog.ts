@@ -11,6 +11,14 @@
 // This is the mechanism that replaces wholesale tool-schema injection: the
 // agent sees ~a dozen one-line capability summaries instead of every tool’s
 // full JSON schema, and expands only the one it needs (§21 token economy).
+//
+// NOTE: descriptors with `tools: []` are intentionally vocabulary-only — the
+// §21 id is declared so the vocabulary tracks the document, but the
+// availability filter keeps them out of discovery until a tool realizes them.
+// NOTE: the `open_detail` capability id collides with the `open_detail` tool
+// id (same string, different namespaces). Not renamed: the vocabulary test
+// pins document ids verbatim and agents may already pass it as capability_id.
+// Rename (e.g. to `tool.detail`) is a follow-up requiring a test + rollout plan.
 
 import type { CapabilityDescriptor } from "./capability-types.js";
 
@@ -220,3 +228,7 @@ export const BUILTIN_CAPABILITIES: readonly CapabilityDescriptor[] = [
     source: "builtin",
   },
 ];
+
+// Shallow-freeze the vocabulary array so no consumer can add/remove descriptors
+// via the shared ref (descriptors themselves are deep-copied on return).
+Object.freeze(BUILTIN_CAPABILITIES);

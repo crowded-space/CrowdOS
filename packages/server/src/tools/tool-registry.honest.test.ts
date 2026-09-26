@@ -205,6 +205,21 @@ describe("TOOL-1 · Honest tools — query_database", () => {
     expect(res.error).toMatch(/Multiple statements|Mutation blocked/i);
   });
 
+  it("blocks file-read / DB-link / config-exfil functions (2026-09-26 audit fix)", async () => {
+    const blocked = [
+      "SELECT lo_export('/etc/passwd', '/tmp/out') FROM agents",
+      "SELECT * FROM agents WHERE name = pg_read_file('/etc/passwd')",
+      "SELECT dblink('dbname=other', 'select 1') AS x",
+      "SELECT query_to_xml('SELECT 1', true, true, '') AS x",
+      "SELECT current_setting('data_directory') FROM agents",
+    ];
+    for (const sql of blocked) {
+      const res = await ToolExecutor.execute("agent-probe", "query_database", { sql });
+      expect(res.success).toBe(false);
+      expect(res.error).toMatch(/Blocked function/i);
+    }
+  });
+
   it("only SELECT/WITH allowed — rejects non-select", async () => {
     const res = await ToolExecutor.execute("agent-probe", "query_database", { sql: "EXPLAIN SELECT * FROM agents" });
     expect(res.success).toBe(false);

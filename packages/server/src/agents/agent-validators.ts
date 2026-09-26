@@ -13,6 +13,19 @@ const permissionsSchema = z
   })
   .optional();
 
+// Query-string booleans arrive as strings; z.coerce.boolean() would map
+// Boolean("false") === true. Only "true"/"1" mean true; anything else that
+// is not a boolean literal drops the filter instead of flipping it.
+const queryBooleanSchema = z.preprocess(
+  (value) => {
+    if (typeof value !== "string") return value;
+    if (value === "true" || value === "1") return true;
+    if (value === "false" || value === "0") return false;
+    return undefined;
+  },
+  z.boolean(),
+);
+
 export const createAgentSchema = z.object({
   workspaceId: z.string().min(1).nullable().optional(),
   name: z.string().min(1),
@@ -33,6 +46,7 @@ export const createAgentSchema = z.object({
   permissions: permissionsSchema,
   status: agentStatusSchema.optional(),
   isTemplate: z.boolean().optional(),
+  contextTokenCap: z.number().int().min(1).nullable().optional(),
 });
 
 export const updateAgentSchema = z.object({
@@ -55,13 +69,14 @@ export const updateAgentSchema = z.object({
   permissions: permissionsSchema,
   status: agentStatusSchema.optional(),
   isTemplate: z.boolean().optional(),
+  contextTokenCap: z.number().int().min(1).nullable().optional(),
 });
 
 export const listAgentsQuerySchema = z.object({
   workspaceId: z.string().min(1).optional(),
   authorityLevel: z.coerce.number().int().min(0).max(3).optional(),
   status: agentStatusSchema.optional(),
-  isTemplate: z.coerce.boolean().optional(),
+  isTemplate: queryBooleanSchema.optional(),
   limit: z.coerce.number().int().min(1).max(200).optional(),
   cursor: z.string().optional(),
 });

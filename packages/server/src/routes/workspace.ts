@@ -273,10 +273,10 @@ export async function workspaceRoutes(app: FastifyInstance) {
         try {
           const { localCreateCategory } = await import("../channels/channel-local-store.js");
           const { localCreateChannel } = await import("../channels/channel-local-store.js");
-          const { localSeedDefaultAgent } = await import("../agents/agent-local-store.js");
+          const { agentGate } = await import("../agents/agent-gate.js");
           const cat = await localCreateCategory({ name: "General", workspaceId: id, createdBy: "system", position: 0 });
           await localCreateChannel({ name: "general", type: "standard", createdBy: "system", categoryId: cat.id, workspaceId: id, position: 0 });
-          await localSeedDefaultAgent(id);
+          await agentGate.seedDefaultAgent(id);
         } catch (err: any) {
           request.log.warn({ err }, "Notice: local preset seeding skipped or deferred");
         }

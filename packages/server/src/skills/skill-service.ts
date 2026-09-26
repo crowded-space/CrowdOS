@@ -3,20 +3,59 @@ import { eq, and } from "drizzle-orm";
 import { getDb, dbScopeKey } from "../shared/config/database.js";
 import { TtlCache } from "../shared/core/ttl-cache.js";
 import { skills, agentSkills, agents, toolkitModules } from "../db/schema.js";
-import type { SkillDefinition, CreateSkillInput, UpdateSkillInput } from "./skill-types.js";
+import type { SkillDefinition, SkillWorkflowPattern, CreateSkillInput, UpdateSkillInput } from "./skill-types.js";
 
-function mapSkill(row: any): SkillDefinition {
+function asStringArray(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((v): v is string => typeof v === "string") : [];
+}
+
+type FewShotExample = NonNullable<SkillDefinition["promptLayer"]["fewShotExamples"]>[number];
+
+function toFewShotExample(value: unknown): FewShotExample | null {
+  if (!value || typeof value !== "object") return null;
+  const v = value as Record<string, unknown>;
+  if (typeof v.scenario !== "string" || typeof v.thoughtProcess !== "string" || typeof v.expectedOutcome !== "string") {
+    return null;
+  }
+  const actions: FewShotExample["actions"] = [];
+  if (Array.isArray(v.actions)) {
+    for (const raw of v.actions) {
+      if (!raw || typeof raw !== "object") continue;
+      const a = raw as Record<string, unknown>;
+      if (typeof a.tool === "string" && a.args && typeof a.args === "object" && !Array.isArray(a.args)) {
+        actions.push({ tool: a.tool, args: a.args as Record<string, unknown> });
+      }
+    }
+  }
+  return { scenario: v.scenario, thoughtProcess: v.thoughtProcess, actions, expectedOutcome: v.expectedOutcome };
+}
+
+function toPromptLayer(value: unknown): SkillDefinition["promptLayer"] {
+  if (!value || typeof value !== "object") {
+    return { systemPromptAdditions: [], executionGuidelines: [], fewShotExamples: [] };
+  }
+  const v = value as Record<string, unknown>;
+  return {
+    systemPromptAdditions: asStringArray(v.systemPromptAdditions),
+    executionGuidelines: asStringArray(v.executionGuidelines),
+    fewShotExamples: Array.isArray(v.fewShotExamples)
+      ? v.fewShotExamples.map(toFewShotExample).filter((e): e is FewShotExample => e !== null)
+      : [],
+  };
+}
+
+function mapSkill(row: typeof skills.$inferSelect): SkillDefinition {
   return {
     id: row.id,
     name: row.name,
     description: row.description,
     category: row.category || "general",
     icon: row.icon || "⚡",
-    promptLayer: row.promptLayer || { systemPromptAdditions: [], executionGuidelines: [], fewShotExamples: [] },
+    promptLayer: toPromptLayer(row.promptLayer),
     requiredToolIds: row.requiredTools || [],
     optionalToolIds: row.optionalTools || [],
     recommendedModels: row.recommendedModels || [],
-    workflowPattern: (row.workflowPattern as any) || "react",
+    workflowPattern: (row.workflowPattern as SkillWorkflowPattern) || "react",
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };
@@ -67,7 +106,7 @@ export class SkillService {
 
   async create(input: CreateSkillInput): Promise<SkillDefinition> {
     const db = getDb();
-    const id = `skill_${randomUUID().slice(0, 8)}`;
+    const id = `skill_${randomUUID()}`;
     const now = new Date();
 
     const [inserted] = await db.insert(skills).values({
@@ -105,9 +144,9 @@ export class SkillService {
     if (input.icon !== undefined) setValues.icon = input.icon;
     if (input.promptLayer !== undefined) {
       setValues.promptLayer = {
-        systemPromptAdditions: input.promptLayer.systemPromptAdditions || existing.promptLayer.systemPromptAdditions,
-        executionGuidelines: input.promptLayer.executionGuidelines || existing.promptLayer.executionGuidelines,
-        fewShotExamples: input.promptLayer.fewShotExamples || existing.promptLayer.fewShotExamples,
+        systemPromptAdditions: input.promptLayer.systemPromptAdditions ?? existing.promptLayer.systemPromptAdditions,
+        executionGuidelines: input.promptLayer.executionGuidelines ?? existing.promptLayer.executionGuidelines,
+        fewShotExamples: input.promptLayer.fewShotExamples ?? existing.promptLayer.fewShotExamples ?? [],
       };
     }
     if (input.requiredToolIds !== undefined) setValues.requiredTools = input.requiredToolIds;
@@ -163,19 +202,29 @@ export class SkillService {
     if (existing) {
       await db.update(agentSkills).set({ isEnabled: true }).where(and(eq(agentSkills.agentId, agentId), eq(agentSkills.skillId, skillId)));
     } else {
-      await db.insert(agentSkills).values({
-        agentId,
-        skillId,
-        isEnabled: true,
-      });
+      try {
+        await db.insert(agentSkills).values({
+          agentId,
+          skillId,
+          isEnabled: true,
+        });
+      } catch (err) {
+        // Concurrent assign race: PK already inserted — idempotent re-enable.
+        if ((err as { code?: string })?.code === "23505") {
+          await db.update(agentSkills).set({ isEnabled: true }).where(and(eq(agentSkills.agentId, agentId), eq(agentSkills.skillId, skillId)));
+        } else {
+          throw err;
+        }
+      }
     }
     this.invalidateAgentCaches(agentId);
   }
 
-  async removeSkill(agentId: string, skillId: string): Promise<void> {
+  async removeSkill(agentId: string, skillId: string): Promise<boolean> {
     const db = getDb();
-    await db.delete(agentSkills).where(and(eq(agentSkills.agentId, agentId), eq(agentSkills.skillId, skillId)));
+    const result = await db.delete(agentSkills).where(and(eq(agentSkills.agentId, agentId), eq(agentSkills.skillId, skillId))).returning({ skillId: agentSkills.skillId });
     this.invalidateAgentCaches(agentId);
+    return result.length > 0;
   }
 
   async getResolvedToolsForAgent(agentId: string): Promise<string[]> {
@@ -195,30 +244,43 @@ export class SkillService {
       }
     }
 
-    // 2. Inherited tool requirements from active skills
+    // 2. Inherited tool requirements from active skills (required + optional)
     const activeSkills = await this.getAgentSkills(agentId);
     for (const skill of activeSkills) {
       if (skill.requiredToolIds) {
         for (const t of skill.requiredToolIds) toolIds.add(t);
       }
+      if (skill.optionalToolIds) {
+        for (const t of skill.optionalToolIds) toolIds.add(t);
+      }
     }
 
-    // 3. Universal memory tools
-    toolIds.add("open_memory");
-    toolIds.add("discard_memory_from_context");
-    toolIds.add("remember");
-
-    // 4. Universal context-awareness tools (always available for tool-capable runtimes)
-    toolIds.add("lock_in");
-    toolIds.add("lock_out");
-
-    // 5. Universal discovery tools. §21 makes capabilities "discoverable and
-    // lazily expanded" and §20 makes skills "expanded on demand" — both need an
-    // expansion verb the agent can actually call, or the economy collapses back
-    // into wholesale injection. Authorization for whatever these return is still
-    // enforced per-call in ToolExecutor, so granting the verbs is safe.
-    toolIds.add("open_detail");
-    toolIds.add("load_skill");
+    // 3. Universal tools, filtered through the live registry when available.
+    // Fail-open with warn when the registry cannot be reached (offline/boot):
+    // granting the verbs is safe — per-call authorization still enforced in
+    // ToolExecutor — while advertising vapor tools is not.
+    const UNIVERSAL_TOOLS = [
+      "open_memory",
+      "discard_memory_from_context",
+      "remember",
+      "lock_in",
+      "lock_out",
+      "open_detail",
+      "load_skill",
+    ];
+    try {
+      const { toolsGate } = await import("../tools/tools-gate.js");
+      for (const t of UNIVERSAL_TOOLS) {
+        try {
+          if (toolsGate.has(t)) toolIds.add(t);
+        } catch {
+          toolIds.add(t);
+        }
+      }
+    } catch (err) {
+      console.warn("[skillService] tools registry unavailable, granting universals fail-open:", (err as Error)?.message ?? err);
+      for (const t of UNIVERSAL_TOOLS) toolIds.add(t);
+    }
 
     const result = Array.from(toolIds);
     this.resolvedToolsCache.set(key, result);

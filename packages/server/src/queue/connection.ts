@@ -2,6 +2,15 @@ import IORedis from "ioredis";
 
 let shared: InstanceType<typeof IORedis> | null = null;
 
+let lastRedisWarn = 0;
+function warnRedis(err: unknown): void {
+  // ponytail: 60s throttle — reconnect storms must not flood logs, silence hid outages
+  const now = Date.now();
+  if (now - lastRedisWarn < 60000) return;
+  lastRedisWarn = now;
+  console.warn("[queue:redis]", (err as Error)?.message ?? err);
+}
+
 export function getQueueMode(): "inline" | "bullmq" {
   const raw = process.env.QUEUE_MODE?.trim().toLowerCase();
   return raw === "bullmq" ? "bullmq" : "inline";
@@ -25,7 +34,7 @@ export function getRedisConnection(): InstanceType<typeof IORedis> | null {
     maxRetriesPerRequest: null,
     enableReadyCheck: false,
   });
-  shared.on("error", () => {});
+  shared.on("error", warnRedis);
   return shared;
 }
 
@@ -36,7 +45,7 @@ export function createRedisConnection(): InstanceType<typeof IORedis> | null {
     maxRetriesPerRequest: null,
     enableReadyCheck: false,
   });
-  conn.on("error", () => {});
+  conn.on("error", warnRedis);
   return conn;
 }
 

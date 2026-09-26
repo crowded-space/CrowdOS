@@ -10,9 +10,14 @@
 //
 // 2. AGENT SCOPING. `visibleFor` intersects each capability with the tools the
 //    agent is actually authorized for, reusing skillsGate.getResolvedToolsForAgent
-//    — the SAME resolver ToolExecutor authorizes against. Discovery therefore
-//    cannot drift from enforcement: a capability is advertised only when the
-//    agent could really invoke it.
+//    — the SAME resolver ToolExecutor authorizes against — and then applies the
+//    executor's authority-level rule (agent.authorityLevel vs the tool's
+//    authLevelRequired, fail-closed `?? 0` default and omniscient bypass
+//    included) via agentGate.getById.
+//    Discovery therefore cannot drift from enforcement: a capability is
+//    advertised only when the agent could really invoke it. A capability whose
+//    tools all fail either gate is excluded; a partially authorized one is
+//    advertised with only the authorized subset.
 //
 // 3. MANIFEST OVERLAY. A workspace may add/override/hide capabilities via
 //    <workspaceFolder>/vfs/.crowdos/capabilities.json (the §17 JSON-on-disk
@@ -20,9 +25,10 @@
 //    applied per workspace, so two workspaces can expose different
 //    vocabularies over the same built-in set (§30 isolation).
 
-import { readJsonObject, searchableWorkspaceScopes } from "../shared/core/local-file.js";
+import { readJsonObject } from "../shared/core/local-file.js";
 import { toolsGate } from "../tools/tools-gate.js";
 import { skillsGate } from "../skills/skills-gate.js";
+import { agentGate } from "../agents/agent-gate.js";
 import { BUILTIN_CAPABILITIES } from "./capability-catalog.js";
 import { CAPABILITY_DOMAINS } from "./capability-types.js";
 import type {
@@ -39,6 +45,53 @@ function isDomain(value: unknown): value is CapabilityDomain {
   return typeof value === "string" && (CAPABILITY_DOMAINS as readonly string[]).includes(value);
 }
 
+const SUMMARY_MAX_LEN = 300;
+
+/** Strip prompt-injectable control/newline chars and cap length (summaries ride on the packet). */
+function sanitizeSummary(raw: unknown, fallback: string): string {
+  if (typeof raw !== "string") return fallback;
+  const cleaned = raw.replace(/[\r\n\x00-\x1F\x7F]+/g, " ").trim().slice(0, SUMMARY_MAX_LEN);
+  return cleaned || fallback;
+}
+
+/**
+ * Coerce a raw manifest object to shape (permissive: warn + ignore bad parts, never throw).
+ * `capabilities` must be an array of {id}; `disabled` an array of strings.
+ */
+function sanitizeManifest(raw: Record<string, unknown>): CapabilityManifest {
+  const out: CapabilityManifest = {};
+  const caps = (raw as { capabilities?: unknown }).capabilities;
+  if (caps !== undefined && caps !== null) {
+    if (!Array.isArray(caps)) {
+      console.warn("[capabilities] manifest.capabilities is not an array; ignoring");
+    } else {
+      const kept: NonNullable<CapabilityManifest["capabilities"]> = [];
+      for (const entry of caps) {
+        if (entry && typeof (entry as { id?: unknown }).id === "string" && (entry as { id: string }).id.trim()) {
+          kept.push(entry as (typeof kept)[number]);
+        } else {
+          console.warn("[capabilities] ignoring malformed manifest capability entry");
+        }
+      }
+      out.capabilities = kept;
+    }
+  }
+  const disabled = (raw as { disabled?: unknown }).disabled;
+  if (disabled !== undefined && disabled !== null) {
+    if (!Array.isArray(disabled)) {
+      console.warn("[capabilities] manifest.disabled is not an array; ignoring");
+    } else {
+      const kept: string[] = [];
+      for (const id of disabled) {
+        if (typeof id === "string" && id.trim()) kept.push(id);
+        else console.warn("[capabilities] ignoring malformed manifest disabled entry");
+      }
+      out.disabled = kept;
+    }
+  }
+  return out;
+}
+
 /**
  * Merge the workspace manifest over the built-in vocabulary.
  *
@@ -51,57 +104,61 @@ export function mergeManifest(
   manifest: CapabilityManifest | null,
 ): CapabilityDescriptor[] {
   const byId = new Map<string, CapabilityDescriptor>();
-  for (const c of builtins) byId.set(c.id, c);
+  for (const c of builtins) byId.set(c.id, { ...c, tools: [...c.tools] });
 
-  if (manifest?.capabilities) {
-    for (const entry of manifest.capabilities) {
-      if (!entry || typeof entry.id !== "string" || !entry.id.trim()) continue;
-      const id = entry.id.trim();
-      const existing = byId.get(id);
-      const domain = isDomain(entry.domain) ? entry.domain : existing?.domain;
-      if (!domain) continue; // cannot place an unknown id in a domain
-      byId.set(id, {
-        id,
-        domain,
-        summary: typeof entry.summary === "string" && entry.summary.trim()
-          ? entry.summary.trim()
-          : existing?.summary ?? id,
-        tools: Array.isArray(entry.tools)
-          ? entry.tools.filter((t): t is string => typeof t === "string")
-          : existing?.tools ?? [],
-        source: "manifest",
-      });
+  const caps = manifest?.capabilities;
+  if (caps !== undefined && caps !== null) {
+    if (!Array.isArray(caps)) {
+      console.warn("[capabilities] manifest.capabilities is not an array; ignoring");
+    } else {
+      for (const entry of caps) {
+        if (!entry || typeof entry.id !== "string" || !entry.id.trim()) continue;
+        const id = entry.id.trim();
+        const existing = byId.get(id);
+        const domain = isDomain(entry.domain) ? entry.domain : existing?.domain;
+        if (!domain) continue; // cannot place an unknown id in a domain
+        byId.set(id, {
+          id,
+          domain,
+          summary: sanitizeSummary(entry.summary, existing?.summary ?? id),
+          tools: Array.isArray(entry.tools)
+            ? entry.tools.filter((t): t is string => typeof t === "string")
+            : existing ? [...existing.tools] : [],
+          source: "manifest",
+        });
+      }
     }
   }
 
-  if (manifest?.disabled) {
-    for (const id of manifest.disabled) {
-      if (typeof id === "string") byId.delete(id.trim());
+  const disabled = manifest?.disabled;
+  if (disabled !== undefined && disabled !== null) {
+    if (!Array.isArray(disabled)) {
+      console.warn("[capabilities] manifest.disabled is not an array; ignoring");
+    } else {
+      for (const id of disabled) {
+        if (typeof id === "string") byId.delete(id.trim());
+      }
     }
   }
 
-  return [...byId.values()];
+  return [...byId.values()].map((d) => ({ ...d, tools: [...d.tools] }));
 }
 
 /**
- * Read the manifest overlay. With a scope, one workspace. Without one, the
- * first workspace that defines a manifest wins (there is exactly one overlay
- * per workspace, and an unscoped caller has no other way to pick).
+ * Read the manifest overlay for ONE workspace. Unscoped callers get the
+ * built-in vocabulary only — never another workspace's overlay (§30 isolation).
  */
 async function loadManifest(workspaceId?: string | null): Promise<CapabilityManifest | null> {
-  const scopes: Array<string | null> = workspaceId && workspaceId.trim()
-    ? [workspaceId]
-    : searchableWorkspaceScopes();
-  for (const scope of scopes) {
-    try {
-      const raw = await readJsonObject<unknown>(MANIFEST_FILE, scope);
-      if (!raw || Object.keys(raw).length === 0) continue;
-      return raw as unknown as CapabilityManifest;
-    } catch {
-      // unreadable manifest degrades to the built-in vocabulary
-    }
+  const scope = typeof workspaceId === "string" ? workspaceId.trim() : "";
+  if (!scope) return null;
+  try {
+    const raw = await readJsonObject<unknown>(MANIFEST_FILE, scope);
+    if (Object.keys(raw).length === 0) return null;
+    return sanitizeManifest(raw);
+  } catch (err) {
+    console.warn("[capabilities] manifest read failed; using built-in vocabulary", err);
+    return null;
   }
-  return null;
 }
 
 /** Descriptors after the manifest overlay, in stable domain/id order. */
@@ -115,26 +172,58 @@ export async function listDescriptors(workspaceId?: string | null): Promise<Capa
 }
 
 /**
+ * The agent's authority tier for the executor's authLevel rule, or null when
+ * the profile cannot be resolved (unknown agent / lookup failed). Mirrors
+ * ToolExecutor step 4: `authorityLevel > (authLevelRequired ?? 0)` rejects
+ * unless the agent is omniscient — a tool with no declared level is L0-only.
+ */
+type agentAuthority = { authorityLevel: number; isOmniscient: boolean };
+
+async function resolveAuthority(agentId: string, workspaceId?: string | null): Promise<agentAuthority | null> {
+  try {
+    const agent = await agentGate.getById(agentId, undefined, workspaceId);
+    return agent ? { authorityLevel: agent.authorityLevel, isOmniscient: agent.isOmniscient } : null;
+  } catch (err) {
+    console.warn("[capabilities] agent lookup failed; advertising none", err);
+    return null;
+  }
+}
+
+/** Live AND within the agent's authority — registry presence plus the executor's authLevel check. */
+function usableBy(toolId: string, authority: agentAuthority): boolean {
+  const def = toolsGate.get(toolId);
+  if (!def) return false;
+  const required = def.authLevelRequired ?? 0; // fail-closed: no level means L0-only, as ToolExecutor reads it
+  return authority.isOmniscient || authority.authorityLevel <= required;
+}
+
+/**
  * Discovery-first view for an agent: capability ids, domains, one-line summaries.
  *
  * This is what replaces wholesale tool-schema injection. Argument schemas are
  * deliberately absent — expanding them is `expand()` below.
  */
 export async function visibleFor(agentId: string, workspaceId?: string | null): Promise<VisibleCapability[]> {
+  if (typeof agentId !== "string" || !agentId.trim()) return [];
   let authorized: string[] = [];
   try {
     authorized = await skillsGate.getResolvedToolsForAgent(agentId);
-  } catch {
+  } catch (err) {
     // No PG / no roster: no capabilities are provably invocable, so advertise none.
+    console.warn("[capabilities] tool resolution failed; advertising none", err);
     return [];
   }
   const allowed = new Set(authorized);
+  const authority = await resolveAuthority(agentId, workspaceId);
+  // No profile (or lookup failed): the authority rule cannot be evaluated, so
+  // nothing is provably invocable — same stance as the resolver failure above.
+  if (!authority) return [];
   const descriptors = await listDescriptors(workspaceId);
   const out: VisibleCapability[] = [];
   for (const d of descriptors) {
-    const live = d.tools.filter((t) => allowed.has(t) && toolsGate.has(t));
+    const live = d.tools.filter((t) => allowed.has(t) && usableBy(t, authority));
     if (live.length === 0) continue; // availability filter — never advertise vapor
-    out.push({ id: d.id, domain: d.domain, summary: d.summary, available: true });
+    out.push({ id: d.id, domain: d.domain, summary: d.summary, available: live.length > 0 });
   }
   return out;
 }
@@ -142,15 +231,17 @@ export async function visibleFor(agentId: string, workspaceId?: string | null): 
 /**
  * Lazy expansion: full tool schemas for ONE capability, scoped to the agent.
  *
- * Returns null when the capability is unknown, hidden by the manifest, or has no
- * live tool for this agent — the same three conditions under which it was never
- * advertised, so an agent cannot expand its way past the availability filter.
+ * Returns null when the capability is unknown, hidden by the manifest, or has
+ * no live AND authority-authorized tool for this agent — the same conditions
+ * under which it was never advertised, so an agent cannot expand its way past
+ * the availability filter.
  */
 export async function expand(
   agentId: string,
   capabilityId: string,
   workspaceId?: string | null,
 ): Promise<ExpandedCapability | null> {
+  if (typeof agentId !== "string" || !agentId.trim()) return null;
   const descriptors = await listDescriptors(workspaceId);
   const descriptor = descriptors.find((d) => d.id === capabilityId);
   if (!descriptor) return null;
@@ -158,13 +249,16 @@ export async function expand(
   let authorized: string[] = [];
   try {
     authorized = await skillsGate.getResolvedToolsForAgent(agentId);
-  } catch {
+  } catch (err) {
+    console.warn("[capabilities] tool resolution failed; cannot expand", err);
     return null;
   }
   const allowed = new Set(authorized);
+  const authority = await resolveAuthority(agentId, workspaceId);
+  if (!authority) return null;
 
   const toolSchemas = descriptor.tools
-    .filter((t) => allowed.has(t))
+    .filter((t) => allowed.has(t) && usableBy(t, authority))
     .map((t) => toolsGate.get(t))
     .filter((t): t is NonNullable<typeof t> => Boolean(t))
     .map((t) => ({ name: t.name, description: t.description, inputSchema: t.parameters as unknown as Record<string, unknown> }));

@@ -40,6 +40,7 @@ vi.mock('../modules/module-gate.js', () => ({
 }));
 
 import { swarmGate } from './swarm-gate.js';
+import { resetSwarmForTests } from './swarm-repository.js';
 import { ProviderRegistry } from '../runtime/providers/provider-registry.js';
 import { EventBroker } from '../event-broker/event-broker-gate.js';
 import type { ContextPacket, IProviderAdapter } from '../runtime/types.js';
@@ -50,7 +51,7 @@ describe('Swarm SW-1 e2e', () => {
 
   beforeEach(() => {
     broker = new EventBroker();
-    swarmGate.resetForTests();
+    resetSwarmForTests();
     process.env.SWARM_V1 = 'true';
     process.env.DATABASE_URL = process.env.DATABASE_URL || 'postgresql://postgres:postgres@localhost:5432/community_agent';
   });
@@ -214,7 +215,8 @@ describe('Swarm SW-1 e2e', () => {
     // each task. Before this existed the plan's assigneeTemplate was parsed and
     // never resolved, so every "worker" silently re-ran the orchestrator.
     expect(result.finalResponse).toContain('## Workers');
-    expect(result.finalResponse).toContain('Crow-Worker-1');
+    // Random spread-load picks either roster L3 (25% flake if one name is pinned).
+    expect(result.finalResponse).toMatch(/Crow-Worker-[12]/);
     expect(result.finalResponse).toMatch(/match: (any-l3|id|name|level)/);
     // The orchestrator must NOT be the reported worker: that was the defect.
     expect(result.finalResponse).not.toMatch(/→ E2EAgent .*match: requesting-agent/);

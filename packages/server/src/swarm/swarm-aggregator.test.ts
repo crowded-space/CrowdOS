@@ -60,4 +60,17 @@ describe('swarmAggregator honest partial', () => {
     expect(agg.honestSummary).toMatch(/Completed 0\/2/);
     expect(agg.mergedContent).toContain('Completed 0/2');
   });
+
+  it('blocked rows land only in blockedTasks, never double-counted as failed', () => {
+    const tasks = [row('task-1', 'completed'), row('task-2', 'blocked')];
+    const results = new Map<string, SwarmWorkerResult>([
+      ['task-1', { taskId: 'task-1', status: 'completed', output: 'ok' }],
+      ['task-2', { taskId: 'task-2', status: 'failed', error: 'blocked: dependency failed (task-1)' }],
+    ]);
+    const agg = aggregateSwarmOutputs(tasks, results);
+    expect(agg.blockedTasks).toHaveLength(1);
+    expect(agg.blockedTasks[0].id).toBe('task-2');
+    expect(agg.failedTasks).toHaveLength(0);
+    expect(agg.completedCount).toBe(1);
+  });
 });

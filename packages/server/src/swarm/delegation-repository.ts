@@ -29,6 +29,35 @@ const memById = new Map<string, DelegationRow>();
 const memByChild = new Map<string, DelegationRow>();
 const memByParent = new Map<string, Set<string>>();
 
+/** Process-lifetime cap across all runs — mirrors swarm-repository MEM_ROW_CAP. */
+const MEM_ROW_CAP = 500;
+
+/** Single write path so every map stays consistent AND the cap is enforced. */
+function memPut(row: DelegationRow): void {
+  memById.set(row.id, { ...row });
+  memByChild.set(row.childRunId, { ...row });
+  let set = memByParent.get(row.parentRunId);
+  if (!set) {
+    set = new Set();
+    memByParent.set(row.parentRunId, set);
+  }
+  set.add(row.id);
+  // Evict oldest-first (Map insertion order). Re-set on an existing key keeps
+  // its position, so eviction hits genuinely old rows first.
+  while (memById.size > MEM_ROW_CAP) {
+    const oldest = memById.keys().next().value as string | undefined;
+    if (oldest === undefined) break;
+    const dropped = memById.get(oldest);
+    memById.delete(oldest);
+    if (!dropped) continue;
+    // Only clear the child index if it still points at THIS row.
+    if (memByChild.get(dropped.childRunId)?.id === dropped.id) memByChild.delete(dropped.childRunId);
+    const parentSet = memByParent.get(dropped.parentRunId);
+    parentSet?.delete(dropped.id);
+    if (parentSet && parentSet.size === 0) memByParent.delete(dropped.parentRunId);
+  }
+}
+
 function isHermeticMode(): boolean {
   if (process.env.__SOCKET_FAKE_DB__ === "1") return true;
   if (process.env.NODE_ENV === "test") return true;
@@ -55,14 +84,7 @@ export async function createDelegation(input: {
   };
 
   if (isHermeticMode()) {
-    memById.set(id, { ...row });
-    memByChild.set(row.childRunId, { ...row });
-    let set = memByParent.get(row.parentRunId);
-    if (!set) {
-      set = new Set();
-      memByParent.set(row.parentRunId, set);
-    }
-    set.add(id);
+    memPut(row);
     return { ...row };
   }
 
@@ -76,25 +98,11 @@ export async function createDelegation(input: {
       summary: row.summary,
       createdAt: row.createdAt,
     } as any);
-    memById.set(id, { ...row });
-    memByChild.set(row.childRunId, { ...row });
-    let set = memByParent.get(row.parentRunId);
-    if (!set) {
-      set = new Set();
-      memByParent.set(row.parentRunId, set);
-    }
-    set.add(id);
+    memPut(row);
     return { ...row };
   } catch (err) {
     console.warn("[delegationRepository] createDelegation DB failed, falling back to memory:", (err as Error)?.message || err);
-    memById.set(id, { ...row });
-    memByChild.set(row.childRunId, { ...row });
-    let set = memByParent.get(row.parentRunId);
-    if (!set) {
-      set = new Set();
-      memByParent.set(row.parentRunId, set);
-    }
-    set.add(id);
+    memPut(row);
     return { ...row };
   }
 }
@@ -112,8 +120,7 @@ export async function getDelegationById(id: string): Promise<DelegationRow | nul
       return mem ? { ...mem } : null;
     }
     const converted = toRow(row as DbDelegation);
-    memById.set(id, { ...converted });
-    memByChild.set(converted.childRunId, { ...converted });
+    memPut(converted);
     return converted;
   } catch {
     const mem = memById.get(id);
@@ -134,14 +141,7 @@ export async function getDelegationByChild(childRunId: string): Promise<Delegati
       return mem ? { ...mem } : null;
     }
     const converted = toRow(row as DbDelegation);
-    memById.set(converted.id, { ...converted });
-    memByChild.set(childRunId, { ...converted });
-    let set = memByParent.get(converted.parentRunId);
-    if (!set) {
-      set = new Set();
-      memByParent.set(converted.parentRunId, set);
-    }
-    set.add(converted.id);
+    memPut(converted);
     return converted;
   } catch {
     const mem = memByChild.get(childRunId);
@@ -153,32 +153,25 @@ export async function listDelegationsByParent(parentRunId: string): Promise<Dele
   if (isHermeticMode()) {
     const ids = memByParent.get(parentRunId);
     if (!ids) return [];
-    return [...ids].map((id) => ({ ...(memById.get(id) as DelegationRow) })).filter(Boolean);
+    // NOTE: {...undefined} is {} (truthy) — filter missing ids BEFORE spread,
+    // otherwise evicted ids return as bogus {} rows.
+    return [...ids].filter((id) => memById.has(id)).map((id) => ({ ...(memById.get(id) as DelegationRow) }));
   }
   try {
     const db = getDb();
     const rows = await db.select().from(delegations).where(eq(delegations.parentRunId, parentRunId));
     if (rows.length === 0) {
       const ids = memByParent.get(parentRunId);
-      if (ids && ids.size > 0) return [...ids].map((id) => ({ ...(memById.get(id) as DelegationRow) }));
+      if (ids && ids.size > 0) return [...ids].filter((id) => memById.has(id)).map((id) => ({ ...(memById.get(id) as DelegationRow) }));
       return [];
     }
     const converted = (rows as DbDelegation[]).map(toRow);
-    for (const c of converted) {
-      memById.set(c.id, { ...c });
-      memByChild.set(c.childRunId, { ...c });
-      let set = memByParent.get(c.parentRunId);
-      if (!set) {
-        set = new Set();
-        memByParent.set(c.parentRunId, set);
-      }
-      set.add(c.id);
-    }
+    for (const c of converted) memPut(c);
     return converted;
   } catch {
     const ids = memByParent.get(parentRunId);
     if (!ids) return [];
-    return [...ids].map((id) => ({ ...(memById.get(id) as DelegationRow) }));
+    return [...ids].filter((id) => memById.has(id)).map((id) => ({ ...(memById.get(id) as DelegationRow) }));
   }
 }
 
@@ -187,8 +180,7 @@ export async function updateDelegationSummary(id: string, summary: string | null
     const existing = memById.get(id);
     if (!existing) return null;
     existing.summary = summary;
-    memById.set(id, { ...existing });
-    memByChild.set(existing.childRunId, { ...existing });
+    memPut(existing);
     return { ...existing };
   }
   try {
@@ -196,16 +188,14 @@ export async function updateDelegationSummary(id: string, summary: string | null
     const [row] = await db.update(delegations).set({ summary } as any).where(eq(delegations.id, id)).returning();
     if (!row) return null;
     const converted = toRow(row as DbDelegation);
-    memById.set(id, { ...converted });
-    memByChild.set(converted.childRunId, { ...converted });
+    memPut(converted);
     return converted;
   } catch (err) {
     console.warn("[delegationRepository] updateDelegationSummary DB failed, falling back to mem:", (err as Error)?.message || err);
     const existing = memById.get(id);
     if (!existing) return null;
     existing.summary = summary;
-    memById.set(id, { ...existing });
-    memByChild.set(existing.childRunId, { ...existing });
+    memPut(existing);
     return { ...existing };
   }
 }

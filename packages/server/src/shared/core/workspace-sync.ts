@@ -28,7 +28,7 @@ import {
   tierContextFor,
   type DbSyncState,
 } from "../../workspace/workspace-gate.js";
-import { agentGate } from "../../agents/agent-gate.js";
+import { agentGate, type LocalAgentRow } from "../../agents/agent-gate.js";
 import { globalBroker } from "../sockets/register-socket-server.js";
 import { LibrarianRuntime } from "./librarian-runtime.js";
 import { agents, categories, channelSequences, channels, messages, workspaces } from "../../db/schema.js";
@@ -44,7 +44,6 @@ import {
 import { resolveWorkspaceAgentsDir } from "./local-file.js";
 import { readOutbox, removeOutboxIds, type OutboxEntry } from "./outbox.js";
 import type { LocalChannelRow, LocalCategoryRow } from "../../channels/channel-local-store.js";
-import { localListAgentRows, type LocalAgentRow } from "../../agents/agent-local-store.js";
 import type { LocalMessageRow } from "../../messages/message-local-store.js";
 
 export interface PairingResult {
@@ -73,7 +72,7 @@ export async function localWorkspaceContent(workspaceId: string): Promise<{
 }> {
   const [chans, ags] = await Promise.all([
     readJsonArray<LocalChannelRow>("channels.json", workspaceId).catch(() => []),
-    localListAgentRows(workspaceId).catch(() => []),
+    agentGate.listLocalAgentRows(workspaceId).catch(() => []),
   ]);
   const ownChannels = chans.filter((c) => (c.workspaceId ?? "default") === workspaceId);
   // Isolation: scoped roster per workspace; legacy null rows belong to default.
@@ -225,7 +224,7 @@ export async function pushWorkspaceToDb(workspaceId: string, opts: { pruneExtras
 
   // Isolation: push only this workspace's roster slice (scoped + legacy
   // null rows owned by default). Never push the whole global file.
-  const allAgents = (await localListAgentRows(workspaceId).catch(() => []))
+  const allAgents = (await agentGate.listLocalAgentRows(workspaceId).catch(() => []))
     .filter((a) => !a.isTemplate && ((a.workspaceId ?? "default") === workspaceId));
   for (const a of allAgents) {
     const row = reviveDates({ ...a }, ["createdAt", "updatedAt", "archivedAt"]);
@@ -306,7 +305,7 @@ export async function pullWorkspaceFromDb(workspaceId: string, opts: { force?: b
   // Canon: the roster is one file per agent under vfs/agents, so a pull writes
   // each missing agent individually rather than rewriting one shared array.
   {
-    const existing = await localListAgentRows(workspaceId).catch(() => [] as LocalAgentRow[]);
+    const existing = await agentGate.listLocalAgentRows(workspaceId).catch(() => [] as LocalAgentRow[]);
     const byId = new Map(existing.map((r) => [r.id, r]));
     for (const a of dbAgents) {
       if (byId.has(a.id)) continue;
@@ -571,7 +570,7 @@ export async function clearWorkspaceLocalData(workspaceId: string): Promise<void
   // Canon: the roster is one file per agent, so scoped rows are deleted file by
   // file; legacy-global rows (no workspaceId) are left in place.
   {
-    const rows = await localListAgentRows(workspaceId).catch(() => [] as LocalAgentRow[]);
+    const rows = await agentGate.listLocalAgentRows(workspaceId).catch(() => [] as LocalAgentRow[]);
     for (const row of rows) {
       if ((row.workspaceId ?? null) === null) continue;
       if ((row.workspaceId ?? "default") !== workspaceId) continue;

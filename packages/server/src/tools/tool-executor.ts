@@ -1,8 +1,9 @@
-﻿import { getDb } from "../shared/config/database.js";
+﻿import path from "node:path";
+import { getDb } from "../shared/config/database.js";
 import { agents } from "../db/schema.js";
 import { eq } from "drizzle-orm";
 import { Guard } from "./safety/guard.js";
-import { toolRegistry } from "./tool-registry.js";
+import { toolRegistry, resolveToolRoot } from "./tool-registry.js";
 import { skillsGate } from "../skills/skills-gate.js";
 import { timeAsync, recordTiming } from "../shared/core/perf-metrics.js";
 import type { ToolResult, ToolExecutionContext, ToolEffectClass } from "./tool-types.js";
@@ -21,8 +22,11 @@ const STATIC_TOOL_EFFECT_CLASSES: Record<string, ToolEffectClass> = {
   web_search: "read",
   search_all_channels: "read",
   open_memory: "read",
+  open_detail: "read",
+  load_skill: "read",
   query_database: "read",
   write_file: "write",
+  edit_file: "write",
   delete_file: "write",
   remember: "write",
   discard_memory_from_context: "write",
@@ -63,6 +67,137 @@ const MEMORY_WRITE_TOOL_IDS: ReadonlySet<string> = new Set<string>([
 // Slow on purpose: the broker event is the fast path, this is only the fallback.
 const APPROVAL_FALLBACK_POLL_INITIAL_MS = 1000;
 const APPROVAL_FALLBACK_POLL_MAX_MS = 5000;
+
+type ApprovalRow = Awaited<ReturnType<typeof approvalGate.getById>>;
+
+// Hybrid event-driven + bounded-poll approval wait — shared by the bash and FS
+// approval paths (one implementation, both get the broker fast path). Holds 1
+// run-worker slot while waiting (suspend-and-resume would fix that but is a
+// bigger redesign — skipped); broker 'approval.decided' is the fast path, DB
+// fallback poll runs 1s→5s backoff so a 5min wait costs ~10² queries, not ~10³.
+function waitForApprovalDecision(opts: {
+  pendingId: string;
+  pendingTtl: number;
+  startWait: number;
+  abortSignal?: AbortSignal;
+  partialCtx: unknown;
+  onPoll?: () => void;
+}): Promise<ApprovalRow> {
+  const { pendingId, pendingTtl, startWait, abortSignal, partialCtx, onPoll } = opts;
+  let settled = false;
+  let off: (() => void) | null = null;
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  let pollBackoff = APPROVAL_FALLBACK_POLL_INITIAL_MS;
+
+  const cleanup = () => {
+    settled = true;
+    if (off) try { off(); } catch {}
+    if (timer) clearTimeout(timer);
+  };
+
+  return new Promise<ApprovalRow>((resolve) => {
+    if (abortSignal?.aborted) {
+      resolve(null);
+      return;
+    }
+    const onAbort = () => {
+      cleanup();
+      resolve(null);
+    };
+    abortSignal?.addEventListener('abort', onAbort, { once: true });
+
+    // Primary: broker event for this approvalId
+    const tryAttachBroker = async () => {
+      try {
+        const brokerEvt = (partialCtx as { broker?: { on?: (t: string, cb: (p: any) => void) => string | void; off?: (t: string, id: string | (() => void)) => void } })?.broker as any;
+        const globalMod = brokerEvt?.on ? null : await import("../shared/sockets/register-socket-server.js").then(m => (m as unknown as { globalBroker?: any }).globalBroker).catch(() => null);
+        const evtBroker = brokerEvt?.on ? brokerEvt : (globalMod as any);
+        // Shared instance for the fast-path subscription: subscribing
+        // on a fresh EventBroker would never see the decision event.
+        // No shared broker → poll-only (no orphan subscription).
+        const sharedMod = !evtBroker?.on ? await import("../event-broker/event-broker-gate.js").then(m => (m as any).getSharedBroker?.() ?? null).catch(() => null) : null;
+        const targetBroker = evtBroker?.on ? evtBroker : (sharedMod as any)?.on ? sharedMod : null;
+        if (targetBroker && typeof targetBroker.on === 'function') {
+          const handler = (payload: any) => {
+            // Broker delivers the ENVELOPE {eventId, type, channelId,
+            // payload, timestamp} — reading approvalId off the envelope
+            // itself always missed, so the "fast path" never fired and
+            // every decision waited for the poll fallback.
+            const pid =
+              payload?.payload?.approvalId ?? payload?.payload?.id ??
+              payload?.approvalId ?? payload?.id ?? payload?.eventId;
+            if (pid !== pendingId) return;
+            if (settled) return;
+            cleanup();
+            abortSignal?.removeEventListener('abort', onAbort);
+            // Fast path: fetch decided row once
+            approvalGate.getById(pendingId).then(r => resolve(r)).catch(() => resolve(null));
+          };
+          try {
+            const subId = targetBroker.on('approval.decided', undefined, handler as any);
+            off = () => {
+              try {
+                if (typeof targetBroker.off === 'function') {
+                  if (typeof subId === 'string') targetBroker.off(subId);
+                }
+              } catch {}
+            };
+          } catch {
+            // fallback to poll only
+          }
+        }
+      } catch {}
+    };
+    void tryAttachBroker();
+
+    // Fallback: exponential poll (starts 1s, ×1.6 to max 5s)
+    const poll = async () => {
+      if (settled) return;
+      if (abortSignal?.aborted) {
+        cleanup();
+        resolve(null);
+        return;
+      }
+      // ponytail: sweeper-only expiry — executor never writes expire, resolves locally and lets sweeper persist.
+      if (Date.now() - startWait > pendingTtl + 2000) {
+        const after = await approvalGate.getById(pendingId).catch(() => null);
+        cleanup();
+        abortSignal?.removeEventListener('abort', onAbort);
+        resolve(after && after.status !== "pending" ? after : after ? ({ ...after, status: "expired" as const } as ApprovalRow) : null);
+        return;
+      }
+      const current = await approvalGate.getById(pendingId).catch(() => null);
+      onPoll?.();
+      if (!current) {
+        cleanup();
+        abortSignal?.removeEventListener('abort', onAbort);
+        resolve(null);
+        return;
+      }
+      if (current.status === 'approved' || current.status === 'denied' || current.status === 'expired') {
+        cleanup();
+        abortSignal?.removeEventListener('abort', onAbort);
+        resolve(current);
+        return;
+      }
+      if (current.expiresAt && Date.now() >= new Date(current.expiresAt).getTime()) {
+        cleanup();
+        abortSignal?.removeEventListener('abort', onAbort);
+        resolve({ ...current, status: 'expired' as const } as ApprovalRow);
+        return;
+      }
+      timer = setTimeout(poll, pollBackoff);
+      pollBackoff = Math.min(APPROVAL_FALLBACK_POLL_MAX_MS, Math.round(pollBackoff * 1.6));
+    };
+    // Kick first poll quickly then backoff
+    timer = setTimeout(poll, APPROVAL_FALLBACK_POLL_INITIAL_MS);
+    // Also hard TTL guard
+    setTimeout(() => {
+      if (settled) return;
+      poll();
+    }, pendingTtl + 2500).unref?.();
+  });
+}
 
 async function runBoundedPool<T>(items: T[], limit: number, worker: (item: T) => Promise<void>): Promise<void> {
   let cursor = 0;
@@ -170,13 +305,20 @@ export class ToolExecutor {
     // is exactly what the tier forbids. Refused with a reason rather than
     // silently succeeding, so the worker adapts instead of believing it
     // persisted something it did not.
+    // Refused as a ToolResult (not a throw): executeBatch fans out with
+    // Promise.all / bounded pool, where one throw rejects the whole batch and
+    // loses every sibling result. The contract is ToolResult per call.
     if (partialCtx?.stateless === true && MEMORY_WRITE_TOOL_IDS.has(toolId)) {
-      throw new Error(
-        `Stateless worker: tool "${toolId}" writes private agent memory, which an L3 worker must not accumulate (CrowdOS §31). Complete the subtask and return your findings in the task result instead.`
-      );
+      return {
+        success: false,
+        output: "",
+        error: `Stateless worker: tool "${toolId}" writes private agent memory, which an L3 worker must not accumulate (CrowdOS §31). Complete the subtask and return your findings in the task result instead.`,
+      };
     }
 
-    const db = getDb();
+    // getDb inside try: a missing DB config now fails the same way every other
+    // dependency failure does — { success: false } — instead of throwing past
+    // the executor's no-throw contract.
     const startTime = Date.now();
     const __runId = (partialCtx as unknown as { runId?: string | null })?.runId ?? null;
     const __channelId = (partialCtx as unknown as { channelId?: string })?.channelId ?? "general";
@@ -185,6 +327,7 @@ export class ToolExecutor {
     const __span = __tracing ? __tracing.startSpan("tool", { runId: __runId, channelId: __channelId, agentId, attributes: { tool: toolId } }) : null;
 
     try {
+      const db = getDb();
       // 1. Fetch Agent Identity. Tenant routing: a tool call carries the run's
       // workspace, and a workspace-record database holds the agent row — the
       // ambient handle (global pool / ALS) cannot see it. Prefer the workspace
@@ -211,8 +354,8 @@ export class ToolExecutor {
 
       // 2. Authorize Tool (Resolves direct grants + active skill tools + universal tools)
       const allowedTools = await skillsGate.getResolvedToolsForAgent(agentId);
-      const isAllowed = allowedTools.includes(toolId) || 
-        ["open_memory", "discard_memory_from_context", "remember"].includes(toolId);
+      const isAllowed = allowedTools.includes(toolId) ||
+        ["open_memory", "discard_memory_from_context", "remember", "open_detail", "load_skill"].includes(toolId);
 
       if (!isAllowed) {
         throw new Error(`Security breach: Tool "${toolId}" is not authorized for @${agent.name}. Please grant it via ToolkitModule or attach a relevant Skill.`);
@@ -224,17 +367,20 @@ export class ToolExecutor {
         throw new Error(`System Error: Tool "${toolId}" not found in central tool registry.`);
       }
 
-      // 4. Enforce authLevelRequired
-      if (toolDef.authLevelRequired !== undefined) {
-        if (agent.authorityLevel > toolDef.authLevelRequired && !agent.isOmniscient) {
-          throw new Error(`Security breach: Tool "${toolId}" requires Level ${toolDef.authLevelRequired} authority. @${agent.name} is Level ${agent.authorityLevel} (Non-Omniscient).`);
-        }
+      // 4. Enforce authLevelRequired — fail-closed default: no explicit level
+      // means L0-only (same as 0), never "usable by anyone" (Tools.md target).
+      const requiredAuthLevel = toolDef.authLevelRequired ?? 0;
+      if (agent.authorityLevel > requiredAuthLevel && !agent.isOmniscient) {
+        throw new Error(`Security breach: Tool "${toolId}" requires Level ${requiredAuthLevel} authority. @${agent.name} is Level ${agent.authorityLevel} (Non-Omniscient).`);
       }
 
       // 5. Run Safety Guards — APR-1 tri-state: DENY always blocks, ASK blocks only
       // when APPROVALS_ENABLED=false (legacy). When enabled, ASK triggers the
       // Approvals domain pause flow (WAITING_FOR_APPROVAL → grant/deny).
       if (toolId === "execute_bash") {
+        if (typeof args?.command !== "string") {
+          throw new Error(`Safety DENY: execute_bash requires a string command, got ${typeof args?.command}.`);
+        }
         const verdict = Guard.evaluateCommand(args.command);
         if (verdict.decision === "DENY") {
           throw new Error(`Safety DENY: ${verdict.reason}. Command blocked: "${args.command.slice(0, 120)}"`);
@@ -258,7 +404,10 @@ export class ToolExecutor {
           }
           const riskClass = approvalGate.mapRisk(verdict.reason, toolId);
           const argsPreview = approvalGate.argsPreview(toolId, args as Record<string, unknown>) ?? { command: String(args.command).slice(0, 500) };
-          const scopeHash = approvalGate.computeScopeHash(toolId, argsPreview);
+          // Scope hashes the FULL args, never the 500-char preview — otherwise
+          // two commands sharing a 500-char prefix collide into one reusable
+          // grant and the tail of a later command executes unreviewed.
+          const scopeHash = approvalGate.computeScopeHash(toolId, args as Record<string, unknown>);
 
           // Reusable grant check — auto-approve without new pending row if a
           // still-valid grant exists for (tool, scopeHash, requester). Audit
@@ -334,13 +483,10 @@ export class ToolExecutor {
               console.warn("[ToolExecutor] approval.requested emit failed:", (e as Error)?.message || e);
             }
 
-            // Hybrid event-driven + bounded-poll approval wait. Holds 1 run-worker
-            // slot while waiting (suspend-and-resume would fix that but is a bigger
-            // redesign — skipped); broker 'approval.decided' is the fast path, DB
-            // fallback poll runs 1s→5s backoff so a 5min wait costs ~10² queries, not ~10³.
+            // Hybrid wait — shared implementation in waitForApprovalDecision().
             const abortSignal = (partialCtx as unknown as { abortSignal?: AbortSignal })?.abortSignal;
             const startWait = Date.now();
-            let decidedRow: Awaited<ReturnType<typeof approvalGate.getById>> = null;
+            let decidedRow: ApprovalRow = null;
             let approvalWaitPolls = 0;
             // P20: wait-timeout observability. The wait below holds a run-worker
             // slot while sleeping but NOT a PG conn (one short getById per tick);
@@ -349,118 +495,16 @@ export class ToolExecutor {
             // would free the slot but needs the BullMQ Job handle threaded
             // through runtime → executor — bigger redesign, deliberately skipped.
 
-            const waitForApprovalDecision = async (): Promise<typeof decidedRow> => {
-              const pendingId = pendingRow.id;
-              let settled = false;
-              let off: (() => void) | null = null;
-              let timer: ReturnType<typeof setTimeout> | null = null;
-              let pollBackoff = APPROVAL_FALLBACK_POLL_INITIAL_MS;
-
-              const cleanup = () => {
-                settled = true;
-                if (off) try { off(); } catch {}
-                if (timer) clearTimeout(timer);
-              };
-
-              return new Promise<typeof decidedRow>((resolve, reject) => {
-                if (abortSignal?.aborted) {
-                  resolve(null);
-                  return;
-                }
-                const onAbort = () => {
-                  cleanup();
-                  resolve(null);
-                };
-                abortSignal?.addEventListener('abort', onAbort, { once: true });
-
-                // Primary: broker event for this approvalId
-                const tryAttachBroker = async () => {
-                  try {
-                    const brokerEvt = (partialCtx as unknown as { broker?: { on?: (t: string, cb: (p: any) => void) => string | void; off?: (t: string, id: string | (() => void)) => void } })?.broker as any;
-                    const globalMod = brokerEvt?.on ? null : await import("../shared/sockets/register-socket-server.js").then(m => (m as unknown as { globalBroker?: any }).globalBroker).catch(() => null);
-                    const evtBroker = brokerEvt?.on ? brokerEvt : (globalMod as any);
-                    // Shared instance for the fast-path subscription: subscribing
-                    // on a fresh EventBroker would never see the decision event.
-                    // No shared broker → poll-only (no orphan subscription).
-                    const sharedMod = !evtBroker?.on ? await import("../event-broker/event-broker-gate.js").then(m => (m as any).getSharedBroker?.() ?? null).catch(() => null) : null;
-                    const targetBroker = evtBroker?.on ? evtBroker : (sharedMod as any)?.on ? sharedMod : null;
-                    if (targetBroker && typeof targetBroker.on === 'function') {
-                      const handler = (payload: any) => {
-                        const pid = payload?.approvalId || payload?.id;
-                        if (pid !== pendingId) return;
-                        if (settled) return;
-                        cleanup();
-                        abortSignal?.removeEventListener('abort', onAbort);
-                        // Fast path: fetch decided row once
-                        approvalGate.getById(pendingId).then(r => resolve(r)).catch(() => resolve(null));
-                      };
-                      try {
-                        const subId = targetBroker.on('approval.decided', undefined, handler as any);
-                        off = () => {
-                          try {
-                            if (typeof targetBroker.off === 'function') {
-                              if (typeof subId === 'string') targetBroker.off(subId);
-                            }
-                          } catch {}
-                        };
-                      } catch {
-                        // fallback to poll only
-                      }
-                    }
-                  } catch {}
-                };
-                void tryAttachBroker();
-
-                // Fallback: exponential poll (starts 400ms, doubles to max 2000ms)
-                const poll = async () => {
-                  if (settled) return;
-                  if (abortSignal?.aborted) {
-                    cleanup();
-                    resolve(null);
-                    return;
-                  }
-                  // ponytail: sweeper-only expiry — executor never writes expire, resolves locally and lets sweeper persist.
-                  if (Date.now() - startWait > pendingTtl + 2000) {
-                    const after = await approvalGate.getById(pendingId).catch(() => null);
-                    cleanup();
-                    abortSignal?.removeEventListener('abort', onAbort);
-                    resolve(after && after.status !== "pending" ? after : after ? ({ ...after, status: "expired" as const } as typeof after) : null);
-                    return;
-                  }
-                  const current = await approvalGate.getById(pendingId).catch(() => null);
-                  approvalWaitPolls += 1;
-                  if (!current) {
-                    cleanup();
-                    abortSignal?.removeEventListener('abort', onAbort);
-                    resolve(null);
-                    return;
-                  }
-                  if (current.status === 'approved' || current.status === 'denied' || current.status === 'expired') {
-                    cleanup();
-                    abortSignal?.removeEventListener('abort', onAbort);
-                    resolve(current);
-                    return;
-                  }
-                  if (current.expiresAt && Date.now() >= new Date(current.expiresAt).getTime()) {
-                    cleanup();
-                    abortSignal?.removeEventListener('abort', onAbort);
-                    resolve({ ...current, status: 'expired' as const } as typeof current);
-                    return;
-                  }
-                  timer = setTimeout(poll, pollBackoff);
-                  pollBackoff = Math.min(APPROVAL_FALLBACK_POLL_MAX_MS, Math.round(pollBackoff * 1.6));
-                };
-                // Kick first poll quickly then backoff
-                timer = setTimeout(poll, APPROVAL_FALLBACK_POLL_INITIAL_MS);
-                // Also hard TTL guard
-                setTimeout(() => {
-                  if (settled) return;
-                  poll();
-                }, pendingTtl + 2500).unref?.();
-              });
-            };
-
-            const awaited = await waitForApprovalDecision();
+            const awaited = await waitForApprovalDecision({
+              pendingId: pendingRow.id,
+              pendingTtl,
+              startWait,
+              abortSignal,
+              partialCtx,
+              onPoll: () => {
+                approvalWaitPolls += 1;
+              },
+            });
             try {
               recordTiming("approval.wait_ms", Date.now() - startWait);
               recordTiming("approval.wait_polls", approvalWaitPolls);
@@ -509,23 +553,32 @@ export class ToolExecutor {
           }
         }
       } else if (toolId === "execute_safe") {
+        if (typeof args?.command !== "string") {
+          throw new Error(`Safety DENY: execute_safe requires a string command, got ${typeof args?.command}.`);
+        }
         if (!Guard.isCommandWhitelisted(args.command)) {
           throw new Error(`Safety Alert: Command "${args.command}" is not in the system safe whitelist.`);
         }
       } else if (["write_file", "delete_file", "edit_file"].includes(toolId)) {
-        // FS safety gate — check per-channel/workspace policy, then run approval flow if required
-        const requiresApprovalFor = await (async () => {
+        // FS safety gate — check per-channel/workspace policy, then run approval flow if required.
+        // 2026-09-26 audit fix: the full fsPolicy (blockPaths/autoAllowPaths) is read here —
+        // the one place the policy is resolved — instead of requireApprovalFor alone.
+        type FsPolicy = { requireApprovalFor: string[]; autoAllowPaths: string[]; blockPaths: string[] };
+        const fsPolicy: FsPolicy = await (async () => {
+          const defaults: FsPolicy = { requireApprovalFor: ["delete", "execute"], autoAllowPaths: [], blockPaths: [] };
           try {
             const chId = (partialCtx as unknown as { channelId?: string })?.channelId;
             const wsId = (partialCtx as unknown as { workspaceId?: string })?.workspaceId;
-            // Load channel/workspace safety settings (fallback defaults)
-            let policy: string[] = ["delete", "execute"]; // default per schema
             if (chId) {
               try {
                 const { getDb } = await import("../shared/config/database.js");
                 const { channelSettings, workspaceSafetySettings } = await import("../db/schema.js");
                 const { eq, and } = await import("drizzle-orm");
                 const db = getDb();
+                const toPolicy = (raw: any): FsPolicy | null =>
+                  raw?.requireApprovalFor
+                    ? { requireApprovalFor: raw.requireApprovalFor, autoAllowPaths: raw.autoAllowPaths ?? [], blockPaths: raw.blockPaths ?? [] }
+                    : null;
                 // §30: channel_settings is keyed by (channel_id, workspace_id),
                 // so the read is scoped to this run's workspace.
                 const chRow = await db.query.channelSettings.findFirst({
@@ -534,18 +587,46 @@ export class ToolExecutor {
                     eq(channelSettings.workspaceId, wsId ?? "default"),
                   ),
                 });
-                if ((chRow?.fsPolicy as any)?.requireApprovalFor) policy = (chRow!.fsPolicy as any).requireApprovalFor;
-                else if (wsId) {
+                const chPolicy = toPolicy(chRow?.fsPolicy as any);
+                if (chPolicy) return chPolicy;
+                if (wsId) {
                   const wsRow = await db.query.workspaceSafetySettings.findFirst({ where: eq(workspaceSafetySettings.workspaceId, wsId) });
-                  if ((wsRow?.fsPolicy as any)?.requireApprovalFor) policy = (wsRow!.fsPolicy as any).requireApprovalFor;
+                  const wsPolicy = toPolicy(wsRow?.fsPolicy as any);
+                  if (wsPolicy) return wsPolicy;
                 }
               } catch {}
             }
-            return policy;
-          } catch { return ["delete", "execute"]; }
+            return defaults;
+          } catch { return defaults; }
         })();
+        const requiresApprovalFor = fsPolicy.requireApprovalFor;
         const toolOp = toolId === "delete_file" ? "delete" : toolId === "write_file" || toolId === "edit_file" ? "write" : "general";
-        const needsApproval = requiresApprovalFor.includes(toolOp as any);
+        const targetPath = String((args as any)?.path ?? "");
+        let pathInList: (list: string[]) => boolean = () => false;
+        if (targetPath) {
+          try {
+            const root = await resolveToolRoot({
+              channelId: (partialCtx as unknown as { channelId?: string })?.channelId,
+              workspaceId: (partialCtx as unknown as { workspaceId?: string })?.workspaceId,
+            });
+            const abs = path.resolve(root, targetPath);
+            pathInList = (list) =>
+              list.some((entry) => {
+                if (typeof entry !== "string" || !entry) return false;
+                const e = path.resolve(root, entry);
+                return abs === e || Guard.isInsideRoot(abs, e);
+              });
+          } catch {}
+        }
+        // blockPaths = hard deny, checked before the approval flow: an operator-blocked
+        // path must fail outright, never open a grantable approval request.
+        if (fsPolicy.blockPaths.length > 0 && targetPath && pathInList(fsPolicy.blockPaths)) {
+          throw new Error(`Safety DENY: FS ${toolOp} on "${targetPath}" hits fsPolicy.blockPaths — path blocked by operator policy.`);
+        }
+        // autoAllowPaths skips the approval flow only; blacklist/jail checks in the
+        // handler (Guard.validatePath) still apply.
+        const autoAllowed = fsPolicy.autoAllowPaths.length > 0 && !!targetPath && pathInList(fsPolicy.autoAllowPaths);
+        const needsApproval = !autoAllowed && requiresApprovalFor.includes(toolOp as any);
         if (needsApproval) {
           // Check hierarchical grants first (channel > workspace > global)
           const approvalsEnabled = process.env.APPROVALS_ENABLED === "true";
@@ -555,7 +636,9 @@ export class ToolExecutor {
           const workspaceIdForEvent = (partialCtx as unknown as { workspaceId?: string })?.workspaceId || "default";
           const requestedBy = agentId;
           const argsPreview = approvalGate.argsPreview(toolId, args as Record<string, unknown>) ?? { path: String((args as any).path ?? "").slice(0, 500) };
-          const scopeHash = approvalGate.computeScopeHash(toolId, argsPreview);
+          // Full-args scope (bash parity): preview truncation must not create
+          // reusable-grant prefix collisions (see bash path).
+          const scopeHash = approvalGate.computeScopeHash(toolId, args as Record<string, unknown>);
           // Try grant lookup (typed gate port — reusable audit mirrors bash path)
           let reusable: Awaited<ReturnType<typeof approvalGate.findReusableGrant>> = null;
           try {
@@ -621,34 +704,17 @@ export class ToolExecutor {
               } catch {}
               if (!emitVia) console.warn("[ToolExecutor] dropped approval.requested: no shared broker registered");
             } catch {}
-            // Reuse same hybrid wait as bash path — poll for decision
+            // Shared hybrid wait — broker 'approval.decided' fast path + bounded
+            // poll fallback (same implementation as the bash path).
             const abortSignal = (partialCtx as unknown as { abortSignal?: AbortSignal })?.abortSignal;
             const startWait = Date.now();
-            let decidedRow: any = null;
-            const waitForFsApproval = async () => {
-              return new Promise<any>((resolve) => {
-                let timer: any = null;
-                let pollBackoff = APPROVAL_FALLBACK_POLL_INITIAL_MS;
-                let settled = false;
-                const cleanup = () => { settled = true; if (timer) clearTimeout(timer); };
-                const poll = async () => {
-                  if (settled || abortSignal?.aborted) { cleanup(); resolve(null); return; }
-                  // ponytail: sweeper-only expiry — no executor DB write.
-                  if (Date.now() - startWait > pendingTtl + 2000) {
-                    const after = await approvalGate.getById(pendingRow.id).catch(() => null);
-                    cleanup(); resolve(after && after.status !== "pending" ? after : after ? ({ ...after, status: "expired" } as typeof after) : null); return;
-                  }
-                  const current = await approvalGate.getById(pendingRow.id).catch(() => null);
-                  if (!current) { cleanup(); resolve(null); return; }
-                  if (current.status === "approved" || current.status === "denied" || current.status === "expired") { cleanup(); resolve(current); return; }
-                  timer = setTimeout(poll, pollBackoff);
-                  pollBackoff = Math.min(APPROVAL_FALLBACK_POLL_MAX_MS, Math.round(pollBackoff * 1.6));
-                };
-                timer = setTimeout(poll, APPROVAL_FALLBACK_POLL_INITIAL_MS);
-                setTimeout(() => { if (settled) return; poll(); }, pendingTtl + 2500).unref?.();
-              });
-            };
-            decidedRow = await waitForFsApproval();
+            const decidedRow: ApprovalRow = await waitForApprovalDecision({
+              pendingId: pendingRow.id,
+              pendingTtl,
+              startWait,
+              abortSignal,
+              partialCtx,
+            });
             if (abortSignal?.aborted || !decidedRow) {
               try { await runsGate.transition(runId, "running", abortSignal?.aborted ? "approval_cancelled" : "approval_not_found"); } catch {}
               throw new Error(decidedRow === null && abortSignal?.aborted ? `Tool "${toolId}" approval wait cancelled by user.` : `Approval ${pendingRow.id} disappeared — denying FS operation.`);

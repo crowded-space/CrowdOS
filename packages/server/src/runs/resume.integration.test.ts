@@ -138,4 +138,34 @@ describe.skipIf(!probe.ok)("RES-1 resume + checkpoint + compensation integration
     const fetched = await repo!.getRunById(run!.id);
     expect(fetched!.status).toBe("starting");
   });
+
+  it("sweeps non-heartbeating created/queued only past the pending threshold", async () => {
+    const { sweepOrphanedRuns } = await import("./orphan-sweep.js");
+    const { EventBroker } = await import("../event-broker/event-broker-gate.js");
+    const broker = new EventBroker();
+
+    // created never heartbeats: past 10x ORPHAN_AFTER_MS it is a zombie, reaped.
+    const staleCreated = await repo!.createRun({ agentId: "res1-agent", channelId: "res1-channel", runtimeType: "agentic" });
+    created.push(staleCreated!.id);
+    await probe.sql!.unsafe(`update runs set updated_at = now() - interval '11 minutes' where id = '${staleCreated!.id}'`);
+
+    // queued past the pending threshold likewise (nothing will pick it up).
+    const staleQueued = await repo!.createRun({ agentId: "res1-agent", channelId: "res1-channel", runtimeType: "agentic" });
+    created.push(staleQueued!.id);
+    await repo!.applyTransition(staleQueued!.id, "queued");
+    await probe.sql!.unsafe(`update runs set updated_at = now() - interval '11 minutes' where id = '${staleQueued!.id}'`);
+
+    // queued backlog older than the 60s live threshold but inside the pending
+    // window must survive — the queue may still be waiting on pickup.
+    const backlogQueued = await repo!.createRun({ agentId: "res1-agent", channelId: "res1-channel", runtimeType: "agentic" });
+    created.push(backlogQueued!.id);
+    await repo!.applyTransition(backlogQueued!.id, "queued");
+    await probe.sql!.unsafe(`update runs set updated_at = now() - interval '2 minutes' where id = '${backlogQueued!.id}'`);
+
+    await sweepOrphanedRuns(broker);
+
+    expect((await repo!.getRunById(staleCreated!.id))!.status).toBe("resumable");
+    expect((await repo!.getRunById(staleQueued!.id))!.status).toBe("resumable");
+    expect((await repo!.getRunById(backlogQueued!.id))!.status).toBe("queued");
+  });
 });

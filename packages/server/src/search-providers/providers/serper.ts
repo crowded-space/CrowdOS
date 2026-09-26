@@ -4,6 +4,8 @@ const SERPER_ENDPOINT = "https://google.serper.dev/search"
 const DEFAULT_TIMEOUT_MS = 5000
 const DEFAULT_LIMIT = 10
 
+let warnedNoKey = false
+
 function getSerperKey(): string | undefined {
   const raw = process.env.SERPER_API_KEY?.trim()
   return raw && raw.length > 0 ? raw : undefined
@@ -15,6 +17,7 @@ function mapSerperJson(json: unknown): SearchResult[] {
   const obj = json as Record<string, unknown>
   const organic = (obj.organic as unknown[] | undefined) ?? (obj.results as unknown[] | undefined)
   if (!Array.isArray(organic)) return out
+  let unparsableTimestamps = 0
   for (const r of organic) {
     if (!r || typeof r !== "object") continue
     const rec = r as Record<string, unknown>
@@ -27,9 +30,12 @@ function mapSerperJson(json: unknown): SearchResult[] {
     if (typeof raw === "string" && raw) {
       const parsed = Date.parse(raw)
       if (!Number.isNaN(parsed)) timestamp = new Date(parsed).toISOString()
-      else timestamp = raw
+      else unparsableTimestamps++
     }
     out.push({ url, title: title.slice(0, 300), snippet: snippet.slice(0, 2000), timestamp, source: "serper" })
+  }
+  if (unparsableTimestamps > 0) {
+    console.warn(`[SearchProviders:serper] ${unparsableTimestamps} result timestamp(s) unparseable — dropped, rows keep no freshness signal`)
   }
   return out
 }
@@ -39,33 +45,31 @@ export const serperProvider: SearchProvider = {
   async search(query: string, opts?: SearchOptions): Promise<SearchResult[]> {
     const apiKey = getSerperKey()
     if (!apiKey) {
-      console.warn("[SearchProviders:serper] Serper search unavailable — returning [] (graceful fallback)")
+      if (!warnedNoKey) {
+        warnedNoKey = true
+        console.warn("[SearchProviders:serper] Serper search unavailable — returning [] (graceful fallback)")
+      }
       return []
     }
     const limit = Math.min(Math.max(opts?.limit ?? DEFAULT_LIMIT, 1), 20)
     const timeoutMs = opts?.timeoutMs ?? DEFAULT_TIMEOUT_MS
     const controller = new AbortController()
     const timeoutId = setTimeout(() => controller.abort(new Error("Serper search timeout")), timeoutMs)
-    if (opts?.signal) {
-      if (opts.signal.aborted) controller.abort(opts.signal.reason)
-      else opts.signal.addEventListener("abort", () => controller.abort(opts.signal!.reason), { once: true })
+    const callerSignal = opts?.signal
+    const onCallerAbort = (): void => controller.abort(callerSignal!.reason)
+    if (callerSignal) {
+      if (callerSignal.aborted) controller.abort(callerSignal.reason)
+      else callerSignal.addEventListener("abort", onCallerAbort, { once: true })
     }
+    let res: Response
     try {
       const body = JSON.stringify({ q: query, num: limit })
-      const res = await fetch(SERPER_ENDPOINT, {
+      res = await fetch(SERPER_ENDPOINT, {
         method: "POST",
         headers: { "Content-Type": "application/json", "X-API-KEY": apiKey },
         body,
         signal: controller.signal,
       })
-      if (!res.ok) {
-        const text = await res.text().catch(() => "")
-        console.warn(`[SearchProviders:serper] HTTP ${res.status}: ${text.slice(0, 300)}`)
-        return []
-      }
-      const json = await res.json().catch(() => null)
-      const results = mapSerperJson(json).slice(0, limit)
-      return results
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
       if (msg.includes("abort") || msg.includes("timeout")) {
@@ -73,10 +77,30 @@ export const serperProvider: SearchProvider = {
       } else {
         console.warn(`[SearchProviders:serper] fetch failed: ${msg}`)
       }
-      return []
+      throw err instanceof Error ? err : new Error(msg)
     } finally {
       clearTimeout(timeoutId)
+      callerSignal?.removeEventListener("abort", onCallerAbort)
     }
+    // Failures after fetch throw so searchProviderService can count them
+    // (empty [] stays reserved for genuine empty / missing key).
+    if (!res.ok) {
+      const text = await res.text().catch(() => "")
+      if (res.status === 429) {
+        // ponytail: no 429 retry, add backoff if throttling observed
+        const retryAfter = res.headers.get("Retry-After")
+        console.warn(`[SearchProviders:serper] HTTP 429 rate-limited${retryAfter ? `, Retry-After: ${retryAfter}` : ""}: ${text.slice(0, 300)}`)
+        throw new Error(`HTTP 429 rate-limited${retryAfter ? `, Retry-After: ${retryAfter}` : ""}`)
+      }
+      console.warn(`[SearchProviders:serper] HTTP ${res.status}: ${text.slice(0, 300)}`)
+      throw new Error(`HTTP ${res.status}`)
+    }
+    const json = await res.json().catch(() => null)
+    if (json === null) {
+      console.warn(`[SearchProviders:serper] HTTP 200 but unparseable JSON response`)
+      throw new Error("HTTP 200 but unparseable JSON")
+    }
+    return mapSerperJson(json).slice(0, limit)
   },
 }
 

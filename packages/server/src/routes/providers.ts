@@ -8,13 +8,11 @@ import {
   indexingModelProfiles,
   generationModelProfiles
 } from "../db/schema.js";
-import { testConnectionHelper } from "../modules/module-gate.js";
+import { testConnectionHelper, providerEngineSchema } from "../modules/module-gate.js";
 import { redactSecrets } from "../shared/core/redact.js";
 import { maybeSend304 } from "../shared/core/http-cache.js";
 import { TtlCache } from "../shared/core/ttl-cache.js";
 import { encrypt, decrypt } from "../shared/core/secret-box.js";
-
-const providerEngineSchema = z.enum(["google", "openai", "anthropic", "ollama", "custom"]);
 
 const generationProfileSchema = z.object({
   label: z.string().min(1),

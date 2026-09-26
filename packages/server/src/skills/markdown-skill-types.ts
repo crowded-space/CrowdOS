@@ -16,7 +16,7 @@
 // Skills are COMPOSABLE (§20): a set of skills forms a dynamically assembled
 // workflow, so nothing here implies a single active skill.
 
-import type { SkillWorkflowPattern } from "../skills/skill-types.js";
+import type { SkillWorkflowPattern } from "./skill-types.js";
 
 /** The §20 taxonomy. Closed set — an unknown category is not a skill. */
 export type SkillCategory = "cognitive" | "operational" | "swarm";
@@ -43,8 +43,10 @@ export interface MarkdownSkill {
   workflowPattern?: SkillWorkflowPattern;
   /** True when the skill is offered for on-demand expansion. */
   enabled: boolean;
-  /** Markdown body (the expandable prompt layer). */
+  /** Markdown body (the expandable prompt layer). Capped at MAX_SKILL_BODY_CHARS. */
   body: string;
+  /** True when body was truncated to the cap. */
+  truncated?: boolean;
   /** Absolute path of the source file — diagnostics and edit flows. */
   path: string;
 }

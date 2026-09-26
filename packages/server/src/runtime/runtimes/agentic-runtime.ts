@@ -156,6 +156,7 @@ export class AgenticRuntime extends BaseRuntime {
             agentId: packet.agentId,
             channelId: packet.channelId,
             toolName: tc.name,
+            runId: packet.runId ?? null,
             input: tc.input as Record<string, unknown>,
           })
           runtimeEvents.push(this.kernel.buildEvent('tool:start', { toolName: tc.name, agentId: packet.agentId }))
@@ -222,6 +223,7 @@ export class AgenticRuntime extends BaseRuntime {
             agentId: packet.agentId,
             channelId: packet.channelId,
             toolName: tc.name,
+            runId: packet.runId ?? null,
             output: result.success ? result.output : undefined,
             error: result.success ? undefined : result.error,
             success: result.success,

@@ -1,7 +1,7 @@
 ﻿import React, { useState } from 'react';
 import { useCrowdOSStore } from '@/stores/crowdOsStore';
 import { ModelModule, ProviderType } from '@/types/crowdOs';
-import { Plus, Trash2, CheckCircle2, AlertCircle, RefreshCw, ShieldCheck, Cpu, Network } from 'lucide-react';
+import { Plus, Trash2, CheckCircle2, AlertCircle, RefreshCw, Cpu } from 'lucide-react';
 import { useToast } from '@/components/ui/ToastProvider';
 import ConfirmDialog from '@/components/ui/ConfirmDialog';
 
@@ -145,7 +145,7 @@ export default function ModelCardsTab() {
       setTimeout(() => {
         setTestingId(null);
         const target = modelModules.find(m => m.id === id);
-        const isConfigured = target?.apiKey || target?.provider === 'google';
+        const isConfigured = Boolean(target?.apiKey);
 
         if (isConfigured) {
           setTestResult(prev => ({
@@ -164,53 +164,9 @@ export default function ModelCardsTab() {
 
   return (
     <div id="model-cards-tab" className="space-y-4 text-xs">
-      <div className="flex items-center justify-between">
-        <div>
-          <h3 className="text-zinc-200 font-semibold text-sm tracking-tight mb-0.5">Model Modules</h3>
-          <p className="text-zinc-500 font-sans">Provision and tune LLM cognitive profiles bound to target orchestration pipelines.</p>
-        </div>
-        {!formOpen && (
-          <button
-            onClick={() => setFormOpen(true)}
-            className="px-2.5 py-1.5 rounded-md bg-indigo-500 hover:bg-indigo-650 text-white font-semibold flex items-center gap-1.5 transition select-none cursor-pointer focus:outline-none"
-          >
-            <Plus size={13} />
-            <span>Add Model Module</span>
-          </button>
-        )}
-      </div>
-
-      {/* Dynamic Swarm Provider Status & Failover Routing Dashboard */}
-      <div className="p-4 bg-zinc-950 border border-zinc-900 rounded-lg space-y-4 animate-fade-in shadow-inner">
-        <div className="flex items-center justify-between border-b border-zinc-900 pb-2.5 select-none">
-          <div className="flex items-center gap-2">
-            <Network size={14} className="text-indigo-400 animate-pulse" />
-            <span className="font-bold text-zinc-300 font-sans text-xs tracking-tight uppercase">Swarm Provider Routing Telemetry</span>
-          </div>
-          <span className="px-2 py-0.5 rounded bg-emerald-500/10 border border-emerald-500/20 text-[9px] font-mono text-emerald-400 font-semibold uppercase flex items-center gap-1">
-            <ShieldCheck size={10} />
-            <span>Orchestration Chain: Healthy</span>
-          </span>
-        </div>
-
-        {/* Dynamic Failover Visual Map */}
-        <div className="bg-zinc-900/10 border border-zinc-900/60 p-3 rounded-md space-y-2.5 font-sans">
-          <div className="text-[10px] text-zinc-500 font-mono uppercase tracking-wider select-none">Dynamic Failover Cascade Flow</div>
-          <div className="flex flex-col md:flex-row items-stretch md:items-center justify-between gap-2.5">
-            
-            {/* Primary */}
-            <div className="flex-1 bg-zinc-900/40 border border-zinc-800/80 p-2 rounded-md flex items-center justify-between gap-3">
-              <div className="flex items-center gap-2">
-                <Cpu size={12} className="text-emerald-400" />
-                <div className="leading-tight">
-                  <div className="font-semibold text-zinc-200 text-[10.5px]">Google Gemini</div>
-                  <div className="text-[9px] text-zinc-500 font-mono">gemini-2.0-flash</div>
-                </div>
-              </div>
-              <span className="px-1 py-0.2 rounded bg-emerald-500/15 text-[8.5px] font-mono text-emerald-400 font-bold uppercase shrink-0">Primary</span>
-            </div>
-          </div>
-        </div>
+      <div>
+        <h3 className="text-zinc-200 font-semibold text-sm tracking-tight mb-0.5">Model Modules</h3>
+        <p className="text-zinc-500 font-sans">Provision and tune LLM cognitive profiles bound to target orchestration pipelines.</p>
       </div>
 
       <div className="flex items-center justify-between pt-2 border-t border-zinc-900">
@@ -356,6 +312,12 @@ export default function ModelCardsTab() {
 
       {/* Profiles Roster List */}
       <div className="space-y-2">
+        {modelModules.length === 0 && !formOpen && (
+          <div className="p-4 bg-zinc-900/30 border border-dashed border-zinc-800 rounded-lg text-center">
+            <div className="text-zinc-300 text-xs font-semibold">No model providers configured</div>
+            <div className="text-zinc-500 text-[11px] font-sans mt-1">Register a provider above to enable agent orchestration. No default provider is assumed.</div>
+          </div>
+        )}
         {modelModules.map(mod => {
           const result = testResult[mod.id];
           const isTesting = testingId === mod.id;
@@ -420,7 +382,7 @@ export default function ModelCardsTab() {
                   onClick={() => {
                     askConfirmation({
                       title: `De-register Model ${mod.name}?`,
-                      description: 'This computing model profile will be removed from your workspace routing. Active agents using this profile will revert to default settings.',
+                      description: 'This computing model profile will be removed from your workspace routing. Active agents using this profile will become unassigned (no model).',
                       onConfirm: async () => {
                         try {
                           await deleteModelModule(mod.id);
