@@ -216,13 +216,13 @@ export default function RightSidebar() {
 
       {/* Title — larger, calmer */}
       <div className="px-4 py-3.5 border-b border-zinc-900 flex items-center justify-between shrink-0 select-none">
-        <h2 className="text-[11px] font-mono tracking-[0.08em] font-bold text-zinc-400 flex items-center gap-2 uppercase">
+        <h2 className="text-[13px] font-medium text-zinc-300 flex items-center gap-2">
           <span className="w-7 h-7 rounded-lg bg-zinc-900 border border-zinc-800 flex items-center justify-center">
             <Network size={12} className="text-zinc-500" />
           </span>
-          Operations Roster
+          Operations roster
         </h2>
-        <span className="text-[11px] font-mono text-zinc-500 bg-zinc-900 border border-zinc-800 px-2 py-1 rounded-full">{agents.length}</span>
+        <span className="tnum text-[11px] font-mono text-zinc-400 bg-zinc-900 border border-zinc-800 px-2 py-1 rounded-md">{agents.length}</span>
       </div>
 
       {/* Roster Area — airy spacing, progressive disclosure */}
@@ -230,10 +230,10 @@ export default function RightSidebar() {
         {/* Tier L0 */}
         {tierL0.length > 0 && (
           <div className="space-y-2">
-            <h3 className="text-[11px] font-mono font-bold text-cyan-400 tracking-[0.06em] px-1 flex items-center gap-2">
-              <span className="w-1.5 h-1.5 rounded-full bg-cyan-400" />
-              TIER L0 — SURVEILLANCE
-              <span className="ml-auto text-[10px] font-mono font-semibold bg-cyan-500/10 border border-cyan-500/20 text-cyan-300 px-1.5 py-0.5 rounded-full">{tierL0.length}</span>
+            <h3 className="text-[13px] font-medium text-zinc-300 px-1 flex items-center gap-2">
+              <span className="w-1.5 h-1.5 rounded-sm bg-cyan-400" />
+              L0 · Surveillance
+              <span className="tnum ml-auto text-[10px] font-mono font-medium bg-cyan-500/10 border border-cyan-500/20 text-cyan-300 px-1.5 py-0.5 rounded">{tierL0.length}</span>
             </h3>
             <div className="space-y-1">
               {tierL0.map(ag => <AgentRow key={ag.id} {...ag} onOpen={handleOpenAgent} />)}
@@ -244,10 +244,10 @@ export default function RightSidebar() {
         {/* Tier L1 */}
         {tierL1.length > 0 && (
           <div className="space-y-2" id="roster-tier-l1">
-            <h3 className="text-[11px] font-mono font-bold text-rose-400 tracking-[0.06em] px-1 flex items-center gap-2">
-              <span className="w-1.5 h-1.5 rounded-full bg-rose-400" />
-              TIER L1 — EXECUTIVE
-              <span className="ml-auto text-[10px] font-mono font-semibold bg-rose-500/10 border border-rose-500/20 text-rose-300 px-1.5 py-0.5 rounded-full">{tierL1.length}</span>
+            <h3 className="text-[13px] font-medium text-zinc-300 px-1 flex items-center gap-2">
+              <span className="w-1.5 h-1.5 rounded-sm bg-rose-400" />
+              L1 · Executive
+              <span className="tnum ml-auto text-[10px] font-mono font-medium bg-rose-500/10 border border-rose-500/20 text-rose-300 px-1.5 py-0.5 rounded">{tierL1.length}</span>
             </h3>
             <div className="space-y-1">
               {tierL1.map(ag => <AgentRow key={ag.id} {...ag} onOpen={handleOpenAgent} />)}
@@ -258,10 +258,10 @@ export default function RightSidebar() {
         {/* Tier L2 */}
         {tierL2.length > 0 && (
           <div className="space-y-2">
-            <h3 className="text-[11px] font-mono font-bold text-indigo-400 tracking-[0.06em] px-1 flex items-center gap-2">
-              <span className="w-1.5 h-1.5 rounded-full bg-indigo-400" />
-              TIER L2 — COORDINATORS
-              <span className="ml-auto text-[10px] font-mono font-semibold bg-indigo-500/10 border border-indigo-500/20 text-indigo-300 px-1.5 py-0.5 rounded-full">{tierL2.length}</span>
+            <h3 className="text-[13px] font-medium text-zinc-300 px-1 flex items-center gap-2">
+              <span className="w-1.5 h-1.5 rounded-sm bg-indigo-400" />
+              L2 · Coordinators
+              <span className="tnum ml-auto text-[10px] font-mono font-medium bg-indigo-500/10 border border-indigo-500/20 text-indigo-300 px-1.5 py-0.5 rounded">{tierL2.length}</span>
             </h3>
             <div className="space-y-1">
               {tierL2.map(ag => <AgentRow key={ag.id} {...ag} onOpen={handleOpenAgent} />)}
@@ -272,10 +272,10 @@ export default function RightSidebar() {
         {/* Tier L3 */}
         {tierL3.length > 0 && (
           <div className="space-y-2">
-            <h3 className="text-[11px] font-mono font-bold text-emerald-400 tracking-[0.06em] px-1 flex items-center gap-2">
-              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
-              TIER L3 — WORKERS
-              <span className="ml-auto text-[10px] font-mono font-semibold bg-emerald-500/10 border border-emerald-500/20 text-emerald-300 px-1.5 py-0.5 rounded-full">{tierL3.length}</span>
+            <h3 className="text-[13px] font-medium text-zinc-300 px-1 flex items-center gap-2">
+              <span className="w-1.5 h-1.5 rounded-sm bg-emerald-400" />
+              L3 · Workers
+              <span className="tnum ml-auto text-[10px] font-mono font-medium bg-emerald-500/10 border border-emerald-500/20 text-emerald-300 px-1.5 py-0.5 rounded">{tierL3.length}</span>
             </h3>
             <div className="space-y-1">
               {tierL3.map(ag => <AgentRow key={ag.id} {...ag} onOpen={handleOpenAgent} />)}
@@ -297,16 +297,16 @@ export default function RightSidebar() {
       {/* Bottom Telemetry Dashboard — readable, airy */}
       <div className="bg-[#09090b] border-t border-zinc-900 p-4 pb-[max(1rem,env(safe-area-inset-bottom))] space-y-3.5 shrink-0 select-none">
         <div className="flex items-center justify-between">
-          <h4 className="text-[11px] font-mono font-bold text-zinc-400 flex items-center gap-1.5 uppercase tracking-wide">
+          <h4 className="text-[13px] font-medium text-zinc-300 flex items-center gap-1.5">
             <BarChart3 size={12} className="text-zinc-500" />
-            <span>{telemetryTab === 'channel' ? 'Channel Telemetry' : 'Global Telemetry'}</span>
+            <span>{telemetryTab === 'channel' ? 'Channel telemetry' : 'Global telemetry'}</span>
           </h4>
-          <div className="flex bg-zinc-900 rounded-full p-1 border border-zinc-800" role="tablist" aria-label="Telemetry scope">
+          <div className="flex bg-zinc-900 rounded-lg p-1 border border-zinc-800" role="tablist" aria-label="Telemetry scope">
             <button
               onClick={() => setTelemetryTab('channel')}
               role="tab"
               aria-selected={telemetryTab === 'channel'}
-              className={`px-3 py-1 text-[11px] font-mono font-semibold uppercase rounded-full transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500/30 cursor-pointer touch-manipulation ${telemetryTab === 'channel' ? 'bg-zinc-800 text-zinc-100 shadow-sm border border-zinc-700' : 'text-zinc-500 hover:text-zinc-300'}`}
+              className={`px-3 py-1 text-[11px] font-mono font-medium rounded-md transition-colors duration-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500/30 cursor-pointer touch-manipulation ${telemetryTab === 'channel' ? 'bg-zinc-800 text-zinc-100 shadow-sm border border-zinc-700' : 'text-zinc-500 hover:text-zinc-300'}`}
             >
               Channel
             </button>
@@ -314,7 +314,7 @@ export default function RightSidebar() {
               onClick={() => setTelemetryTab('global')}
               role="tab"
               aria-selected={telemetryTab === 'global'}
-              className={`px-3 py-1 text-[11px] font-mono font-semibold uppercase rounded-full transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500/30 cursor-pointer touch-manipulation ${telemetryTab === 'global' ? 'bg-zinc-800 text-zinc-100 shadow-sm border border-zinc-700' : 'text-zinc-500 hover:text-zinc-300'}`}
+              className={`px-3 py-1 text-[11px] font-mono font-medium rounded-md transition-colors duration-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500/30 cursor-pointer touch-manipulation ${telemetryTab === 'global' ? 'bg-zinc-800 text-zinc-100 shadow-sm border border-zinc-700' : 'text-zinc-500 hover:text-zinc-300'}`}
             >
               Global
             </button>
@@ -323,41 +323,41 @@ export default function RightSidebar() {
 
         <div className="grid grid-cols-2 gap-2.5 text-left">
           <div className="bg-zinc-900/70 p-3 rounded-xl border border-zinc-800 leading-tight">
-            <div className="flex items-center gap-1.5 text-[10px] font-mono text-zinc-500 uppercase tracking-wide">
+            <div className="flex items-center gap-1.5 text-[11px] font-medium text-zinc-400">
               <Database size={11} className="text-zinc-500" />
               <span>Tokens</span>
             </div>
-            <div className="text-[13px] font-semibold text-zinc-100 font-mono mt-1.5 tracking-tight">
+            <div className="tnum text-[13px] font-semibold text-zinc-100 font-mono mt-1.5 tracking-tight">
               {ledgerStatus === 'loading' && telemetryTab === 'global' ? <span className="inline-block h-4 w-16 skeleton" /> : calculatedTokens.toLocaleString()}
             </div>
           </div>
 
           <div className="bg-zinc-900/70 p-3 rounded-xl border border-zinc-800 leading-tight">
-            <div className="flex items-center gap-1.5 text-[10px] font-mono text-zinc-500 uppercase tracking-wide">
+            <div className="flex items-center gap-1.5 text-[11px] font-medium text-zinc-400">
               <Coins size={11} className="text-emerald-500" />
-              <span>Est Cost</span>
+              <span>Est. cost</span>
             </div>
-            <div className="text-[13px] font-semibold text-emerald-400 font-mono mt-1.5 tracking-tight">
+            <div className="tnum text-[13px] font-semibold text-emerald-400 font-mono mt-1.5 tracking-tight">
               ${calculatedBudgetSpent.toFixed(4)}
             </div>
           </div>
 
           <div className="bg-zinc-900/70 p-3 rounded-xl border border-zinc-800 leading-tight">
-            <div className="flex items-center gap-1.5 text-[10px] font-mono text-zinc-500 uppercase tracking-wide">
+            <div className="flex items-center gap-1.5 text-[11px] font-medium text-zinc-400">
               <Activity size={11} className="text-zinc-500" />
               <span>Active</span>
             </div>
-            <div className="text-[13px] font-semibold text-zinc-100 font-mono mt-1.5">
+            <div className="tnum text-[13px] font-semibold text-zinc-100 font-mono mt-1.5">
               {activeCount} / {totalAgentsCount}
             </div>
           </div>
 
           <div className="bg-zinc-900/70 p-3 rounded-xl border border-zinc-800 leading-tight">
-            <div className="flex items-center gap-1.5 text-[10px] font-mono text-zinc-500 uppercase tracking-wide">
+            <div className="flex items-center gap-1.5 text-[11px] font-medium text-zinc-400">
               <Network size={11} className="text-zinc-500" />
               <span>Channels</span>
             </div>
-            <div className="text-[13px] font-semibold text-zinc-100 font-mono mt-1.5">
+            <div className="tnum text-[13px] font-semibold text-zinc-100 font-mono mt-1.5">
               {currentChannelsCount}
             </div>
           </div>

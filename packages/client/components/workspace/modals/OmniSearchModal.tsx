@@ -185,7 +185,7 @@ export default function OmniSearchModal({ open, onClose }: OmniSearchModalProps)
             animate={{ opacity: 1, scale: 1, y: 0 }}
             exit={{ opacity: 0, scale: 0.98, y: -10 }}
             transition={{ type: "spring", stiffness: 420, damping: 32 }}
-            className="relative w-full max-w-[640px] bg-[#141416] border border-zinc-800 rounded-[20px] overflow-hidden shadow-[0_24px_64px_rgba(0,0,0,0.6)] flex flex-col max-h-[min(78vh,640px)]"
+            className="relative w-full max-w-[640px] bg-[#141416] border border-zinc-800 rounded-xl overflow-hidden shadow-[0_24px_64px_rgba(10,14,32,0.6)] flex flex-col max-h-[min(78vh,640px)]"
           >
             {/* Search Input Bar — 48px min, thumb comfortable */}
             <div className="flex items-center px-3 sm:px-4 py-3 border-b border-zinc-800 bg-zinc-950/60 shrink-0 gap-2">
@@ -214,8 +214,8 @@ export default function OmniSearchModal({ open, onClose }: OmniSearchModalProps)
               {/* Channels Section */}
               {filteredChannels.length > 0 && (
                 <div className="space-y-1.5">
-                  <div className="text-[11px] font-mono font-bold text-zinc-500 px-2 py-1 uppercase tracking-widest flex items-center gap-2">
-                    <Hash size={11} /> Channels <span className="ml-auto bg-zinc-900 border border-zinc-800 px-1.5 py-0.5 rounded-full text-[10px]">{filteredChannels.length}</span>
+                  <div className="text-[13px] font-medium text-zinc-400 px-2 py-1 flex items-center gap-2">
+                    <Hash size={12} /> Channels <span className="tnum ml-auto text-[11px] font-mono text-zinc-500">{filteredChannels.length}</span>
                   </div>
                   {filteredChannels.map(ch => (
                     <button
@@ -244,7 +244,7 @@ export default function OmniSearchModal({ open, onClose }: OmniSearchModalProps)
               {/* Agents Section */}
               {filteredAgents.length > 0 && (
                 <div className="space-y-1">
-                  <div className="text-[10px] font-mono font-bold text-zinc-500 px-2 py-0.5 uppercase tracking-wider">
+                  <div className="text-[13px] font-medium text-zinc-400 px-2 py-1">
                     Agents ({filteredAgents.length})
                   </div>
                   {filteredAgents.map(ag => (
@@ -261,7 +261,7 @@ export default function OmniSearchModal({ open, onClose }: OmniSearchModalProps)
                         <span className="font-semibold text-zinc-200">{ag.name}</span>
                         <span className="text-zinc-500 font-mono text-[10px]">{ag.species} • L{ag.level}</span>
                       </div>
-                      <span className="text-[10px] font-mono text-indigo-400 bg-indigo-500/10 px-2 py-0.5 rounded border border-indigo-500/20">View Profile</span>
+                        <span className="text-[11px] text-indigo-400 group-hover:text-indigo-300">View profile →</span>
                     </button>
                   ))}
                 </div>
@@ -270,7 +270,7 @@ export default function OmniSearchModal({ open, onClose }: OmniSearchModalProps)
               {/* Tools Section */}
               {filteredTools.length > 0 && (
                 <div className="space-y-1">
-                  <div className="text-[10px] font-mono font-bold text-zinc-500 px-2 py-0.5 uppercase tracking-wider">
+                  <div className="text-[13px] font-medium text-zinc-400 px-2 py-1">
                     Enabled Tools ({filteredTools.length})
                   </div>
                   {filteredTools.map(t => (
@@ -279,7 +279,7 @@ export default function OmniSearchModal({ open, onClose }: OmniSearchModalProps)
                       className="w-full flex items-center justify-between px-2.5 py-2 hover:bg-zinc-900/50 rounded-lg text-xs font-sans text-left"
                     >
                       <div className="flex items-center gap-2">
-                        <Hammer size={14} className="text-emerald-400 shrink-0" />
+                        <Hammer size={14} className="text-zinc-500 shrink-0" />
                         <span className="font-mono font-semibold text-zinc-200">{t.id}</span>
                         <span className="text-zinc-400 text-[11px]">{t.name}</span>
                       </div>
@@ -292,7 +292,7 @@ export default function OmniSearchModal({ open, onClose }: OmniSearchModalProps)
               {/* Message Matches */}
               {filteredMessages.length > 0 && (
                 <div className="space-y-1">
-                  <div className="text-[10px] font-mono font-bold text-zinc-500 px-2 py-0.5 uppercase tracking-wider">
+                  <div className="text-[13px] font-medium text-zinc-400 px-2 py-1">
                     Matching Messages ({filteredMessages.length})
                   </div>
                   {filteredMessages.map(m => (

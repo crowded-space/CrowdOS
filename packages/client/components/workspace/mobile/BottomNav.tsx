@@ -76,10 +76,10 @@ export default function BottomNav() {
         badge={
           (hasMention || totalUnread > 0) ? (
             <span
-              className={`absolute -top-0.5 -right-1 rounded-full flex items-center justify-center font-mono font-bold text-white shadow-md border border-[#0A0A0B] ${
+              className={`absolute -top-0.5 -right-1 flex items-center justify-center font-mono font-semibold text-white shadow-md border border-[#0A0A0B] ${
                 hasMention
-                  ? 'w-[10px] h-[10px] bg-rose-500 shadow-[0_0_6px_rgba(239,68,68,0.6)]'
-                  : 'min-w-[16px] h-[16px] px-0.5 bg-rose-500 text-[9px]'
+                  ? 'w-[10px] h-[10px] rounded-full bg-rose-500 shadow-[0_0_6px_rgba(239,68,68,0.6)]'
+                  : 'tnum min-w-[16px] h-[16px] px-0.5 rounded-md bg-rose-500 text-[9px]'
               }`}
             >
               {!hasMention && totalUnread > 99 ? '99+' : !hasMention && totalUnread > 0 ? String(Math.min(totalUnread, 99)) : ''}

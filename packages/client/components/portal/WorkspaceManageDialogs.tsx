@@ -33,7 +33,7 @@ export function WorkspaceIconPicker({
 }) {
   return (
     <div>
-      <p className="text-zinc-500 font-bold font-mono text-[10px] uppercase tracking-widest mb-2">
+      <p className="text-[13px] font-medium text-zinc-400 mb-2">
         Workspace Icon
       </p>
       <div className="grid grid-cols-4 gap-2" role="radiogroup" aria-label="Workspace icon">
@@ -123,7 +123,7 @@ export function WorkspaceDatabaseField({
     setTest({ status: 'testing' });
     try {
       const res = await apiClient.testWorkspaceDatabase(trimmed);
-      setTest({ status: 'ok', message: res.host ? `Connected — ${res.host}${res.database ? `/${res.database}` : ''}` : 'Connected.' });
+      setTest({ status: 'ok', message: res.host ? `Connected to ${res.host}${res.database ? `/${res.database}` : ''}` : 'Connected.' });
     } catch (err) {
       setTest({ status: 'failed', message: err instanceof Error ? err.message : 'Connection failed.' });
     }
@@ -137,7 +137,7 @@ export function WorkspaceDatabaseField({
       onChange({ ...state, provisioned: true });
       setProvision({
         status: 'ok',
-        message: res.message ?? `Schema ready — ${res.migrationsApplied ?? 0} migrations recorded.`,
+        message: res.message ?? `Schema ready. ${res.migrationsApplied ?? 0} migrations recorded.`,
       });
     } catch (err) {
       onChange({ ...state, provisioned: false });
@@ -148,9 +148,9 @@ export function WorkspaceDatabaseField({
   return (
     <div className="space-y-2">
       <div className="flex items-center justify-between gap-2">
-        <label htmlFor="ws-form-db-url" className="text-zinc-500 font-bold font-mono text-[10px] uppercase tracking-widest flex items-center gap-1.5">
+        <label htmlFor="ws-form-db-url" className="text-[13px] font-medium text-zinc-400 flex items-center gap-1.5">
           <Database size={11} />
-          <span>Database · BYODB</span>
+          <span>Database</span>
         </label>
         {configured ? (
           <span className="flex items-center gap-1 text-[10px] font-mono text-emerald-300/90">
@@ -209,7 +209,7 @@ export function WorkspaceDatabaseField({
 
       {configured && initial && initial.schemaReady === false && state.mode === 'keep' ? (
         <p className="text-[11px] text-amber-200/80">
-          Schema not provisioned on this database yet — Replace the URL above, Test it, then Provision schema.
+          Schema not provisioned on this database yet. Replace the URL above, test it, then provision schema.
         </p>
       ) : null}
 
@@ -315,7 +315,7 @@ export function WorkspaceDatabaseField({
               {provision.status === 'failed' && (
                 <p role="alert" className="text-[11px] text-rose-300 flex items-start gap-1.5">
                   <XCircle size={12} className="mt-0.5 shrink-0" />
-                  <span>{provision.message} You can still save — retry provisioning later from settings.</span>
+                  <span>{provision.message} You can still save. Retry provisioning later from settings.</span>
                 </p>
               )}
             </div>
@@ -333,7 +333,7 @@ export function WorkspaceDatabaseField({
       ) : null}
 
       <p className="text-[10px] text-zinc-600 leading-relaxed">
-        Saved to the local <span className="font-mono">.env</span> as <span className="font-mono">CROWDOS_WS_&lt;ID&gt;_DATABASE_URL</span> — takes effect immediately, no restart.
+          Saved to the local <span className="font-mono">.env</span> as <span className="font-mono">CROWDOS_WS_&lt;ID&gt;_DATABASE_URL</span>. Takes effect immediately, no restart.
       </p>
     </div>
   );
@@ -414,7 +414,7 @@ export function WorkspaceFormModal({
                 </h3>
                 <p className="text-xs text-zinc-500 mt-1">
                   {mode === 'create'
-                    ? 'Workspaces are isolated — channels and mounts stay inside.'
+                    ? 'Workspaces are isolated. Channels and mounts stay inside.'
                     : 'Rename or re-skin this workspace. Channels are untouched.'}
                 </p>
               </div>
@@ -424,7 +424,7 @@ export function WorkspaceFormModal({
             </div>
 
             <div className="space-y-1.5">
-              <label htmlFor="ws-form-name" className="text-zinc-500 font-bold font-mono text-[10px] uppercase tracking-widest">
+              <label htmlFor="ws-form-name" className="text-[13px] font-medium text-zinc-400">
                 Workspace name
               </label>
               <input
@@ -545,7 +545,7 @@ export function DeleteWorkspaceWizard({
             className="relative w-full max-w-md bg-[#101013] border border-rose-400/20 rounded-2xl shadow-2xl p-5 space-y-4 max-h-[90dvh] overflow-y-auto"
           >
             <div className="flex items-start gap-3">
-              <div className="w-10 h-10 rounded-full bg-rose-500/10 border border-rose-500/25 text-rose-400 flex items-center justify-center shrink-0">
+              <div className="w-10 h-10 rounded-lg bg-rose-500/10 border border-rose-500/25 text-rose-400 flex items-center justify-center shrink-0">
                 <AlertTriangle size={18} />
               </div>
               <div className="min-w-0">
@@ -553,7 +553,7 @@ export function DeleteWorkspaceWizard({
                   Delete “{workspace.name}”?
                 </h3>
                 <p id="delete-wizard-desc" className="text-xs text-zinc-500 mt-1">
-                  Step {step} of 3 — {steps[step - 1]}. This is irreversible.
+                  Step {step} of 3: {steps[step - 1]}. This is irreversible.
                 </p>
               </div>
             </div>
@@ -567,7 +567,7 @@ export function DeleteWorkspaceWizard({
                 return (
                   <li key={label} className="flex-1">
                     <div className={`h-1.5 rounded-full ${done ? 'bg-rose-500' : current ? 'bg-rose-400/70' : 'bg-zinc-800'}`} />
-                    <p className={`text-[9px] font-mono uppercase tracking-widest mt-1 ${current ? 'text-rose-300' : done ? 'text-rose-400/70' : 'text-zinc-600'}`}>
+                    <p className={`text-[10px] font-medium mt-1 ${current ? 'text-rose-300' : done ? 'text-rose-400/70' : 'text-zinc-600'}`}>
                       {n}. {label}
                     </p>
                   </li>
@@ -580,7 +580,7 @@ export function DeleteWorkspaceWizard({
               <div className="min-w-0">
                 <p className="text-[13px] font-semibold text-zinc-200 truncate">{workspace.name}</p>
                 <p className="text-[10px] font-mono text-zinc-500 truncate">
-                  {workspace.id} · {workspace.categoryCount} categories · {workspace.channelCount} channels
+                  {workspace.id} ({workspace.categoryCount} categories, {workspace.channelCount} channels)
                 </p>
               </div>
             </div>
@@ -626,7 +626,7 @@ export function DeleteWorkspaceWizard({
                   className="w-full bg-zinc-900 border border-zinc-800 focus:border-rose-500/60 focus:ring-2 focus:ring-rose-500/20 rounded-xl px-3 py-2.5 min-h-[44px] text-sm font-mono text-zinc-100 focus:outline-none placeholder-zinc-600"
                 />
                 {nameInput.length > 0 && !nameMatches && (
-                  <p className="text-[11px] text-amber-400">Name does not match yet — check casing and spacing.</p>
+                  <p className="text-[11px] text-amber-400">Name does not match yet. Check casing and spacing.</p>
                 )}
                 {nameMatches && <p className="text-[11px] text-emerald-400">Name matches. You may continue.</p>}
               </div>

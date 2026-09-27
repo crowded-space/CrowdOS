@@ -117,7 +117,7 @@ export default function AgentMessage({
             </button>
             <span 
               onClick={() => openAgentProfileModal(authorId)}
-              className={`text-[10px] font-mono uppercase px-1.5 py-0.5 rounded border ${levelMeta.badgeBg} cursor-pointer hover:opacity-85 transition`}
+              className={`tnum text-[10px] font-mono px-1.5 py-0.5 rounded border ${levelMeta.badgeBg} cursor-pointer hover:opacity-85 transition`}
             >
               {levelMeta.label}
             </span>
@@ -125,7 +125,7 @@ export default function AgentMessage({
               {timeStr}
             </span>
             {runtimeLabel && (
-              <span className="text-[10px] font-mono font-bold px-1.5 py-0.5 rounded-full bg-zinc-900 border border-zinc-800 text-zinc-400 uppercase tracking-wide">
+              <span className="text-[10px] font-mono font-medium px-1.5 py-0.5 rounded bg-zinc-900 border border-zinc-800 text-zinc-400">
                 {runtimeLabel}
               </span>
             )}
@@ -133,21 +133,21 @@ export default function AgentMessage({
 
           <div className="flex items-center gap-1.5 flex-wrap">
             {isStreaming && !isCancelled && (
-              <div className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-indigo-500/10 border border-indigo-500/30 text-[10px] font-mono text-indigo-400 animate-pulse select-none">
+              <div className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded bg-indigo-500/10 border border-indigo-500/30 text-[10px] font-medium text-indigo-400 animate-pulse select-none">
                 <span className="w-1.5 h-1.5 rounded-full bg-indigo-400 animate-ping" />
-                <span>AGENT PROCESSING...</span>
+                <span>Working</span>
               </div>
             )}
             {isCancelled && (
-              <div className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-amber-500/15 border border-amber-500/30 text-[10px] font-mono text-amber-400 select-none">
+              <div className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-amber-500/15 border border-amber-500/30 text-[10px] font-medium text-amber-400 select-none">
                 <Square size={10} className="fill-amber-400" />
-                <span>CANCELLED</span>
+                <span>Cancelled</span>
               </div>
             )}
             {turnStatus === 'failed' && !isCancelled && (
               <div className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-rose-500/10 border border-rose-500/30 text-[10px] font-mono text-rose-400 select-none">
                 <AlertCircle size={10} />
-                <span>TURN FAILED</span>
+                <span>Turn failed</span>
               </div>
             )}
             {isStreaming && !isCancelled && activeChannelId && (
@@ -156,10 +156,10 @@ export default function AgentMessage({
                 onClick={() => activeChannelId && cancelRun(activeChannelId, authorId)}
                 disabled={isCancelling}
                 aria-label="Stop generation"
-                className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full border text-[10px] font-mono font-bold transition active:scale-95 ${isCancelling ? 'bg-zinc-800 border-zinc-700 text-zinc-500 cursor-wait' : 'bg-zinc-900 border-zinc-700 text-zinc-300 hover:bg-zinc-800 hover:border-zinc-600 hover:text-white'}`}
+                className={`inline-flex items-center gap-1 px-2.5 py-1 rounded border text-[10px] font-medium transition active:scale-95 ${isCancelling ? 'bg-zinc-800 border-zinc-700 text-zinc-500 cursor-wait' : 'bg-zinc-900 border-zinc-700 text-zinc-300 hover:bg-zinc-800 hover:border-zinc-600 hover:text-white'}`}
               >
                 <Square size={10} className={isCancelling ? 'fill-zinc-500' : 'fill-zinc-300'} />
-                <span>{isCancelling ? 'CANCELLING...' : 'STOP'}</span>
+                <span>{isCancelling ? 'Stopping' : 'Stop'}</span>
               </button>
             )}
           </div>
@@ -174,7 +174,7 @@ export default function AgentMessage({
             >
               <div className="flex items-center gap-1.5">
                 <Brain size={12} className="text-indigo-400" />
-                <span>{monologueExpanded ? 'HIDE INTERNAL MONOLOGUE' : 'SHOW INTERNAL MONOLOGUE'}</span>
+                <span>{monologueExpanded ? 'Hide reasoning' : 'Show reasoning'}</span>
               </div>
               <span className="text-[9px] text-zinc-550 font-mono">
                 {metadata.monologue.length} chars
@@ -221,25 +221,25 @@ export default function AgentMessage({
                   <span className="w-6 h-6 rounded-lg bg-zinc-900 border border-zinc-800 flex items-center justify-center shrink-0">
                     <Wrench size={11} className="text-zinc-500" />
                   </span>
-                  <span className="text-[10px] font-mono font-bold tracking-widest text-zinc-400">
-                    {toolsExpanded ? 'HIDE TOOL CALLS' : 'SHOW TOOL CALLS'}
+                  <span className="text-[11px] font-medium text-zinc-400">
+                    {toolsExpanded ? 'Hide tool calls' : 'Show tool calls'}
                   </span>
-                  <span className="px-2 py-0.5 rounded-full bg-zinc-900 border border-zinc-800 text-[10px] font-mono font-bold text-zinc-400">
+                  <span className="tnum px-2 py-0.5 rounded bg-zinc-900 border border-zinc-800 text-[10px] font-mono font-medium text-zinc-400">
                     {allTools.length}
                   </span>
                   {/* quick status summary — saves a click when spammed */}
                   <span className="hidden sm:flex items-center gap-1 ml-1">
                     {allTools.some(t => t.status === 'working') && (
-                      <span className="px-1.5 py-0.5 rounded-full bg-amber-500/15 border border-amber-500/20 text-[9px] font-mono font-bold text-amber-400 animate-pulse">RUNNING</span>
+                      <span className="px-1.5 py-0.5 rounded bg-amber-500/15 border border-amber-500/20 text-[9px] font-medium text-amber-400 animate-pulse">Running</span>
                     )}
                     {allTools.filter(t => t.status === 'error').length > 0 && (
-                      <span className="px-1.5 py-0.5 rounded-full bg-rose-500/15 border border-rose-500/20 text-[9px] font-mono font-bold text-rose-400">
-                        {allTools.filter(t => t.status === 'error').length} ERR
+                      <span className="tnum px-1.5 py-0.5 rounded bg-rose-500/15 border border-rose-500/20 text-[9px] font-medium text-rose-400">
+                        {allTools.filter(t => t.status === 'error').length} failed
                       </span>
                     )}
                     {allTools.filter(t => t.status === 'success').length > 0 && allTools.filter(t => t.status === 'error').length === 0 && !allTools.some(t => t.status === 'working') && (
-                      <span className="px-1.5 py-0.5 rounded-full bg-emerald-500/15 border border-emerald-500/20 text-[9px] font-mono font-bold text-emerald-400">
-                        {allTools.filter(t => t.status === 'success').length} OK
+                      <span className="tnum px-1.5 py-0.5 rounded bg-emerald-500/15 border border-emerald-500/20 text-[9px] font-medium text-emerald-400">
+                        {allTools.filter(t => t.status === 'success').length} done
                       </span>
                     )}
                   </span>
@@ -284,7 +284,7 @@ export default function AgentMessage({
       </div>
 
       {(canRegenerate || canRetry) && (
-        <div className="absolute -top-2 right-2 hidden group-hover:flex items-center gap-1 bg-zinc-900 border border-zinc-800 rounded-full shadow-lg p-1">
+        <div className="absolute -top-2 right-2 hidden group-hover:flex group-focus-within:flex focus-within:flex items-center gap-1 bg-zinc-900 border border-zinc-800 rounded-[4px] shadow-lg p-1">
           {canRegenerate && (
             <button
               onClick={() => id && regenerate(id)}

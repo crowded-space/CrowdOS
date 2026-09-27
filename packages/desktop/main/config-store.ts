@@ -7,6 +7,7 @@ import { dirname } from "node:path";
 export interface DesktopFileConfig {
   backendPort?: number;
   windowBounds?: { x?: number; y?: number; width: number; height: number };
+  recentWorkspaceIds?: string[];
 }
 
 export function loadDesktopConfig(configFile: string): DesktopFileConfig {

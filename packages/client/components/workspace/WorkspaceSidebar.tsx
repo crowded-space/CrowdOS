@@ -5,6 +5,7 @@ import { useShallow } from 'zustand/react/shallow';
 import WorkspaceDropdown from './WorkspaceDropdown';
 import InlineChannelModal from './modals/InlineChannelModal';
 import ChannelButton from './ChannelButton';
+import ThemeToggle from '@/components/ui/ThemeToggle';
 
 export default function WorkspaceSidebar() {
   const {
@@ -99,7 +100,7 @@ export default function WorkspaceSidebar() {
                     onClick={() => toggleCategoryCollapse(category.id)}
                     aria-label={`${category.collapsed ? 'Expand' : 'Collapse'} category ${category.name}`}
                     aria-expanded={!category.collapsed}
-                    className="flex items-center gap-1.5 text-[11px] font-mono tracking-[0.08em] font-bold text-zinc-500 hover:text-zinc-300 transition-colors cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500/30 rounded-lg text-left px-1.5 py-2 min-h-[36px] touch-manipulation active:text-zinc-200"
+                    className="flex items-center gap-1.5 text-[13px] font-medium text-zinc-400 hover:text-zinc-200 transition-colors duration-200 cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500/30 rounded-lg text-left px-1.5 py-2 min-h-[36px] touch-manipulation active:text-zinc-200"
                   >
                     <span className="w-5 h-5 rounded-md bg-zinc-900/60 border border-zinc-800/60 flex items-center justify-center shrink-0">
                       {category.collapsed ? <ChevronRight size={11} aria-hidden="true" /> : <ChevronDown size={11} aria-hidden="true" />}
@@ -175,17 +176,20 @@ export default function WorkspaceSidebar() {
           </div>
         </div>
 
-        <button
-          onClick={() => {
-            setWorkspaceSettingsTab('overview');
-            setSettingsModalOpen(true);
-          }}
-          aria-label="Open settings"
-          className="w-11 h-11 rounded-xl bg-zinc-900/60 hover:bg-zinc-900 border border-zinc-800/60 hover:border-zinc-700 text-zinc-400 hover:text-zinc-100 transition focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500/30 cursor-pointer flex items-center justify-center shrink-0 active:scale-95 touch-manipulation"
-          title="Open Settings Console"
-        >
-          <Settings2 size={18} className="shrink-0" />
-        </button>
+        <div className="flex items-center gap-2 shrink-0">
+          <ThemeToggle />
+          <button
+            onClick={() => {
+              setWorkspaceSettingsTab('overview');
+              setSettingsModalOpen(true);
+            }}
+            aria-label="Open settings"
+            className="w-11 h-11 rounded-xl bg-zinc-900/60 hover:bg-zinc-900 border border-zinc-800/60 hover:border-zinc-700 text-zinc-400 hover:text-zinc-100 transition-colors duration-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500/30 cursor-pointer flex items-center justify-center shrink-0 active:scale-95 touch-manipulation"
+            title="Open settings console"
+          >
+            <Settings2 size={18} className="shrink-0" />
+          </button>
+        </div>
       </div>
     </div>
   );

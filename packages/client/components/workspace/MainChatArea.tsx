@@ -756,7 +756,7 @@ export default function MainChatArea({ onOpenSearch }: MainChatAreaProps) {
               onClick={() => activeChannelId && cancelRun(activeChannelId)}
               disabled={activeChannelId ? Object.keys(cancellingByAgent).some(k => k.startsWith(`${activeChannelId}:`)) : false}
               aria-label="Stop generation"
-              className={`hidden sm:inline-flex items-center gap-1.5 px-3 min-h-[38px] rounded-xl border text-xs font-mono font-bold transition active:scale-[0.97] ${Object.keys(cancellingByAgent).some(k => activeChannelId && k.startsWith(`${activeChannelId}:`)) ? 'bg-zinc-800 border-zinc-700 text-zinc-500 cursor-wait' : 'bg-rose-600 hover:bg-rose-500 border-rose-500/20 text-white shadow-[0_2px_10px_rgba(244,63,94,0.25)]'}`}
+              className={`inline-flex items-center gap-1.5 px-3 min-h-[38px] rounded-[4px] border text-xs font-mono font-bold transition active:scale-[0.97] ${Object.keys(cancellingByAgent).some(k => activeChannelId && k.startsWith(`${activeChannelId}:`)) ? 'bg-zinc-800 border-zinc-700 text-zinc-500 cursor-wait' : 'bg-rose-600 hover:bg-rose-500 border-rose-500/20 text-white shadow-[0_2px_10px_rgba(244,63,94,0.25)]'}`}
               title="Stop generation"
             >
               <Square size={12} className="fill-white" />
@@ -868,41 +868,44 @@ export default function MainChatArea({ onOpenSearch }: MainChatAreaProps) {
           renderedMessages
         ) : (
           /* Empty Channel state — premium onboarding */
-          <div className="flex flex-col items-center justify-center min-h-[60vh] text-center p-6 sm:p-8 animate-fade-in-up select-none">
-            <div className="w-14 h-14 sm:w-16 sm:h-16 rounded-2xl bg-zinc-900 border border-zinc-800 flex items-center justify-center text-zinc-600 mb-4 shadow-inner">
+          <div className="relative flex flex-col items-center justify-center min-h-[60vh] text-center p-6 sm:p-8 animate-fade-in-up select-none">
+            <div className="absolute inset-0 pointer-events-none" aria-hidden>
+              <div className="absolute top-1/3 left-1/2 -translate-x-1/2 w-[420px] h-[220px] bg-[#465EDB]/8 blur-[100px] rounded-full" />
+            </div>
+            <div className="relative w-14 h-14 sm:w-16 sm:h-16 rounded-2xl bg-zinc-900 border border-zinc-800 flex items-center justify-center text-zinc-500 mb-4 shadow-[0_8px_24px_rgba(10,14,32,0.5)]">
               <Hash size={28} />
             </div>
-            <h3 className="font-semibold text-zinc-100 text-[15px] sm:text-base tracking-[-0.015em]">
+            <h3 className="relative font-semibold text-zinc-100 text-lg sm:text-xl tracking-[-0.02em] text-balance">
               Welcome to #{activeChannel ? activeChannel.name : 'crowdos'}
             </h3>
-            <p className="text-[13px] sm:text-sm text-zinc-500 max-w-[320px] mt-2 leading-relaxed font-sans">
+            <p className="relative text-[13px] sm:text-sm text-zinc-400 max-w-[38ch] mt-2 leading-relaxed font-sans text-pretty">
               This is the start of the channel. Mention an agent to put the swarm to work.
             </p>
 
             {/* One-tap dispatch chips — larger, thumb-friendly */}
             {quickStartAgents.length > 0 && (
-              <div className="flex flex-wrap items-center justify-center gap-2.5 mt-6 max-w-sm">
+              <div className="relative flex flex-wrap items-center justify-center gap-2.5 mt-6 max-w-sm">
                 {quickStartAgents.map(ag => (
                   <button
                     key={ag.id}
                     onClick={() => handleQuickStart(ag)}
-                    className="flex items-center gap-2.5 pl-3 pr-4 py-2.5 min-h-[44px] rounded-full bg-zinc-900 border border-zinc-800 hover:border-indigo-500/30 hover:bg-zinc-800/80 transition-all text-[13px] text-zinc-200 cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500/30 active:scale-[0.98] touch-manipulation shadow-sm"
+                    className="flex items-center gap-2.5 pl-3 pr-4 py-2.5 min-h-[44px] rounded-xl bg-zinc-900 border border-zinc-800 hover:border-indigo-500/30 hover:bg-zinc-800/80 transition-colors duration-200 text-[13px] text-zinc-200 cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500/30 active:scale-[0.98] touch-manipulation shadow-sm"
                   >
                     <PresenceIndicator status={ag.status} size="sm" />
                     <span className="font-medium">@{ag.name}</span>
-                    <span className="text-[10px] font-mono text-zinc-500 uppercase tracking-wide px-1.5 py-0.5 rounded-full bg-zinc-950 border border-zinc-800">L{ag.level}</span>
+                    <span className="tnum text-[10px] font-mono text-zinc-400 px-1.5 py-0.5 rounded bg-zinc-950 border border-zinc-800">L{ag.level}</span>
                   </button>
                 ))}
               </div>
             )}
 
             {isSwarmActive && (
-              <div className="flex items-center gap-2 mt-6 px-3 py-1.5 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-[11px] font-mono text-emerald-400">
+              <div className="relative flex items-center gap-2 mt-6 px-3 py-1.5 rounded-md bg-emerald-500/10 border border-emerald-500/20 text-[11px] font-mono text-emerald-400">
                 <span className="relative flex h-2 w-2">
                   <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-50" />
                   <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-400" />
                 </span>
-                Swarm operational — agents standing by
+                Swarm operational, agents standing by
               </div>
             )}
           </div>
@@ -914,10 +917,10 @@ export default function MainChatArea({ onOpenSearch }: MainChatAreaProps) {
           <div className="sticky bottom-3 flex justify-center w-full pointer-events-none z-20">
             <button
               onClick={() => scrollToBottom(true)}
-              className="pointer-events-auto flex items-center gap-1.5 px-3.5 py-2 min-h-[36px] rounded-full bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold shadow-xl shadow-black/40 transition-transform hover:scale-[1.03] active:scale-[0.97] cursor-pointer border border-indigo-400/30"
+              className="pointer-events-auto flex items-center gap-1.5 px-3.5 py-2 min-h-[36px] rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-medium shadow-[0_8px_24px_rgba(10,14,32,0.55)] transition-all duration-200 hover:scale-[1.03] active:scale-[0.97] cursor-pointer border border-indigo-400/30"
             >
               {missedCount > 0 ? (
-                <span className="min-w-[18px] h-[18px] px-1 flex items-center justify-center rounded-full bg-white/20 text-[10px] font-mono font-bold">
+                <span className="tnum min-w-[18px] h-[18px] px-1 flex items-center justify-center rounded bg-white/20 text-[10px] font-mono font-semibold">
                   {missedCount}
                 </span>
               ) : (
@@ -931,9 +934,9 @@ export default function MainChatArea({ onOpenSearch }: MainChatAreaProps) {
 
       {/* Dynamic Mention Suggestion — floats above composer, thumb-reachable */}
       {showMentions && filteredAgents.length > 0 && (
-        <div className="mx-3 sm:mx-4 bg-[#1A1A1E] border border-zinc-800 rounded-2xl shadow-2xl p-2 max-h-52 overflow-y-auto scrollbar-thin overscroll-contain mb-2 animate-scale-in" role="listbox" aria-label="Agent mentions">
-          <div className="text-[10px] font-mono font-bold text-zinc-500 px-2.5 py-1 select-none tracking-widest">
-            AGENTS — TAP TO MENTION
+        <div className="mx-3 sm:mx-4 bg-[#1A1A1E] border border-zinc-800 rounded-2xl shadow-[0_16px_48px_rgba(10,14,32,0.6)] p-2 max-h-52 overflow-y-auto scrollbar-thin overscroll-contain mb-2 animate-scale-in" role="listbox" aria-label="Agent mentions">
+          <div className="text-[13px] font-medium text-zinc-400 px-2.5 py-1 select-none">
+            Agents: tap to mention
           </div>
           {filteredAgents.map((ag, index) => (
             <button
@@ -947,8 +950,8 @@ export default function MainChatArea({ onOpenSearch }: MainChatAreaProps) {
               }`}
             >
               <PresenceIndicator status={ag.status} size="sm" />
-              <span className="font-semibold">{ag.name}</span>
-              <span className={`text-[10px] font-mono px-1.5 py-0.5 rounded-full border ${index===mentionIndex ? 'bg-white/15 border-white/20 text-white' : 'bg-zinc-900 border-zinc-800 text-zinc-500'}`}>L{ag.level}</span>
+              <span className="font-medium">{ag.name}</span>
+              <span className={`tnum text-[10px] font-mono px-1.5 py-0.5 rounded border ${index===mentionIndex ? 'bg-white/15 border-white/20 text-white' : 'bg-zinc-900 border-zinc-800 text-zinc-500'}`}>L{ag.level}</span>
             </button>
           ))}
         </div>
@@ -959,7 +962,7 @@ export default function MainChatArea({ onOpenSearch }: MainChatAreaProps) {
 
         {/* Code Preview Pane (Popup) — sheet-style, thumb-friendly */}
         {selectedSandboxFile && (
-          <div className={`absolute bottom-full left-2 right-2 sm:left-3 sm:right-3 mb-3 flex flex-col bg-[#0c0c0f]/95 backdrop-blur-xl rounded-2xl border border-zinc-800 shadow-[0_-12px_40px_rgba(0,0,0,0.6)] z-20 overflow-hidden transition-all duration-300 ${isSandboxMinimized ? 'h-[44px]' : 'h-[min(56vh,320px)] animate-slide-up'}`}>
+          <div className={`absolute bottom-full left-2 right-2 sm:left-3 sm:right-3 mb-3 flex flex-col bg-[#0c0c0f]/95 backdrop-blur-xl rounded-2xl border border-zinc-800 shadow-[0_-12px_40px_rgba(10,14,32,0.6)] z-20 overflow-hidden transition-all duration-300 ${isSandboxMinimized ? 'h-[44px]' : 'h-[min(56vh,320px)] animate-slide-up'}`}>
             <div className="flex items-center justify-between px-3.5 py-2.5 border-b border-zinc-800 bg-zinc-950/70 shrink-0 select-none">
               <div className="flex items-center gap-2.5 min-w-0">
                 <span className="w-7 h-7 rounded-lg bg-zinc-900 border border-zinc-800 flex items-center justify-center shrink-0">
@@ -994,7 +997,7 @@ export default function MainChatArea({ onOpenSearch }: MainChatAreaProps) {
           onDragOver={handleDragOver}
           onDragLeave={handleDragLeave}
           onDrop={handleDrop}
-          className={`bg-[#1E1E21] border transition-all duration-200 rounded-[18px] sm:rounded-[20px] flex flex-col gap-1 focus-within:shadow-[0_8px_32px_rgba(0,0,0,0.45)] focus-within:-translate-y-[1px] focus-within:border-zinc-700/80 ${
+          className={`bg-[#1E1E21] border transition-all duration-200 rounded-xl flex flex-col gap-1 focus-within:shadow-[0_8px_32px_rgba(10,14,32,0.45)] focus-within:-translate-y-[1px] focus-within:border-zinc-700/80 ${
             isDragging
               ? 'border-indigo-500 bg-indigo-500/[0.06] ring-2 ring-indigo-500/20'
               : 'border-zinc-800 focus-within:ring-1 focus-within:ring-zinc-700/30'
@@ -1032,7 +1035,7 @@ export default function MainChatArea({ onOpenSearch }: MainChatAreaProps) {
                             }
                           }}
                           aria-label={`Pin ${ag.name}`}
-                          className="p-1.5 text-zinc-500 hover:text-indigo-400 transition-colors hover:bg-zinc-900 rounded-full focus:outline-none cursor-pointer"
+                          className="p-1.5 text-zinc-500 hover:text-indigo-400 transition-colors hover:bg-zinc-900 rounded-md focus:outline-none cursor-pointer"
                           title="Pin this mention"
                         >
                           <Pin size={13} />
@@ -1040,7 +1043,7 @@ export default function MainChatArea({ onOpenSearch }: MainChatAreaProps) {
                         <button
                           onClick={() => setSelectedMentions(prev => prev.filter(m => m.id !== ag.id))}
                           aria-label={`Remove ${ag.name}`}
-                          className="p-1.5 text-zinc-500 hover:text-rose-400 transition-colors hover:bg-zinc-900 rounded-full focus:outline-none cursor-pointer"
+                          className="p-1.5 text-zinc-500 hover:text-rose-400 transition-colors hover:bg-zinc-900 rounded-md focus:outline-none cursor-pointer"
                         >
                           <X size={13} />
                         </button>
@@ -1069,7 +1072,7 @@ export default function MainChatArea({ onOpenSearch }: MainChatAreaProps) {
                       <button
                         onClick={() => removeAttachment(att.id)}
                         aria-label={`Remove ${att.name}`}
-                        className="absolute right-0.5 top-1/2 -translate-y-1/2 p-1.5 text-zinc-500 hover:text-rose-400 transition-colors hover:bg-zinc-900 rounded-full focus:outline-none cursor-pointer"
+                        className="absolute right-0.5 top-1/2 -translate-y-1/2 p-1.5 text-zinc-500 hover:text-rose-400 transition-colors hover:bg-zinc-900 rounded-md focus:outline-none cursor-pointer"
                       >
                         <X size={13} />
                       </button>
@@ -1106,7 +1109,7 @@ export default function MainChatArea({ onOpenSearch }: MainChatAreaProps) {
                             }
                           }}
                           aria-label={`Unpin ${ag.name}`}
-                          className="absolute right-0.5 top-1/2 -translate-y-1/2 p-1.5 text-indigo-400 hover:text-rose-400 transition-colors hover:bg-indigo-500/20 rounded-full focus:outline-none cursor-pointer"
+                          className="absolute right-0.5 top-1/2 -translate-y-1/2 p-1.5 text-indigo-400 hover:text-rose-400 transition-colors hover:bg-indigo-500/20 rounded-md focus:outline-none cursor-pointer"
                         >
                           <X size={13} />
                         </button>
@@ -1129,7 +1132,7 @@ export default function MainChatArea({ onOpenSearch }: MainChatAreaProps) {
             enterKeyHint={isCoarsePointer ? 'enter' : 'send'}
             placeholder={
               isDragging
-                ? "Drop file(s) here — release to attach"
+                ? "Drop files here, release to attach"
                 : `Message #${activeChannel ? activeChannel.name : 'operational-matrix'}`
             }
             className="w-full bg-transparent border-0 text-[16px] sm:text-[14px] text-zinc-100 placeholder-zinc-500 focus:ring-0 focus:outline-none resize-none px-4 pt-4 pb-2 md:py-3.5 leading-[1.5] caret-indigo-400 select-text min-h-[52px] max-h-[160px] overflow-y-auto scrollbar-thin"

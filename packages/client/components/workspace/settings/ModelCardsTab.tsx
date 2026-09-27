@@ -198,14 +198,14 @@ export default function ModelCardsTab() {
       {formOpen && (
         <form onSubmit={handleSave} className="p-4 bg-zinc-950 border border-indigo-500/20 rounded-lg space-y-3.5 shadow-xl animate-fade-in">
           <div className="flex items-center justify-between border-b border-zinc-900 pb-2">
-            <span className="font-mono font-bold text-indigo-400 uppercase text-[10px]">
-              {editingId ? 'Edit Model Profile' : 'Configure New Model Module'}
+            <span className="font-medium text-indigo-400 text-[12px]">
+              {editingId ? 'Edit model profile' : 'New model module'}
             </span>
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 leading-snug">
             <div className="space-y-1">
-              <label className="text-zinc-500 block font-bold font-mono text-[10px]">MODULE LABEL NAME</label>
+              <label className="text-zinc-500 block font-medium text-[11px]">Module name</label>
               <input
                 type="text"
                 required
@@ -217,7 +217,7 @@ export default function ModelCardsTab() {
             </div>
 
             <div className="space-y-1">
-              <label className="text-zinc-500 block font-bold font-mono text-[10px]">PROVIDER INFRASTRUCTURE</label>
+              <label className="text-zinc-500 block font-medium text-[11px]">Provider</label>
               <select
                 value={provider}
                 onChange={(e) => setProvider(e.target.value as ProviderType)}
@@ -234,7 +234,7 @@ export default function ModelCardsTab() {
 
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 leading-snug">
             <div className="space-y-1">
-              <label className="text-zinc-500 block font-bold font-mono text-[10px]">MODEL PROFILE IDENTIFIER</label>
+              <label className="text-zinc-500 block font-medium text-[11px]">Model</label>
               <input
                 type="text"
                 required
@@ -259,7 +259,7 @@ export default function ModelCardsTab() {
             </div>
 
             <div className="space-y-1">
-              <label className="text-zinc-500 block font-bold font-mono text-[10px]">MAX OUTPUT TOKENS</label>
+              <label className="text-zinc-500 block font-medium text-[11px]">Max output tokens</label>
               <input
                 type="number"
                 min="1"
@@ -282,7 +282,7 @@ export default function ModelCardsTab() {
           </div>
 
           <div className="space-y-1">
-            <label className="text-zinc-500 block font-bold font-mono text-[10px]">API KEY SECRET TOKEN</label>
+              <label className="text-zinc-500 block font-medium text-[11px]">API key</label>
             <input
               type="password"
               value={apiKey}
@@ -333,7 +333,7 @@ export default function ModelCardsTab() {
                   <span className="font-semibold text-zinc-200 text-xs truncate">
                     {mod.name}
                   </span>
-                  <span className="px-1.5 py-0.5 rounded bg-zinc-950 border border-zinc-800 text-[9px] font-mono text-zinc-450 uppercase">
+                  <span className="px-1.5 py-0.5 rounded bg-zinc-950 border border-zinc-800 text-[9px] font-mono text-zinc-450">
                     {mod.provider || 'google'}
                   </span>
                 </div>

@@ -1,369 +1,143 @@
-# CrowdOS 
+# CrowdOS
 
 ![CrowdOS Banner](assets/banner.png)
 
-> **Operating system for collective intelligence.**
+> **Intelligence emerges through coordination.**
 
-CrowdOS is a provider-agnostic sandbox for building, orchestrating, and governing hierarchical AI agent ecosystems.
+CrowdOS is a provider-agnostic sandbox orchestration layer for multi-agent systems. Rather than a single AI assistant, it is an operational runtime that coordinates, delegates, and manages collective intelligence across models, providers, and execution layers.
 
-Instead of treating AI as a single assistant, CrowdOS treats intelligence as a structured society of specialized entities capable of collaboration, delegation, reasoning, execution, and self-organization.
+CrowdOS is fundamentally:
 
-Built around a Discord-inspired interaction model, CrowdOS enables users to create persistent AI workspaces with channels, roles, hierarchy, memory scopes, governance systems, and collaborative agent communities.
-
----
-
-## Philosophy
-
-Most AI systems today are built around a single-agent interaction model.
-
-CrowdOS explores a different idea:
-
-> intelligence emerges through coordination.
-
-Instead of one monolithic assistant handling everything, CrowdOS enables structured ecosystems where agents operate as collaborative entities inside programmable social environments.
-
-The platform is designed around:
-
-* collective intelligence
-* hierarchical orchestration
-* instruction-first architecture
-* governance-driven systems
-* persistent agent societies
-* provider-agnostic execution
-* observability and delegation transparency
+- agent-native
+- orchestration-first
+- emergent by design
+- sandbox-first
+- provider-agnostic
+- modular
+- workspace-oriented
 
 ---
 
-# Why CrowdOS Exists
+## Why CrowdOS Exists
 
-Most multi-agent frameworks today are:
+Most multi-agent frameworks are workflow-centric, graph-heavy, YAML-driven, CLI-oriented, developer-only environments.
 
-* workflow-centric
-* graph-heavy
-* YAML-driven
-* CLI-oriented
-* developer-only environments
+CrowdOS takes a different approach: a social-native operating environment. Inspired by community platforms like Discord, structure is meant to be seen and navigated — organizing a community of specialists, not wiring up a pipeline.
 
-CrowdOS takes a different approach.
-
-Rather than building another orchestration pipeline, CrowdOS introduces:
-
-> a social-native operating environment for AI ecosystems.
-
-Inspired by familiar collaborative platforms like Discord, CrowdOS lowers the interaction barrier between humans and autonomous agent systems.
-
-Users interact through:
-
-* workspaces
-* categories
-* channels
-* mentions
-* permissions
-* delegation chains
-* organizational structures
-
-Instead of writing orchestration graphs manually.
+Users interact through workspaces, categories, channels, mentions, permissions, and delegation chains instead of writing orchestration graphs manually.
 
 ---
 
-# Core Concepts
+## Core Concepts
 
-## Governance Intelligence (Lv0)
+### Workspace-first
 
-At the center of CrowdOS is the Lv0 governance layer.
-
-Lv0 agents are not traditional assistants.
-
-They function as:
-
-* ecosystem architects
-* orchestration governors
-* workspace administrators
-* organizational intelligence systems
-
-Responsibilities include:
-
-* creating agent profiles
-* managing hierarchy
-* assigning permissions
-* organizing channels and categories
-* installing tools and MCP integrations
-* generating instructions and skills
-* arranging context and memory scopes
-* coordinating delegation systems
-
-CrowdOS treats orchestration itself as an intelligent capability.
-
----
-
-## Hierarchical Agent Architecture
-
-CrowdOS separates intelligence by responsibility and computational cost.
-
-### Raven — Lv0–1
-
-High-level reasoning and strategic intelligence.
-
-Used for:
-
-* planning
-* architecture
-* governance
-* coordination
-* complex reasoning
-
-These agents operate in focused reasoning councils called:
-
-## Conspiracy
-
-A Conspiracy is a coordinated high-context reasoning group designed for deliberate and intelligence-dense collaboration.
-
----
-
-### Crow — Lv2–3
-
-Lightweight execution-oriented operational agents.
-
-Optimized for:
-
-* parallel execution
-* summarization
-* scraping
-* classification
-* transformation
-* distributed workloads
-
-Large-scale operational swarms are called:
-
-## Murder
-
-A Murder is a distributed execution swarm designed for scalable coordinated workloads.
-
----
-
-# Discord-Native UX
-
-CrowdOS is intentionally built around a social workspace metaphor.
-
-The platform uses familiar collaborative structures:
+The Workspace is the primary operational boundary — conceptually similar to a Discord server. Categories group Channels; Channels are session boundaries holding history, runtime selection, the active agent, and a filesystem mount. Each Workspace is isolated: same-named agents in different Workspaces are separate instances with separate memory.
 
 ```text
-Workspace
- ├── Categories
- │    ├── Channels
- │    │    ├── Human Users
- │    │    ├── Specialist Agents
- │    │    └── Worker Swarms
+CrowdOS
+└── Workspace
+    ├── Categories
+    │   └── Channels / Sessions
+    │       ├── History
+    │       ├── Runtime Selector
+    │       ├── Active Agent
+    │       └── Filesystem Mount
+    ├── Agent Roster
+    │   └── Agent Instances
+    │       └── Private Agent Memory
+    └── Workspace Configuration
 ```
 
-This creates a more intuitive interaction model compared to traditional orchestration systems.
+### History belongs to the session, memory belongs to the agent
 
-Users can:
+Channel History is shared session history. Agent Memory is private per agent instance — agents can remember, discard, and delete their own memories via tools. One agent can participate in multiple Channels without dragging another session's history along.
 
-```text
-@ResearchLead analyze this paper
-```
+Agents switch between shared and focused context with `lock_in` / `lock_out`, without splitting the Channel. Multiple mentions (`@Raven @Crow @Owl`) route the same message to each agent for comparison — execution is serial in shared context, and a multi-mention is not a swarm.
 
-instead of writing complex orchestration logic manually.
+### No VFS, local-first
 
----
-
-# Observability First
-
-CrowdOS emphasizes transparent orchestration and delegation visibility.
-
-Users should be able to observe:
-
-* delegation chains
-* active reasoning flows
-* swarm activity
-* task routing
-* token allocation
-* provider utilization
-* hierarchy interactions
-
-Example:
-
-```text
-@Architect
- └── delegated to @BackendSpecialist
-      └── delegated to @APIWorker
-           └── delegated to @ValidationWorker
-```
-
-The goal is to make collective intelligence visible.
+CrowdOS mounts real local repositories, not a virtual filesystem. Mount inheritance is Workspace → Category → Channel Override, where an override **replaces** rather than merges. The local filesystem (`sandbox/` by default) is the source of truth — JSON for state, Markdown for Skills and Instructions. PostgreSQL/pgvector is optional memory/RAG infrastructure; the system stays operational on local persistence alone.
 
 ---
 
-# Instruction-First Architecture
+## Agent Hierarchy
 
-CrowdOS exposes behavioral governance directly to users.
+Two axes, never confused: **authority level (L0–L3)** decides what an agent *may do*; **label (Raven / Crow)** is thematic identity for what an agent *is*.
 
-Instead of relying entirely on hidden system prompts, agents are shaped through explicit natural-language instructions.
+- **Raven** — flagship intelligence. Expensive, deliberate, solitary. Strategy, architecture, judgment, deep analysis.
+- **Crow** — generalist army. Cheaper, plentiful, crowded. Scraping, summarization, classification, parallel work.
 
-Users can:
+The label boundary falls between L1 and L2: the top half reasons, the bottom half executes.
 
-* define organizational behavior
-* customize hierarchy
-* create governance rules
-* design collaboration patterns
-* generate specialized agent ecosystems
+| Tier | Label | Role | Scope | Memory | Orchestrates |
+|------|-------|------|-------|--------|--------------|
+| L0 | Raven | Personal Assistant | Whole Workspace | Private | Yes |
+| L1 | Raven | Specialist | A defined domain | Private | Via L2 |
+| L2 | Crow | Sub-Specialist | A bounded task | Private | Yes (swarm) |
+| L3 | Crow | Worker | One narrow subtask | Stateless | No |
 
-This improves:
+**L0** is the highest Workspace authority and the user's personal assistant — privileged tools, final fallback in default-agent resolution, and the only tier that can activate the prestige features. **L1** specialists are user-configured (instructions + model/provider + tools/skills + memory). **L2** orchestrators receive a bounded task from their L1, fan out to L3 workers, and return a consolidated report. **L3** workers are stateless: no persistent identity, no private memory, one surgical subtask each.
 
-* transparency
-* experimentation
-* reproducibility
-* adaptability
-* debugging
+Authority always comes from the **level**, never the name. Owl (the Librarian) is a workspace-level indexing service, not a conversational agent.
 
----
+### Conspiracy and Murder (prestige, non-priority)
 
-# Provider Agnostic
+- **Conspiracy** — a council of 2–5 Ravens. Heavy-reasoning debate; value comes from disagreement, not throughput. Needs its own orchestration pattern when built.
+- **Murder** — a swarm of Crows. Mechanically the Swarm Runtime, entered through its own L0-activated gateway.
 
-CrowdOS is designed to work across multiple providers and execution environments.
-
-Possible providers include:
-
-* OpenAI
-* Anthropic
-* Gemini
-* DeepSeek
-* local models
-* future inference providers
-
-This enables hybrid intelligence allocation strategies such as:
-
-```text
-Lv0 → frontier reasoning model
-Lv1 → advanced specialist model
-Lv2 → optimized orchestration model
-Lv3 → lightweight low-cost workers
-```
-
-The platform prioritizes flexibility over lock-in.
+Both trigger only via explicit L0 activation (`Start a Murder` / `Start a Conspiracy`), never by mention, `Auto` routing, or lower tiers. When built, both must be genuine coordination structures, not labels on ordinary execution.
 
 ---
 
-# Example Use Cases
+## Runtimes
 
-## Software Engineering
+Five runtimes, plus `Auto` — which is not a runtime but the Interpreter → Router selection path that chooses among them.
 
-* autonomous dev teams
-* architecture planning
-* review swarms
-* testing ecosystems
-* documentation pipelines
+1. **Conversational** (Chat) — chat, brainstorming. Low cost, short memory, fast, minimal tools.
+2. **Agentic** — ReAct-style execution with tools, sandbox-aware, dynamic capability discovery.
+3. **Coding** — repository work on a deliberately forked, battle-tested coding engine (`@crowdspace/pi-core`), full filesystem tool surface, diff-oriented output.
+4. **Research** — investigation with evidence bundles and cited synthesis.
+5. **Swarm** — large workloads decomposed into narrow subtasks, delegated to L3 workers with bounded concurrency, then aggregated and verified.
 
-## Research
-
-* source collection
-* summarization
-* contradiction analysis
-* citation verification
-* collaborative reasoning
-
-## Data Engineering
-
-* scraping swarms
-* cleaning pipelines
-* distributed processing
-* classification systems
-
-## Learning Environments
-
-* tutoring systems
-* curriculum planning
-* Socratic learning agents
-* collaborative study ecosystems
-
-## Simulations & Roleplay
-
-* DnD ecosystems
-* AI civilizations
-* autonomous factions
-* narrative societies
-* persistent simulation worlds
+Every runtime honors the same `RuntimeResult` contract (checked by a conformance suite), the same tool authorization rules, cancellation semantics, and usage accounting. Shipped defaults route Research and Swarm back to Agentic (`RESEARCH_V1` / `SWARM_V1` default `false`); the rollback is reported, not hidden.
 
 ---
 
-# Technical Direction
+## Providers
 
-Current architectural direction (implemented through Remediation Spec Phases 0–7):
-
-## Frontend
-
-* React 19 + TypeScript + TailwindCSS v4 + Zustand + Socket.io
-* Workspace shell with 3-panel layout + mobile drawers, diff viewer, approval cards, delegation timeline, virtualized paginated history, omni-search
-
-## Backend
-
-* Node.js + Fastify 5 + TypeScript + Drizzle ORM + Postgres 16
-* EventBroker with durable_events (ordered, replayable, idempotent) + run state machine (17 states) + context pipeline (10 middlewares, parallel lane)
-* 4 provider adapters (OpenAI/Anthropic/Google/Ollama/Custom) with real token accounting + model routing (MODEL-1)
-
-## Infrastructure
-
-* PostgreSQL 16 (primary) + Redis 7 + BullMQ 6 (durable execution since Phase 4 — `QUEUE_MODE=bullmq` with `api` + `worker` processes, repeatable maintenance jobs, 3× exponential backoff, 7d DLQ, graceful drain)
-* WebSockets (Socket.io) with per-socket token bucket rate limiting + room isolation
-* Docker Compose with `api` + `worker` + health checks (see `docker-compose.yml`)
+Provider-agnostic by design. Five adapters ship in `packages/server/src/runtime/providers/`: `google`, `openai`, `anthropic`, `ollama`, `custom` — with tiered model routing and real usage accounting so budgets see true cost.
 
 ---
 
-# Design Principles
+## Nitehunter
 
-CrowdOS prioritizes:
-
-* modular orchestration
-* realtime collaboration
-* observability
-* rapid iteration
-* adaptive governance
-* ecosystem flexibility
-
-The platform intentionally avoids premature infrastructure complexity during early development stages.
+Nitehunter is CrowdOS's complementary precision-review subsystem (Hunt / Perch / Strike / Pellet / Roost / Silent Flight / Parliament) — system-first observational intelligence beside CrowdOS's agent-first orchestration. It shares the authority hierarchy but is not a sixth runtime. **No implementation exists in the current codebase.**
 
 ---
 
-# Current Status
+## Current Status
 
-CrowdOS has completed Remediation Spec Phases 0–7 (46 days, see `REMEDIATION_SPEC.md`). Durable, observable, and resumable execution is now real — not prototype.
+Source of truth: `CrowdOS.md` §34. Summary:
 
-| Phase | What shipped | Flag |
-|---|---|---|
-| 0 | CI, `/metrics`, event envelope (seq), `runs` ledger, gate linter | `METRICS_ENABLED` |
-| 1 | Key-based auth (`api_keys`, `AUTH_STRICT=true`), socket trust, Guard hardening (realpath, process-group kill), encrypted secrets, rate limiting, MCP hygiene | `AUTH_STRICT`, `LEGACY_GUARD` |
-| 2 | Run state machine (17 states), cancellation (AbortSignal array-safe), transactional writes (ULID + `channel_sequences`), structured `tool_calls` jsonb, memory lifecycle caps | — |
-| 3 | Parallel dispatch (`MAX_PARALLEL_AGENTS=4`), bounded queries, per-iteration budget, delta librarian, keyset pagination, stream coalescing, HNSW-ready indexes, tool R/W classifier, Undici keep-alive, model routing (`MODEL_ROUTE=routed`) | `PIPELINE_PARALLEL` etc. |
-| 4 | Redis + BullMQ (`QUEUE_MODE=bullmq`), `runs`/`maintenance`/`scheduler` queues, idempotency `channel:agent:message`, 15m lease + heartbeat, resume from checkpoint + compensation journal | `QUEUE_MODE` |
-| 5 | Research (Brave/Tavily/Serper + evidence bundle), Swarm v1 (DAG `swarm_tasks` + aggregator + verifier), Approvals (`WAITING_FOR_APPROVAL` + TTL + reusable grants), prompt integrity (`<untrusted>`), honest compression, Artifact service (`diff`/`report`/`citations`) | `RESEARCH_V1`, `SWARM_V1`, `APPROVALS_ENABLED` |
-| 6 | Cancel button, approval cards, diff viewer, edit/regenerate/retry, background continuity (reconnect digest + notifications), delegation timeline, honesty pass (`DEMO_FALLBACK`), store decomposition + pagination | — |
-| 7 | Load suite (k6 100 sends / 10 swarms / 8h soak), pgvector hybrid memory (`EMBEDDING_ENABLED`), OTel traces (`assemble`/`llm`/`tool`/`persist` keyed `runId` + cost ledger `token_usage_log×cost_per_1k`) | `OTEL_ENABLED`, `EMBEDDING_ENABLED` |
+**Implemented:** Workspace model + Portal flow, runtime selector with `Auto` routing and pin/sticky behavior, mention routing (single, pinned, multiple with serial execution + failure handling), `lock_in`/`lock_out`, agent self-managed memory, Librarian/Owl concept, local-first persistence + mount model, five-runtime set with Coding on the forked engine, contract conformance suite, serial multi-mention, stateless L3 workers with visible token accounting and bounded fan-out, structured routing logs.
 
-**Roadmap vs shipped:**
-- `Raven` (Lv0-1 strategic), `Crow` (Lv2-3 operational), `Conspiracy` (high-context reasoning group), `Murder` (distributed swarm) were aspirational names in early docs — **Swarm v1 now ships the Murder primitive behind `SWARM_V1` (Phase 5)**; Raven/Crow as branded Lv0/Lv1 personas remain **roadmap, not separate agent species** — the generic `Agents` + `instruction_modules` + `model_modules` system is the shipped abstraction. See `Goal.md` §32 target architecture for the honest model.
+**Evolving:** L0 authority model, L1/L2/L3 as enforced roles (Router-enforced today, broader rights pending), global Skills triggering, agent configuration details, memory/RAG infrastructure, `Auto` intent vocabulary, swarm data sharding by range/batch, per-subtask worker context slicing.
+
+**Planned / pending:** event-by-event Channel History persistence (priority), large-data sharding (priority), MCP/connector mounts, variables, artifact retention/browsing UI, media support, full L0 (non-priority), workspace import/export (later), Nitehunter (no implementation).
 
 ---
 
-# Vision
+## Stack
 
-CrowdOS aims to become:
+From the codebase (`package.json`, `docker-compose.yml`):
 
-* a collective intelligence sandbox
-* a social operating system for AI ecosystems
-* a programmable agent society platform
-* a multi-agent experimentation environment
-* a governance-first orchestration framework
-
-Not merely another AI wrapper.
-
----
-
-# Closing Philosophy
-
-CrowdOS is built around a simple idea:
-
-> intelligence is not centralized — it is coordinated.
+- **Client** — React 19 + Vite + TailwindCSS v4 + Zustand + `socket.io-client` (`packages/client`, dev port `3000`)
+- **Server** — Node.js + Fastify 5 + TypeScript + Drizzle ORM + Socket.io + BullMQ 6 (`packages/server`, default port `3001`)
+- **Coding engine** — `@crowdspace/pi-core` (in-repo fork backing the Coding Runtime)
+- **Shared contracts** — `@crowdspace/shared`
+- **Desktop** — Electron shell, Windows-first (`packages/desktop`)
+- **Infra** — PostgreSQL 16 (primary) + Redis 7 (opt-in). Default queue mode is `inline` — `docker compose up` runs `api` + `postgres`. BullMQ delivery needs the queue profile: `docker compose --profile queue up` (adds `redis` + `worker`).
 
 ---
 
@@ -371,10 +145,16 @@ CrowdOS is built around a simple idea:
 
 ```bash
 npm install
-npm run dev
+npm run db:bootstrap   # push schema + seed (needs Postgres)
+npm run dev            # api + worker + client
 ```
 
-This starts:
-- Server: `http://localhost:3001`
-- Client: `http://localhost:5173`
+Defaults: API `http://localhost:3001`, client `http://localhost:3000` (both configurable via `PORT` / `CLIENT_ORIGIN`). Copy `.env.example` for the full option set — `QUEUE_MODE=inline` needs no Redis; set `QUEUE_MODE=bullmq` + `REDIS_URL` for durable queue delivery.
 
+---
+
+## Vision
+
+CrowdOS aims to become a cognitive workspace operating layer, a distributed orchestration kernel, an adaptive runtime platform — provider-agnostic cognitive infrastructure. Not a chatbot framework, not an assistant wrapper, not a static workflow system.
+
+> **Intelligence is not centralized. Intelligence is coordinated.**

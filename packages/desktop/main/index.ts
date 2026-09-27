@@ -18,7 +18,9 @@ const __dirname = dirname(__filename);
 import {
   app,
   BrowserWindow,
+  crashReporter,
   dialog,
+  globalShortcut,
   ipcMain,
   Menu,
   net,
@@ -66,6 +68,24 @@ try {
 }
 
 // Structural main-window shape (the real BrowserWindow under Electron).
+export function focusMainWindow(win: {
+  isMinimized?: () => boolean;
+  restore?: () => void;
+  show?: () => void;
+  moveTop?: () => void;
+  focus?: () => void;
+} | null): void {
+  if (!win) return;
+  try {
+    if (win.isMinimized?.()) win.restore?.();
+    win.show?.();
+    win.moveTop?.();
+    win.focus?.();
+  } catch {
+    // best-effort: never fail IPC on window forwarding
+  }
+}
+
 export interface MainWindowLike {
   show: () => void;
   focus: () => void;
@@ -139,6 +159,25 @@ async function boot(): Promise<void> {
   // 2026-09-23: logs/desktop.log never existed). Boot/IPC/backend failures
   // land here; the stream writer lives in ./desktop-log.ts.
   startDesktopLogTee(join(paths.logsDir, "desktop.log"));
+
+  // Windows toast identity (required for native toasts) + crash evidence.
+  try {
+    (app as unknown as { setAppUserModelId?: (id: string) => void }).setAppUserModelId?.(
+      "com.crowded-space.crowdspace",
+    );
+  } catch {
+    // ignore
+  }
+  try {
+    crashReporter.start({
+      productName: "CrowdSpace Nightly",
+      companyName: "CrowdSpace",
+      submitURL: "",
+      uploadToServer: false,
+    });
+  } catch {
+    // crash reporter is best-effort in dev
+  }
 
   const stored = loadDesktopConfig(paths.configFile);
 
@@ -217,6 +256,18 @@ async function boot(): Promise<void> {
   saveDesktopConfig(paths.configFile, { backendPort: backend.port });
 
   let mainWindow: MainWindowLike | null = null;
+  let trayRefreshHook: (() => void) | null = null;
+
+  const recordRecentWorkspace = (workspaceId: string) => {
+    try {
+      const cfg = loadDesktopConfig(paths.configFile);
+      const next = [workspaceId, ...(cfg.recentWorkspaceIds ?? []).filter((id) => id !== workspaceId)].slice(0, 8);
+      saveDesktopConfig(paths.configFile, { recentWorkspaceIds: next });
+      trayRefreshHook?.();
+    } catch {
+      // ignore
+    }
+  };
 
   registerIpcHandlers({
     ipcMain,
@@ -227,6 +278,34 @@ async function boot(): Promise<void> {
     getMainWindow: () => mainWindow,
     logFile: join(paths.logsDir, "desktop.log"),
     isPackaged,
+    getAutostart: () => {
+      try {
+        return Boolean(
+          (app as unknown as { getLoginItemSettings?: () => { openAtLogin?: boolean } }).getLoginItemSettings?.().openAtLogin,
+        );
+      } catch {
+        return false;
+      }
+    },
+    setAutostart: (enabled: boolean) => {
+      try {
+        (app as unknown as { setLoginItemSettings?: (s: Record<string, unknown>) => void }).setLoginItemSettings?.({
+          openAtLogin: enabled,
+        });
+      } catch {
+        // ignore
+      }
+    },
+    onWorkspaceOpened: recordRecentWorkspace,
+    onNotificationShown: () => {
+      try {
+        const count = ((app as unknown as { getBadgeCount?: () => number }).getBadgeCount?.() ?? 0) + 1;
+        (app as unknown as { setBadgeCount?: (n: number) => void }).setBadgeCount?.(count);
+        (created as unknown as { flashFrame?: (flag: boolean) => void } | null)?.flashFrame?.(true);
+      } catch {
+        // ignore
+      }
+    },
   });
 
   const preloadCandidates = [
@@ -258,6 +337,20 @@ async function boot(): Promise<void> {
   };
   win.once("ready-to-show", showWindowGracefully);
   setTimeout(showWindowGracefully, 1500);
+
+  // Clear the taskbar/dock badge once the user returns to the app.
+  try {
+    win.on("focus", (() => {
+      try {
+        (app as unknown as { setBadgeCount?: (n: number) => void }).setBadgeCount?.(0);
+        (created as unknown as { setProgressBar?: (n: number) => void }).setProgressBar?.(-1);
+      } catch {
+        // ignore
+      }
+    }) as (...a: never[]) => void);
+  } catch {
+    // ignore
+  }
 
   // Debounced bounds persistence
   try {
@@ -345,17 +438,32 @@ async function boot(): Promise<void> {
   });
   try {
     (app as unknown as { on: (e: string, cb: () => void) => void }).on("second-instance", () => {
-      try {
-        win.focus();
-      } catch {
-        // ignore
-      }
+      focusMainWindow(win as unknown as Parameters<typeof focusMainWindow>[0]);
     });
   } catch {
     // ignore
   }
 
-  // System Tray setup
+  // System Tray setup (live recents from config; counts stay 0 until the
+  // run-status approval plumbing reports them — template renders honestly).
+  let trayRef: InstanceType<typeof Tray> | null = null;
+  const refreshTray = () => {
+    if (!trayRef) return;
+    try {
+      const cfg = loadDesktopConfig(paths.configFile);
+      const recents = (cfg.recentWorkspaceIds ?? []).slice(0, 5).map((id) => ({
+        id,
+        name: id,
+      }));
+      trayRef.setContextMenu(
+        Menu.buildFromTemplate(
+          getTrayMenuTemplate({ recentWorkspaces: recents, runningCount: 0, pendingApprovals: 0 }),
+        ),
+      );
+    } catch {
+      // ignore
+    }
+  };
   try {
     const iconCandidates = [
       join(__dirname, "..", "..", "client", "public", "icon_only_dark.png"),
@@ -364,23 +472,141 @@ async function boot(): Promise<void> {
     const trayIconPath = iconCandidates.find((p) => existsSync(p));
     if (trayIconPath) {
       const tray = new Tray(trayIconPath);
+      trayRef = tray;
       tray.setToolTip("CrowdOS");
-      const template = getTrayMenuTemplate({
-        recentWorkspaces: [],
-        runningCount: 0,
-        pendingApprovals: 0,
-      });
-      tray.setContextMenu(Menu.buildFromTemplate(template));
+      trayRefreshHook = refreshTray;
+      refreshTray();
       tray.on("click", () => {
-        try {
-          win.focus();
-        } catch {
-          // ignore
-        }
+        focusMainWindow(win as unknown as Parameters<typeof focusMainWindow>[0]);
       });
     }
   } catch {
     // Tray is best-effort
+  }
+
+  // Windows JumpList recents (Discord/Slack parity for taskbar right-click).
+  try {
+    const jumpCfg = loadDesktopConfig(paths.configFile);
+    const jumpRecents = (jumpCfg.recentWorkspaceIds ?? []).slice(0, 5);
+    if (jumpRecents.length > 0) {
+      (app as unknown as {
+        setJumpList?: (items: Array<{ type: string; items?: Array<Record<string, unknown>> }>) => void;
+      }).setJumpList?.([
+        {
+          type: "custom",
+          items: jumpRecents.map((id) => ({
+            type: "task",
+            title: id,
+            program: process.execPath,
+            args: `crowdos://w/${id}`,
+          })),
+        },
+      ]);
+    }
+  } catch {
+    // ignore
+  }
+
+  // Single global shortcut (user decision): show/hide the workspace.
+  // Everything else stays in-app (Ctrl+K palette) to avoid OS conflicts.
+  try {
+    const accelerator = "CommandOrControl+Shift+O";
+    const ok = globalShortcut.register(accelerator, () => {
+      try {
+        const w = win as unknown as {
+          isVisible?: () => boolean;
+          hide?: () => void;
+        } & Parameters<typeof focusMainWindow>[0];
+        if (w.isVisible?.() === false) focusMainWindow(w);
+        else if ((win as unknown as { isMinimized?: () => boolean }).isMinimized?.()) {
+          focusMainWindow(w);
+        } else {
+          try {
+            (w as { hide?: () => void }).hide?.();
+          } catch {
+            focusMainWindow(w);
+          }
+        }
+      } catch {
+        // ignore
+      }
+    });
+    if (!ok) console.warn(`[desktop] global shortcut ${accelerator} unavailable`);
+    (app as unknown as { on: (e: string, cb: () => void) => void }).on("will-quit", () => {
+      try {
+        globalShortcut.unregisterAll();
+      } catch {
+        // ignore
+      }
+    });
+  } catch {
+    // global shortcuts are best-effort (sandboxed/CI environments)
+  }
+
+  // Spellcheck suggestions context menu (Slack/Discord parity).
+  try {
+    const contents = win.webContents as unknown as {
+      on?: (e: string, cb: (event: unknown, params: Record<string, unknown>) => void) => void;
+    };
+    contents.on?.("context-menu", (_event: unknown, params: Record<string, unknown>) => {
+      try {
+        const misspelt = params?.misspelledWord as string | undefined;
+        const suggestions = (params?.dictionarySuggestions as string[] | undefined) ?? [];
+        const menu = Menu.buildFromTemplate([
+          ...(misspelt
+            ? [
+                ...suggestions.slice(0, 5).map((s) => ({
+                  label: s,
+                  click: () =>
+                    (win.webContents as unknown as { replaceMisspelling?: (s: string) => void }).replaceMisspelling?.(s),
+                })),
+                { type: "separator" as const },
+              ]
+            : []),
+          { role: "copy" as const },
+          { role: "paste" as const },
+          { role: "cut" as const },
+          { role: "selectAll" as const },
+        ]);
+        menu.popup();
+      } catch {
+        // ignore
+      }
+    });
+  } catch {
+    // ignore
+  }
+
+  // Crashed-renderer recovery instead of a dead white window.
+  try {
+    const wc = win.webContents as unknown as {
+      on?: (e: string, cb: (event: unknown, killed: boolean) => void) => void;
+    };
+    wc.on?.("render-process-gone", (_event: unknown, killed: boolean) => {
+      try {
+        const answer = (dialog as unknown as { showMessageBoxSync: (w: unknown, o: unknown) => number }).showMessageBoxSync(win, {
+          type: "warning",
+          title: "CrowdOS renderer stopped",
+          message: killed
+            ? "The workspace view was stopped unexpectedly."
+            : "The workspace view crashed.",
+          detail: "Reload to continue. Recent work is preserved on local files.",
+          buttons: ["Reload", "Close"],
+          defaultId: 0,
+        });
+        if (answer === 0) {
+          try {
+            (win.webContents as unknown as { reload?: () => void }).reload?.();
+          } catch {
+            // ignore
+          }
+        }
+      } catch {
+        // ignore
+      }
+    });
+  } catch {
+    // ignore
   }
 
   if (isDev) {

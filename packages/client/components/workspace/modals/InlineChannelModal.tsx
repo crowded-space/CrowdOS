@@ -110,7 +110,7 @@ export default function InlineChannelModal({ open, categoryId, onClose }: Inline
 
             <form onSubmit={handleCreate} className="space-y-3 select-text">
               <div className="space-y-1">
-                <label className="text-[10px] font-mono font-bold text-zinc-400 uppercase tracking-wide">
+                <label className="text-[12px] font-medium text-zinc-400">
                   Category Location
                 </label>
                 <select
@@ -125,7 +125,7 @@ export default function InlineChannelModal({ open, categoryId, onClose }: Inline
               </div>
 
               <div className="space-y-1">
-                <label className="text-[10px] font-mono font-bold text-zinc-400 uppercase tracking-wide">
+                <label className="text-[12px] font-medium text-zinc-400">
                   Channel Name
                 </label>
                 <div className="relative">
@@ -146,7 +146,7 @@ export default function InlineChannelModal({ open, categoryId, onClose }: Inline
               </div>
 
               <div className="space-y-1">
-                <label className="text-[10px] font-mono font-bold text-zinc-400 uppercase tracking-wide">
+                <label className="text-[12px] font-medium text-zinc-400">
                   Topic Description (Optional)
                 </label>
                 <input

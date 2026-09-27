@@ -177,7 +177,7 @@ export default function AgentProfileModal() {
                   <h2 className="text-lg font-bold text-zinc-100 font-sans tracking-tight">
                     {agent.name}
                   </h2>
-                  <span className={`text-[9px] font-mono uppercase px-1.5 py-0.2 rounded border font-semibold inline-block ${style.bg} ${style.text} ${style.border}`}>
+                  <span className={`tnum text-[10px] font-mono px-1.5 py-0.2 rounded border font-medium inline-block ${style.bg} ${style.text} ${style.border}`}>
                     Level {agent.level}
                   </span>
                 </div>
@@ -204,15 +204,15 @@ export default function AgentProfileModal() {
               {/* Module-based Cognitive Assembly summary cards */}
               <div className="space-y-2.5">
                 <div className="flex items-center justify-between">
-                  <h3 className="text-[9px] font-mono tracking-widest font-bold text-zinc-550 uppercase">
-                    Modular Assembly
+                  <h3 className="text-[13px] font-medium text-zinc-400">
+                    Modular assembly
                   </h3>
                   <button
                     onClick={() => setStudioOpen(true)}
                     className="px-2 py-0.5 rounded bg-indigo-600 hover:bg-indigo-500 text-white font-mono text-[9.5px] font-semibold flex items-center gap-1 transition cursor-pointer"
                   >
                     <Layers size={10} />
-                    <span>OPEN AGENT STUDIO</span>
+                    <span>Open studio</span>
                   </button>
                 </div>
 
@@ -236,7 +236,7 @@ export default function AgentProfileModal() {
                     <div className="font-semibold text-zinc-200 font-mono tracking-tight leading-none">
                       {modelModule?.name || 'Dual Reasoner Profile'}
                     </div>
-                    <div className="text-[10px] text-cyan-500 font-mono mt-1 uppercase">
+                    <div className="tnum text-[10px] text-cyan-500 font-mono mt-1">
                       {modelModule?.modelProfileId || 'Gemini-2.0-Flash'} • Temp {modelModule?.temperature || 0.7}
                     </div>
                   </div>
@@ -278,19 +278,19 @@ export default function AgentProfileModal() {
               {/* ACTIVE OVERRIDES AUDIT ROSTER */}
               <div className="space-y-2 pt-1">
                 <div className="flex items-center justify-between">
-                  <h3 className="text-[9px] font-mono tracking-widest font-bold text-zinc-550 uppercase">
-                    Active Hot-Patches ({activeOverrides.length})
+                  <h3 className="text-[13px] font-medium text-zinc-400">
+                    Active overrides <span className="tnum text-[11px] text-zinc-500">({activeOverrides.length})</span>
                   </h3>
                   {activeOverrides.length > 0 && (
                     <span className="text-[9px] font-mono text-amber-400 bg-amber-400/10 border border-amber-400/20 px-1 rounded">
-                      Live Modifications Active
+                      Modifications active
                     </span>
                   )}
                 </div>
 
                 {activeOverrides.length === 0 ? (
                   <div className="p-2.5 bg-zinc-950/40 border border-zinc-900 rounded-lg text-center text-zinc-600 text-[10.5px] font-mono select-none">
-                    No behavior patches deployed.
+                    No active overrides.
                   </div>
                 ) : (
                   <div className="space-y-1.5">
@@ -305,7 +305,7 @@ export default function AgentProfileModal() {
                       >
                         <div className="space-y-0.5 min-w-0">
                           <div className="flex items-center gap-1.5">
-                            <span className="font-bold uppercase text-[9px] px-1 rounded bg-zinc-900 border border-zinc-800 text-indigo-400">
+                            <span className="font-medium text-[9px] px-1 rounded bg-zinc-900 border border-zinc-800 text-indigo-400">
                               {o.type}
                             </span>
                             <span className="text-[10px] text-zinc-400 truncate">{o.reason}</span>
@@ -348,7 +348,7 @@ export default function AgentProfileModal() {
                 >
                   <div className="flex items-center gap-1.5">
                     <ShieldAlert size={12} className="text-indigo-400" />
-                    <span>PATCH RUNTIME TEMPORARILY</span>
+                    <span>Patch runtime</span>
                   </div>
                   {patchPanelOpen ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
                 </button>
@@ -364,7 +364,7 @@ export default function AgentProfileModal() {
                     className="p-3 border-t border-zinc-900 bg-zinc-950/80 space-y-3 text-[10.5px] overflow-hidden"
                   >
                     <div className="space-y-1">
-                      <label className="text-zinc-500 font-bold font-mono text-[9px] block">PATCH COORDINATE</label>
+                      <label className="text-zinc-500 font-medium text-[11px] block">Target</label>
                       <select
                         value={patchType}
                         onChange={(e) => setPatchType(e.target.value as any)}
@@ -378,7 +378,7 @@ export default function AgentProfileModal() {
 
                     {patchType === 'instruction' && (
                       <div className="space-y-1">
-                        <label className="text-zinc-500 font-bold font-mono text-[9px] block">TEMPORARY SYSTEM PROMPT DIRECTIVE</label>
+                        <label className="text-zinc-500 font-medium text-[11px] block">Temporary system prompt</label>
                         <textarea
                           value={patchInstructionPrompt}
                           onChange={(e) => setPatchInstructionPrompt(e.target.value)}
@@ -403,7 +403,7 @@ export default function AgentProfileModal() {
                           />
                         </div>
                         <div className="space-y-1">
-                          <label className="text-zinc-500 font-bold font-mono text-[9px] block">MAX OUTPUT TOKENS</label>
+                          <label className="text-zinc-500 font-medium text-[11px] block">Max output tokens</label>
                           <input
                             type="number"
                             min="1"
@@ -417,7 +417,7 @@ export default function AgentProfileModal() {
 
                     {patchType === 'toolkit' && (
                       <div className="space-y-1.5">
-                        <label className="text-zinc-500 font-bold font-mono text-[9px] block">TEMPORARY TOOL DEPLOYMENTS</label>
+                        <label className="text-zinc-500 font-medium text-[11px] block">Temporary tools</label>
                         <div className="grid grid-cols-1 gap-1.5 pl-1 max-h-32 overflow-y-auto select-none">
                           {tools.map(tool => (
                             <div key={tool.id} className="flex items-center gap-1.5">
@@ -444,7 +444,7 @@ export default function AgentProfileModal() {
                     )}
 
                     <div className="space-y-1">
-                      <label className="text-zinc-500 font-bold font-mono text-[9px] block">AUDIT PATCH REASON</label>
+                      <label className="text-zinc-500 font-medium text-[11px] block">Reason (audited)</label>
                       <input
                         type="text"
                         required
@@ -471,14 +471,14 @@ export default function AgentProfileModal() {
               {/* Hierarchy Branch mapping */}
               {(parentAgent || subDrones.length > 0) && (
                 <div className="space-y-2 pt-1.5 text-xs border-t border-zinc-905/40">
-                  <h3 className="text-[9px] font-mono tracking-widest font-bold text-zinc-550 uppercase">
-                    Hierarchy Chain
+                  <h3 className="text-[13px] font-medium text-zinc-400">
+                    Hierarchy
                   </h3>
 
                   {parentAgent && (
                     <div className="flex items-center gap-2 bg-zinc-900/10 p-2 rounded text-zinc-350">
                       <ArrowUp size={11.5} className="text-zinc-650" />
-                      <span className="text-[10px] text-zinc-500">SUPERVISOR:</span>
+                      <span className="text-[10px] text-zinc-500">Supervisor:</span>
                       <span className="font-semibold text-zinc-200 font-sans">{parentAgent.name}</span>
                     </div>
                   )}
@@ -487,7 +487,7 @@ export default function AgentProfileModal() {
                     <div className="flex items-start gap-2 bg-zinc-900/10 p-2 rounded text-zinc-350">
                       <ArrowDown size={11.5} className="text-zinc-650 mt-0.5" />
                       <div className="space-y-1">
-                        <span className="text-[10px] text-zinc-500 block">SUBORDINATES:</span>
+                        <span className="text-[10px] text-zinc-500 block">Subordinates:</span>
                         <div className="flex flex-wrap gap-1.5 pt-0.5">
                           {subDrones.map(sb => (
                             <span key={sb.id} className="text-[10px] bg-zinc-950 border border-zinc-900 px-2 py-0.5 rounded text-zinc-200 font-sans">

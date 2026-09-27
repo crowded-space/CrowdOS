@@ -9,11 +9,13 @@ import {
 import { useCrowdOSStore } from '@/stores/crowdOsStore';
 import { AgentLevel, AgentStatus } from '@/types/crowdOs';
 import ModelCardsTab from '../settings/ModelCardsTab';
+import { WorkspaceDatabaseField, initialDatabaseState, resolveDatabaseUrl } from '@/components/portal/WorkspaceManageDialogs';
 import CrowIcon from '@/components/ui/CrowIcon';
 import { useToast } from '@/components/ui/ToastProvider';
 import ConfirmDialog from '@/components/ui/ConfirmDialog';
 import AgentStudioModal from '@/components/studio/AgentStudioModal';
 import ScreenLockSettingsPanel from '../ScreenLockSettingsPanel';
+import AutostartToggle from '@/components/ui/AutostartToggle';
 
 const ROLE_PERMISSIONS = [
   { id: 'administrator', label: 'Administrator', description: 'Grants all permissions and bypasses channel restrictions.' },
@@ -42,6 +44,7 @@ function StorageSyncSection(props: {
   workspaceError: string | null;
   fetchDbSync: (id?: string) => Promise<void>;
   setStoragePreference: (id: string, p: 'default' | 'local') => Promise<void>;
+  updateWorkspace: (id: string, patch: { databaseUrl?: string | null }) => Promise<void>;
   resolveDbConflict: (id: string, c: 'flush-local' | 'flush-db' | 'change-db') => Promise<any>;
   syncNow: (id: string) => Promise<any>;
   rebuildRag: (id: string) => Promise<any>;
@@ -52,9 +55,10 @@ function StorageSyncSection(props: {
 }) {
   const {
     activeWS, dbSyncStatus, isSyncing, workspaceError, fetchDbSync,
-    setStoragePreference, resolveDbConflict, syncNow, rebuildRag,
+    setStoragePreference, updateWorkspace, resolveDbConflict, syncNow, rebuildRag,
     showInfo, showSuccess, showError, askConfirmation,
   } = props;
+  const [dbState, setDbState] = React.useState(initialDatabaseState());
   const notifiedBacklogRef = React.useRef<string | null>(null);
 
   React.useEffect(() => {
@@ -75,8 +79,13 @@ function StorageSyncSection(props: {
     }
   }, [dbSyncStatus?.backlog, dbSyncStatus?.backlogNotice, activeWS?.id, showInfo]);
 
+  React.useEffect(() => {
+    setDbState(initialDatabaseState());
+  }, [activeWS?.id]);
+
   if (!activeWS) return null;
   const dbConfigured = !!activeWS?.database?.configured;
+  const pendingDbUrl = resolveDatabaseUrl(dbState);
   const preference = (activeWS?.storagePreference === 'local' ? 'local' : 'default') as 'default' | 'local';
   const syncState = dbSyncStatus?.dbSync?.state ?? activeWS?.dbSync?.state ?? null;
   const backlog = dbSyncStatus?.backlog ?? 0;
@@ -105,10 +114,49 @@ function StorageSyncSection(props: {
         </div>
       )}
 
+      <div className="space-y-2 rounded-lg border border-zinc-900 bg-zinc-900/20 p-3">
+        <div className="flex items-center justify-between gap-2">
+          <span className="text-zinc-400 font-semibold text-[12px]">Database Connection</span>
+          {dbConfigured ? (
+            <span className="flex items-center gap-1 text-[10px] font-mono text-emerald-300/90">
+              <span className="w-1 h-1 rounded-full bg-emerald-400" />
+              {activeWS?.database?.host ?? 'Connected'}{activeWS?.database?.database ? `/${activeWS.database.database}` : ''}
+            </span>
+          ) : (
+            <span className="text-[10px] font-mono text-zinc-600">Not connected</span>
+          )}
+        </div>
+        <WorkspaceDatabaseField initial={activeWS?.database ?? null} state={dbState} onChange={setDbState} />
+        {pendingDbUrl !== undefined && (
+          <div className="flex justify-end gap-2">
+            <button
+              type="button"
+              disabled={isSyncing}
+              onClick={() => setDbState(initialDatabaseState())}
+              className="px-2.5 py-1.5 min-h-[36px] rounded-lg border border-zinc-700 bg-zinc-900 text-[12px] font-semibold text-zinc-300 hover:bg-zinc-800 transition cursor-pointer"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              disabled={isSyncing}
+              onClick={() => void runQuiet(async () => {
+                await updateWorkspace(activeWS.id, { databaseUrl: pendingDbUrl });
+                setDbState(initialDatabaseState());
+                await fetchDbSync(activeWS.id).catch(() => {});
+              }, pendingDbUrl === null ? 'Database disconnected' : 'Database connected')}
+              className="px-2.5 py-1.5 min-h-[36px] rounded-lg bg-indigo-500 hover:bg-indigo-600 text-white text-[12px] font-semibold transition cursor-pointer"
+            >
+              {pendingDbUrl === null ? 'Disconnect & Save' : 'Connect & Save'}
+            </button>
+          </div>
+        )}
+      </div>
+
       {!dbConfigured && (
         <p className="text-zinc-500 leading-normal font-sans">
-          Local files only — no database connected. Chat, channels, and files work fully offline.
-          Connect a database (Portal or workspace settings) to enable dual-boot sync and semantic memory.
+            Local files only, no database connected. Chat, channels, and files work fully offline.
+          Connect a Postgres database above to enable dual-boot sync and semantic memory.
         </p>
       )}
 
@@ -136,7 +184,7 @@ function StorageSyncSection(props: {
           <p className="text-zinc-500 leading-normal font-sans">
             Serving from: <span className="text-zinc-300 font-semibold">{tier === 'dual' ? 'Database + local mirror' : 'Local files'}</span>
             {dbSyncStatus && !dbSyncStatus.dbReachable && dbConfigured && (
-              <span className="text-amber-300"> — database unreachable, local fallback active</span>
+              <span className="text-amber-300"> (database unreachable, local fallback active)</span>
             )}
           </p>
         </div>
@@ -144,7 +192,7 @@ function StorageSyncSection(props: {
 
       {syncState === 'conflict' && (
         <div role="alert" className="rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-2.5 space-y-2">
-          <p className="text-[12px] text-rose-200 font-semibold">Database conflict — serving local files only until you choose.</p>
+          <p className="text-[12px] text-rose-200 font-semibold">Database conflict. Serving local files only until you choose.</p>
           <p className="text-zinc-400 leading-normal font-sans">The connected database holds a different workspace. Pick how to resolve (a snapshot of local files is taken first):</p>
           <div className="flex flex-wrap gap-2">
             <button
@@ -187,7 +235,7 @@ function StorageSyncSection(props: {
 
       {dbConfigured && backlog > 0 && (
         <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 flex items-center justify-between gap-2">
-          <span className="text-[12px] text-amber-200">Sync backlog: {backlog} local write{backlog === 1 ? '' : 's'} pending upload — nothing is blocked.</span>
+          <span className="text-[12px] text-amber-200">Sync backlog: {backlog} local write{backlog === 1 ? '' : 's'} pending upload. Nothing is blocked.</span>
           <button
             type="button"
             disabled={isSyncing}
@@ -276,6 +324,7 @@ export default function WorkspaceSettingsModal() {
     isSyncing,
     fetchDbSync,
     setStoragePreference,
+    updateWorkspace,
     resolveDbConflict,
     syncNow,
     rebuildRag,
@@ -885,7 +934,7 @@ export default function WorkspaceSettingsModal() {
   };
 
   const tabs = [
-    { id: 'overview', label: 'Overview', icon: Laptop },
+    { id: 'overview', label: 'Workspace', icon: Laptop },
     { id: 'agents', label: 'Agents Board', icon: Users },
     { id: 'roles', label: 'Permissions & Roles', icon: Shield },
     { id: 'tools', label: 'Security Tools Whitelist', icon: Hammer },
@@ -921,7 +970,7 @@ export default function WorkspaceSettingsModal() {
         
         {/* Left Hand Navigation side panel */}
         <div className="w-full md:w-[200px] bg-[#09090b] border-r border-zinc-900 shrink-0 flex flex-col pt-3 py-2 scrollbar-none border-b md:border-b-0">
-          <div className="px-4 pb-2 text-[10px] font-mono tracking-widest font-bold text-zinc-650 flex items-center gap-1 uppercase select-none">
+          <div className="px-4 pb-2 text-[13px] font-medium text-zinc-400 flex items-center gap-1.5 select-none">
             <Shield size={10} />
             <span>Admin Console</span>
           </div>
@@ -1000,39 +1049,40 @@ export default function WorkspaceSettingsModal() {
                 transition={{ duration: 0.15, ease: "easeOut" }}
               >
             
-            {/* TAB: OVERVIEW */}
+            {/* TAB: WORKSPACE (id 'overview' kept for compat) */}
             {workspaceSettingsTab === 'overview' && (
               <div className="space-y-4 text-xs font-sans leading-relaxed">
                 <div className="flex items-center gap-4 bg-zinc-950/45 p-4 rounded-lg border border-zinc-900 select-none">
                   <CrowIcon variant={activeWS.icon} className="w-14 h-14 rounded-xl border border-zinc-800" iconSize={65} />
                   <div className="space-y-1">
                     <h3 className="font-bold text-zinc-200 text-sm tracking-tight leading-none">{activeWS.name}</h3>
-                    <p className="text-[10px] text-zinc-500 font-mono italic">WORKSPACE ID: {activeWS.id}</p>
-                    <span className="px-1.5 py-0.2 rounded bg-indigo-500/10 border border-indigo-500/30 text-[9px] font-mono text-indigo-400 uppercase font-semibold inline-block">
-                      SPANK SYSTEM ONLINE
+                    <p className="tnum text-[10px] text-zinc-500 font-mono">Workspace ID: {activeWS.id}</p>
+                    <span className="flex items-center gap-1.5 text-[11px] font-medium text-emerald-300">
+                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
+                      Active
                     </span>
                   </div>
                 </div>
 
-                <div className="grid grid-cols-3 gap-3 text-left pt-1 select-none">
+                  <div className="grid grid-cols-3 gap-3 text-left pt-1 select-none">
                   <div className="bg-zinc-900/20 border border-zinc-900 p-3 rounded-lg leading-tight">
-                    <span className="text-zinc-500 font-mono text-[9px] font-bold block mb-1">REGISTERED AGENTS</span>
-                    <span className="text-lg font-bold font-mono text-zinc-300">{agents.length} nodes</span>
+                    <span className="text-[11px] font-medium text-zinc-400 block mb-1">Agents</span>
+                    <span className="tnum text-lg font-semibold text-zinc-200">{agents.length}</span>
                   </div>
                   <div className="bg-zinc-900/20 border border-zinc-900 p-3 rounded-lg leading-tight">
-                    <span className="text-zinc-500 font-mono text-[9px] font-bold block mb-1">TOTAL CHANNELS</span>
-                    <span className="text-lg font-bold font-mono text-zinc-300">5 sectors</span>
+                    <span className="text-[11px] font-medium text-zinc-400 block mb-1">Channels</span>
+                    <span className="tnum text-lg font-semibold text-zinc-200">{activeWS.categories.reduce((n, c) => n + c.channels.length, 0) + (activeWS.channels?.length ?? 0)}</span>
                   </div>
                   <div className="bg-zinc-900/20 border border-zinc-900 p-3 rounded-lg leading-tight">
-                    <span className="text-zinc-500 font-mono text-[9px] font-bold block mb-1">ACTIVE MONITORS</span>
-                    <span className="text-lg font-bold font-mono text-emerald-400">NORMAL BOUND</span>
+                    <span className="text-[11px] font-medium text-zinc-400 block mb-1">Storage</span>
+                    <span className="text-lg font-semibold text-emerald-400">{activeWS.database?.configured ? 'Synced' : 'Local'}</span>
                   </div>
                 </div>
 
                 <div className="space-y-1 bg-zinc-950 p-4 border border-zinc-900 rounded-lg">
-                  <h4 className="font-semibold text-zinc-300 text-xs">Administrative Telemetries</h4>
+                  <h4 className="font-semibold text-zinc-300 text-xs">How this workspace runs</h4>
                   <p className="text-zinc-500 leading-normal font-sans">
-                    This single-user environment utilizes client-side isolated sandbox caches matching local database rules. It bypasses latency limits for microservice execution chains. You can add, edit, or terminate orchestrator nodes using the respective options above.
+                    This is a single-user, local-first workspace. Files stay on disk; a database is optional and only adds semantic memory and sync. You can add, edit, or remove agents in the tabs on the left.
                   </p>
                 </div>
 
@@ -1043,6 +1093,7 @@ export default function WorkspaceSettingsModal() {
                   workspaceError={workspaceError}
                   fetchDbSync={fetchDbSync}
                   setStoragePreference={setStoragePreference}
+                  updateWorkspace={updateWorkspace}
                   resolveDbConflict={resolveDbConflict}
                   syncNow={syncNow}
                   rebuildRag={rebuildRag}
@@ -1059,8 +1110,8 @@ export default function WorkspaceSettingsModal() {
               <div className="space-y-4 text-xs font-sans">
                 <div className="flex items-center justify-between select-none">
                   <div>
-                    <h3 className="font-semibold text-zinc-200">Orchestration Nodes</h3>
-                    <p className="text-zinc-500 font-sans">Search and deploy available levels of agent minds inside the virtual environment.</p>
+                    <h3 className="font-semibold text-zinc-200">Agents</h3>
+                    <p className="text-zinc-500 font-sans">Add, edit, and organize the agents that work in this workspace.</p>
                   </div>
                   <div className="flex items-center gap-2">
                     <input 
@@ -1075,7 +1126,7 @@ export default function WorkspaceSettingsModal() {
                       className="px-2.5 py-1.5 border border-zinc-800 hover:border-zinc-700 hover:bg-zinc-900 text-zinc-300 rounded-md font-semibold flex items-center gap-1.5 transition cursor-pointer select-none"
                     >
                       <Upload size={13} />
-                      <span>Import Mind</span>
+                      <span>Import agent</span>
                     </label>
                     {!agentFormOpen && (
                       <button
@@ -1102,7 +1153,7 @@ export default function WorkspaceSettingsModal() {
                   >
                     {/* Presets dropdown */}
                     <div className="space-y-1">
-                      <label className="text-zinc-500 font-bold font-mono text-[10px] block">LOAD PRESET TEMPLATE</label>
+                      <label className="text-zinc-500 font-medium text-[11px] block">Preset template</label>
                       <select
                         onChange={(e) => {
                           const preset = PRESETS.find(p => p.id === e.target.value);
@@ -1117,7 +1168,7 @@ export default function WorkspaceSettingsModal() {
                             setNewAgentIsOmniscient(preset.isOmniscient);
                           }
                         }}
-                        className="w-full bg-zinc-900 border border-zinc-800 rounded px-2.5 py-1.5 focus:border-zinc-700 focus:ring-1 focus:ring-zinc-700/40 focus:outline-none text-xs text-zinc-205 cursor-pointer"
+                        className="w-full bg-zinc-900 border border-zinc-800 rounded px-2.5 py-1.5 focus:border-zinc-700 focus:ring-1 focus:ring-zinc-700/40 focus:outline-none text-xs text-zinc-200 cursor-pointer"
                         defaultValue=""
                       >
                         <option value="" disabled>-- Select a Built-in Preset to Auto-fill --</option>
@@ -1129,7 +1180,7 @@ export default function WorkspaceSettingsModal() {
 
                     <div className="grid grid-cols-2 gap-3 leading-snug">
                       <div className="space-y-1">
-                        <label className="text-zinc-500 font-bold font-mono text-[10px] block">AGENT CODE NAME</label>
+                        <label className="text-zinc-500 font-medium text-[11px] block">Name</label>
                         <input
                           required
                           type="text"
@@ -1147,11 +1198,11 @@ export default function WorkspaceSettingsModal() {
                       </div>
 
                       <div className="space-y-1">
-                        <label className="text-zinc-500 font-bold font-mono text-[10px] block">SPECIES</label>
+                        <label className="text-zinc-500 font-medium text-[11px] block">Species</label>
                         <select
                           value={newAgentSpecies}
                           onChange={(e) => setNewAgentSpecies(e.target.value)}
-                          className="w-full bg-zinc-900 border border-zinc-800 rounded px-2.5 py-1.5 focus:border-zinc-700 focus:ring-1 focus:ring-zinc-700/40 focus:outline-none text-xs text-zinc-205 cursor-pointer"
+                          className="w-full bg-zinc-900 border border-zinc-800 rounded px-2.5 py-1.5 focus:border-zinc-700 focus:ring-1 focus:ring-zinc-700/40 focus:outline-none text-xs text-zinc-200 cursor-pointer"
                         >
                           <option value="Falcon">Falcon</option>
                           <option value="Raven">Raven</option>
@@ -1165,11 +1216,11 @@ export default function WorkspaceSettingsModal() {
 
                     <div className="grid grid-cols-2 gap-3 leading-snug">
                       <div className="space-y-1">
-                        <label className="text-zinc-500 font-bold font-mono text-[10px] block">AUTHORITY TIER</label>
+                        <label className="text-zinc-500 font-medium text-[11px] block">Authority tier</label>
                         <select
                           value={newAgentLevel}
                           onChange={(e) => setNewAgentLevel(parseInt(e.target.value) as AgentLevel)}
-                          className="w-full bg-zinc-900 border border-zinc-800 rounded px-2.5 py-1.5 focus:border-zinc-700 focus:ring-1 focus:ring-zinc-700/40 focus:outline-none text-xs text-zinc-205 cursor-pointer"
+                          className="w-full bg-zinc-900 border border-zinc-800 rounded px-2.5 py-1.5 focus:border-zinc-700 focus:ring-1 focus:ring-zinc-700/40 focus:outline-none text-xs text-zinc-200 cursor-pointer"
                         >
                           <option value={0}>L0 (Surveillance)</option>
                           <option value={1}>L1 (Admin)</option>
@@ -1179,11 +1230,11 @@ export default function WorkspaceSettingsModal() {
                       </div>
 
                       <div className="space-y-1 animate-fade-in">
-                        <label className="text-zinc-500 font-bold font-mono text-[10px] block">SUPERVISING PARENT</label>
+                        <label className="text-zinc-500 font-medium text-[11px] block">Supervising agent</label>
                         <select
                           value={newAgentParentId}
                           onChange={(e) => setNewAgentParentId(e.target.value)}
-                          className="w-full bg-zinc-900 border border-zinc-800 rounded px-2.5 py-1.5 focus:border-zinc-700 focus:ring-1 focus:ring-zinc-700/40 focus:outline-none text-xs text-zinc-205 cursor-pointer"
+                          className="w-full bg-zinc-900 border border-zinc-800 rounded px-2.5 py-1.5 focus:border-zinc-700 focus:ring-1 focus:ring-zinc-700/40 focus:outline-none text-xs text-zinc-200 cursor-pointer"
                         >
                           <option value="">None (Top-Level Node)</option>
                           {agents.filter(a => a.level < newAgentLevel).map(ag => (
@@ -1196,11 +1247,11 @@ export default function WorkspaceSettingsModal() {
                     {/* Modular composition selectors */}
                     <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3.5 leading-snug">
                       <div className="space-y-1">
-                        <label className="text-zinc-500 font-bold font-mono text-[10px] block">INSTRUCTION MODULE</label>
+                        <label className="text-zinc-500 font-medium text-[11px] block">Instructions module</label>
                         <select
                           value={newAgentInstructionModuleId}
                           onChange={(e) => setNewAgentInstructionModuleId(e.target.value)}
-                          className="w-full bg-zinc-900 border border-zinc-800 rounded px-2.5 py-1.5 focus:border-zinc-700 focus:ring-1 focus:ring-zinc-700/40 focus:outline-none text-xs text-zinc-205 cursor-pointer"
+                          className="w-full bg-zinc-900 border border-zinc-800 rounded px-2.5 py-1.5 focus:border-zinc-700 focus:ring-1 focus:ring-zinc-700/40 focus:outline-none text-xs text-zinc-200 cursor-pointer"
                         >
                           <option value="">Default directives</option>
                           {instructionModules.map(m => (
@@ -1210,11 +1261,11 @@ export default function WorkspaceSettingsModal() {
                       </div>
 
                       <div className="space-y-1">
-                        <label className="text-zinc-550 font-bold font-mono text-[10px] block">MODEL MODULE</label>
+                        <label className="text-zinc-550 font-medium text-[11px] block">Model module</label>
                         <select
                           value={newAgentModelModuleId}
                           onChange={(e) => setNewAgentModelModuleId(e.target.value)}
-                          className="w-full bg-zinc-900 border border-zinc-800 rounded px-2.5 py-1.5 focus:border-zinc-700 focus:ring-1 focus:ring-zinc-700/40 focus:outline-none text-xs text-zinc-205 cursor-pointer"
+                          className="w-full bg-zinc-900 border border-zinc-800 rounded px-2.5 py-1.5 focus:border-zinc-700 focus:ring-1 focus:ring-zinc-700/40 focus:outline-none text-xs text-zinc-200 cursor-pointer"
                         >
                           <option value="">Default flagship profile</option>
                           {modelModules.map(m => (
@@ -1224,11 +1275,11 @@ export default function WorkspaceSettingsModal() {
                       </div>
 
                       <div className="space-y-1">
-                        <label className="text-zinc-550 font-bold font-mono text-[10px] block">TOOLKIT MODULE</label>
+                        <label className="text-zinc-550 font-medium text-[11px] block">Toolkit module</label>
                         <select
                           value={newAgentToolkitModuleId}
                           onChange={(e) => setNewAgentToolkitModuleId(e.target.value)}
-                          className="w-full bg-zinc-900 border border-zinc-800 rounded px-2.5 py-1.5 focus:border-zinc-700 focus:ring-1 focus:ring-zinc-700/40 focus:outline-none text-xs text-zinc-205 cursor-pointer"
+                          className="w-full bg-zinc-900 border border-zinc-800 rounded px-2.5 py-1.5 focus:border-zinc-700 focus:ring-1 focus:ring-zinc-700/40 focus:outline-none text-xs text-zinc-200 cursor-pointer"
                         >
                           <option value="">No allowed tools</option>
                           {toolkitModules.map(m => (
@@ -1238,11 +1289,11 @@ export default function WorkspaceSettingsModal() {
                       </div>
 
                       <div className="space-y-1">
-                        <label className="text-zinc-550 font-bold font-mono text-[10px] block">CONSTRAINTS MODULE</label>
+                        <label className="text-zinc-550 font-medium text-[11px] block">Constraints module</label>
                         <select
                           value={newAgentConstraintsModuleId}
                           onChange={(e) => setNewAgentConstraintsModuleId(e.target.value)}
-                          className="w-full bg-zinc-900 border border-zinc-800 rounded px-2.5 py-1.5 focus:border-zinc-700 focus:ring-1 focus:ring-zinc-700/40 focus:outline-none text-xs text-zinc-205 cursor-pointer"
+                          className="w-full bg-zinc-900 border border-zinc-800 rounded px-2.5 py-1.5 focus:border-zinc-700 focus:ring-1 focus:ring-zinc-700/40 focus:outline-none text-xs text-zinc-200 cursor-pointer"
                         >
                           <option value="">No constraints</option>
                           {constraintsModules.map(m => (
@@ -1252,11 +1303,11 @@ export default function WorkspaceSettingsModal() {
                       </div>
 
                       <div className="space-y-1">
-                        <label className="text-zinc-550 font-bold font-mono text-[10px] block">CAPABILITIES MODULE</label>
+                        <label className="text-zinc-550 font-medium text-[11px] block">Capabilities module</label>
                         <select
                           value={newAgentCapabilitiesModuleId}
                           onChange={(e) => setNewAgentCapabilitiesModuleId(e.target.value)}
-                          className="w-full bg-zinc-900 border border-zinc-800 rounded px-2.5 py-1.5 focus:border-zinc-700 focus:ring-1 focus:ring-zinc-700/40 focus:outline-none text-xs text-zinc-205 cursor-pointer"
+                          className="w-full bg-zinc-900 border border-zinc-800 rounded px-2.5 py-1.5 focus:border-zinc-700 focus:ring-1 focus:ring-zinc-700/40 focus:outline-none text-xs text-zinc-200 cursor-pointer"
                         >
                           <option value="">No capabilities</option>
                           {capabilitiesModules.map(m => (
@@ -1272,7 +1323,7 @@ export default function WorkspaceSettingsModal() {
                         <select
                           value={newAgentRoleId}
                           onChange={(e) => setNewAgentRoleId(e.target.value)}
-                          className="w-full bg-zinc-900 border border-zinc-800 rounded px-2.5 py-1.5 focus:border-zinc-700 focus:ring-1 focus:ring-zinc-700/40 focus:outline-none text-xs text-zinc-205 cursor-pointer"
+                          className="w-full bg-zinc-900 border border-zinc-800 rounded px-2.5 py-1.5 focus:border-zinc-700 focus:ring-1 focus:ring-zinc-700/40 focus:outline-none text-xs text-zinc-200 cursor-pointer"
                         >
                           <option value="">No Custom Role</option>
                           {roles.map(r => (
@@ -1298,7 +1349,7 @@ export default function WorkspaceSettingsModal() {
                     </div>
 
                     <div className="space-y-2">
-                      <label className="text-zinc-500 font-bold font-mono text-[10px] block">DIRECTIVES SUMMARY DESCRIPTION</label>
+                      <label className="text-zinc-500 font-medium text-[11px] block">Description</label>
                       <textarea
                         value={newAgentDesc}
                         onChange={(e) => setNewAgentDesc(e.target.value)}
@@ -1340,12 +1391,12 @@ export default function WorkspaceSettingsModal() {
                     className="bg-[#101014] border border-indigo-900/60 p-4 rounded-lg space-y-3.5 select-text overflow-hidden"
                   >
                     <div className="flex items-center justify-between border-b border-indigo-900/40 pb-2 select-none">
-                      <span className="font-semibold text-indigo-400 font-mono text-[10px]">EDITING AGENT NODE</span>
+                      <span className="font-medium text-indigo-400 text-[12px]">Editing agent</span>
                     </div>
 
                     <div className="grid grid-cols-2 gap-3 leading-snug">
                       <div className="space-y-1">
-                        <label className="text-indigo-300 font-bold font-mono text-[10px] block">AGENT CODE NAME</label>
+                        <label className="text-indigo-300 font-medium text-[11px] block">Name</label>
                         <input
                           required
                           type="text"
@@ -1359,11 +1410,11 @@ export default function WorkspaceSettingsModal() {
                       </div>
 
                       <div className="space-y-1">
-                        <label className="text-indigo-300 font-bold font-mono text-[10px] block">SPECIES</label>
+                        <label className="text-indigo-300 font-medium text-[11px] block">Species</label>
                         <select
                           value={editAgentSpecies}
                           onChange={(e) => setEditAgentSpecies(e.target.value)}
-                          className="w-full bg-zinc-950 border border-zinc-800 rounded px-2.5 py-1.5 focus:border-indigo-700 focus:ring-1 focus:ring-indigo-700/40 focus:outline-none text-xs text-zinc-205 cursor-pointer"
+                          className="w-full bg-zinc-950 border border-zinc-800 rounded px-2.5 py-1.5 focus:border-indigo-700 focus:ring-1 focus:ring-indigo-700/40 focus:outline-none text-xs text-zinc-200 cursor-pointer"
                         >
                           <option value="Falcon">Falcon</option>
                           <option value="Raven">Raven</option>
@@ -1377,11 +1428,11 @@ export default function WorkspaceSettingsModal() {
 
                     <div className="grid grid-cols-2 gap-3 leading-snug">
                       <div className="space-y-1">
-                        <label className="text-indigo-300 font-bold font-mono text-[10px] block">AUTHORITY TIER</label>
+                        <label className="text-indigo-300 font-medium text-[11px] block">Authority tier</label>
                         <select
                           value={editAgentLevel}
                           onChange={(e) => setEditAgentLevel(parseInt(e.target.value) as AgentLevel)}
-                          className="w-full bg-zinc-950 border border-zinc-800 rounded px-2.5 py-1.5 focus:border-indigo-700 focus:ring-1 focus:ring-indigo-700/40 focus:outline-none text-xs text-zinc-205 cursor-pointer"
+                          className="w-full bg-zinc-950 border border-zinc-800 rounded px-2.5 py-1.5 focus:border-indigo-700 focus:ring-1 focus:ring-indigo-700/40 focus:outline-none text-xs text-zinc-200 cursor-pointer"
                         >
                           <option value={0}>L0</option>
                           <option value={1}>L1</option>
@@ -1395,7 +1446,7 @@ export default function WorkspaceSettingsModal() {
                         <select
                           value={editAgentRoleId}
                           onChange={(e) => setEditAgentRoleId(e.target.value)}
-                          className="w-full bg-zinc-950 border border-zinc-800 rounded px-2.5 py-1.5 focus:border-indigo-700 focus:ring-1 focus:ring-indigo-700/40 focus:outline-none text-xs text-zinc-205 cursor-pointer"
+                          className="w-full bg-zinc-950 border border-zinc-800 rounded px-2.5 py-1.5 focus:border-indigo-700 focus:ring-1 focus:ring-indigo-700/40 focus:outline-none text-xs text-zinc-200 cursor-pointer"
                         >
                           <option value="">No Custom Role</option>
                           {roles.map(r => (
@@ -1423,7 +1474,7 @@ export default function WorkspaceSettingsModal() {
                     {/* Attached Modules selectors */}
                     <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3.5 leading-snug">
                       <div className="space-y-1">
-                        <label className="text-indigo-300 font-bold font-mono text-[10px] block">INSTRUCTION MODULE</label>
+                        <label className="text-indigo-300 font-medium text-[11px] block">Instructions module</label>
                         <select
                           value={editAgentInstructionModuleId}
                           onChange={(e) => {
@@ -1432,7 +1483,7 @@ export default function WorkspaceSettingsModal() {
                             const targetModule = instructionModules.find(m => m.id === newId);
                             setEditAgentInstructionPrompt(targetModule?.systemPrompt || '');
                           }}
-                          className="w-full bg-zinc-950 border border-zinc-800 rounded px-2.5 py-1.5 focus:border-indigo-700 focus:ring-1 focus:ring-indigo-700/40 focus:outline-none text-xs text-zinc-205 cursor-pointer"
+                          className="w-full bg-zinc-950 border border-zinc-800 rounded px-2.5 py-1.5 focus:border-indigo-700 focus:ring-1 focus:ring-indigo-700/40 focus:outline-none text-xs text-zinc-200 cursor-pointer"
                         >
                           <option value="">Default directives</option>
                           {instructionModules.map(m => (
@@ -1442,11 +1493,11 @@ export default function WorkspaceSettingsModal() {
                       </div>
 
                       <div className="space-y-1">
-                        <label className="text-indigo-300 font-bold font-mono text-[10px] block">MODEL MODULE</label>
+                        <label className="text-indigo-300 font-medium text-[11px] block">Model module</label>
                         <select
                           value={editAgentModelModuleId}
                           onChange={(e) => setEditAgentModelModuleId(e.target.value)}
-                          className="w-full bg-zinc-950 border border-zinc-800 rounded px-2.5 py-1.5 focus:border-indigo-700 focus:ring-1 focus:ring-indigo-700/40 focus:outline-none text-xs text-zinc-205 cursor-pointer"
+                          className="w-full bg-zinc-950 border border-zinc-800 rounded px-2.5 py-1.5 focus:border-indigo-700 focus:ring-1 focus:ring-indigo-700/40 focus:outline-none text-xs text-zinc-200 cursor-pointer"
                         >
                           <option value="">Default flagship profile</option>
                           {modelModules.map(m => (
@@ -1456,11 +1507,11 @@ export default function WorkspaceSettingsModal() {
                       </div>
 
                       <div className="space-y-1">
-                        <label className="text-indigo-300 font-bold font-mono text-[10px] block">TOOLKIT MODULE</label>
+                        <label className="text-indigo-300 font-medium text-[11px] block">Toolkit module</label>
                         <select
                           value={editAgentToolkitModuleId}
                           onChange={(e) => setEditAgentToolkitModuleId(e.target.value)}
-                          className="w-full bg-zinc-950 border border-zinc-800 rounded px-2.5 py-1.5 focus:border-indigo-700 focus:ring-1 focus:ring-indigo-700/40 focus:outline-none text-xs text-zinc-205 cursor-pointer"
+                          className="w-full bg-zinc-950 border border-zinc-800 rounded px-2.5 py-1.5 focus:border-indigo-700 focus:ring-1 focus:ring-indigo-700/40 focus:outline-none text-xs text-zinc-200 cursor-pointer"
                         >
                           <option value="">No allowed tools</option>
                           {toolkitModules.map(m => (
@@ -1470,11 +1521,11 @@ export default function WorkspaceSettingsModal() {
                       </div>
 
                       <div className="space-y-1">
-                        <label className="text-indigo-300 font-bold font-mono text-[10px] block">CONSTRAINTS MODULE</label>
+                        <label className="text-indigo-300 font-medium text-[11px] block">Constraints module</label>
                         <select
                           value={editAgentConstraintsModuleId}
                           onChange={(e) => setEditAgentConstraintsModuleId(e.target.value)}
-                          className="w-full bg-zinc-950 border border-zinc-800 rounded px-2.5 py-1.5 focus:border-indigo-700 focus:ring-1 focus:ring-indigo-700/40 focus:outline-none text-xs text-zinc-205 cursor-pointer"
+                          className="w-full bg-zinc-950 border border-zinc-800 rounded px-2.5 py-1.5 focus:border-indigo-700 focus:ring-1 focus:ring-indigo-700/40 focus:outline-none text-xs text-zinc-200 cursor-pointer"
                         >
                           <option value="">No constraints</option>
                           {constraintsModules.map(m => (
@@ -1484,11 +1535,11 @@ export default function WorkspaceSettingsModal() {
                       </div>
 
                       <div className="space-y-1">
-                        <label className="text-indigo-300 font-bold font-mono text-[10px] block">CAPABILITIES MODULE</label>
+                        <label className="text-indigo-300 font-medium text-[11px] block">Capabilities module</label>
                         <select
                           value={editAgentCapabilitiesModuleId}
                           onChange={(e) => setEditAgentCapabilitiesModuleId(e.target.value)}
-                          className="w-full bg-zinc-950 border border-zinc-800 rounded px-2.5 py-1.5 focus:border-indigo-700 focus:ring-1 focus:ring-indigo-700/40 focus:outline-none text-xs text-zinc-205 cursor-pointer"
+                          className="w-full bg-zinc-950 border border-zinc-800 rounded px-2.5 py-1.5 focus:border-indigo-700 focus:ring-1 focus:ring-indigo-700/40 focus:outline-none text-xs text-zinc-200 cursor-pointer"
                         >
                           <option value="">No capabilities</option>
                           {capabilitiesModules.map(m => (
@@ -1499,7 +1550,7 @@ export default function WorkspaceSettingsModal() {
                     </div>
 
                     <div className="space-y-2">
-                      <label className="text-indigo-300 font-bold font-mono text-[10px] block">INSTRUCTION BOX</label>
+                      <label className="text-indigo-300 font-medium text-[11px] block">Instructions</label>
                       <textarea
                         value={editAgentInstructionPrompt}
                         onChange={(e) => setEditAgentInstructionPrompt(e.target.value)}
@@ -1533,7 +1584,7 @@ export default function WorkspaceSettingsModal() {
                 <div className="border border-zinc-900 rounded-lg overflow-hidden bg-zinc-950/20">
                   <table className="w-full text-left font-sans select-none border-collapse">
                     <thead>
-                      <tr className="bg-zinc-950 border-b border-zinc-900 text-[9.5px] font-mono font-bold text-zinc-550 uppercase">
+                      <tr className="bg-zinc-950 border-b border-zinc-900 text-[11px] font-medium text-zinc-400">
                         <th className="p-3">Agent</th>
                         <th className="p-3">Species</th>
                         <th className="p-3">Tier</th>
@@ -1545,7 +1596,7 @@ export default function WorkspaceSettingsModal() {
                       {agents.map(ag => (
                         <tr key={ag.id} className="hover:bg-zinc-900/10 text-xs">
                           <td className="p-3 font-semibold text-zinc-250 truncate max-w-xs">{ag.name}</td>
-                          <td className="p-3 text-mono text-zinc-450">{ag.species}</td>
+                          <td className="p-3 font-mono text-zinc-450">{ag.species}</td>
                           <td className="p-3">
                             <span className="px-1.5 py-0.2 select-none font-mono text-[9px] font-bold rounded bg-zinc-900 border border-zinc-800 text-zinc-400">
                               L{ag.level}
@@ -1558,7 +1609,7 @@ export default function WorkspaceSettingsModal() {
                                 type="button"
                                 onClick={() => setStudioAgentId(ag.id)}
                                 className="text-indigo-400 hover:text-indigo-300 px-1.5 py-0.5 bg-indigo-500/10 hover:bg-indigo-500/20 rounded border border-indigo-500/30 transition focus:outline-none cursor-pointer flex items-center gap-1 font-mono text-[10px]"
-                                title="Launch Lego-Style Agent Studio"
+                                title="Open agent studio"
                               >
                                 <Layers size={11} />
                                 <span>Studio</span>
@@ -1567,7 +1618,7 @@ export default function WorkspaceSettingsModal() {
                                 type="button"
                                 onClick={() => handleDuplicateAgent(ag)}
                                 className="text-zinc-400 hover:text-emerald-300 p-1 bg-zinc-950 hover:bg-emerald-900/40 rounded border border-zinc-900 hover:border-emerald-900 transition focus:outline-none cursor-pointer"
-                                title="Duplicate Agent Node"
+                                title="Duplicate agent"
                               >
                                 <Copy size={11} />
                               </button>
@@ -1575,7 +1626,7 @@ export default function WorkspaceSettingsModal() {
                                 type="button"
                                 onClick={() => handleExportAgent(ag)}
                                 className="text-zinc-400 hover:text-cyan-300 p-1 bg-zinc-950 hover:bg-cyan-900/40 rounded border border-zinc-900 hover:border-cyan-900 transition focus:outline-none cursor-pointer"
-                                title="Export Configuration JSON"
+                                title="Export agent JSON"
                               >
                                 <Download size={11} />
                               </button>
@@ -1583,7 +1634,7 @@ export default function WorkspaceSettingsModal() {
                                 type="button"
                                 onClick={() => startEditingAgent(ag)}
                                 className="text-zinc-400 hover:text-indigo-300 p-1 bg-zinc-950 hover:bg-indigo-900/40 rounded border border-zinc-900 hover:border-indigo-900 transition focus:outline-none cursor-pointer"
-                                title="Edit Agent Configuration"
+                                title="Edit agent"
                               >
                                 <Edit size={11} />
                               </button>
@@ -1592,9 +1643,9 @@ export default function WorkspaceSettingsModal() {
                                   type="button"
                                   onClick={() => {
                                     askConfirmation({
-                                      title: `Deprovision Agent ${ag.name}?`,
-                                      description: `Deprovision agent ${ag.name} from the operating pipeline? Active tasks assigned to this agent will be unassigned.`,
-                                      confirmLabel: 'Deprovision Agent',
+                                      title: `Delete ${ag.name}?`,
+                                      description: `This removes the agent from the workspace. Active tasks assigned to it will be unassigned.`,
+                                      confirmLabel: 'Delete agent',
                                       isDanger: true,
                                       onConfirm: () => {
                                         runCrudAction(() => deleteAgent(ag.id), 'Failed to delete agent.');
@@ -1602,7 +1653,7 @@ export default function WorkspaceSettingsModal() {
                                     });
                                   }}
                                   className="text-rose-400 hover:text-rose-300 p-1 bg-zinc-950 hover:bg-rose-950/40 rounded border border-zinc-900 hover:border-rose-900 transition focus:outline-none cursor-pointer"
-                                  title="De-Authorize Node"
+                                  title="Delete agent"
                                 >
                                   <Trash2 size={11} />
                                 </button>
@@ -1622,7 +1673,7 @@ export default function WorkspaceSettingsModal() {
                 {/* Left side: Roles List */}
                 <div className="w-1/3 border border-zinc-900 rounded-lg bg-zinc-950/40 flex flex-col">
                   <div className="p-3 border-b border-zinc-900 flex items-center justify-between">
-                    <span className="font-semibold text-zinc-300 text-xs uppercase">ROLES hierarchy</span>
+                    <span className="font-medium text-zinc-300 text-[13px]">Roles</span>
                     <button onClick={handleCreateRole} className="p-1 hover:bg-zinc-800 rounded outline-none text-zinc-400 hover:text-zinc-200">
                       <Plus size={14} />
                     </button>
@@ -1660,10 +1711,8 @@ export default function WorkspaceSettingsModal() {
                       <div className="p-5 border-b border-zinc-900 space-y-4">
                         <div className="flex items-center justify-between">
                           <div className="flex items-center gap-2">
-                            <h3 className="font-semibold text-zinc-200 uppercase text-xs">Edit Role</h3>
-                            <span className="text-[10px] font-mono text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 px-2 py-0.5 rounded">
-                              ● Autosaved
-                            </span>
+                            <h3 className="font-semibold text-zinc-200 text-[13px]">Edit role</h3>
+                            <span className="text-[11px] text-emerald-400">Autosaved</span>
                           </div>
                           <button
                             onClick={() => {
@@ -1687,7 +1736,7 @@ export default function WorkspaceSettingsModal() {
                         </div>
                         
                         <div className="space-y-1.5">
-                          <label className="text-xs font-mono font-medium text-zinc-400 uppercase">Role Name</label>
+                          <label className="text-xs font-medium text-zinc-400">Role name</label>
                           <input
                             type="text"
                             value={selectedRole.name}
@@ -1697,7 +1746,7 @@ export default function WorkspaceSettingsModal() {
                         </div>
 
                         <div className="space-y-2">
-                          <label className="text-xs font-mono font-medium text-zinc-400 uppercase">Role Color</label>
+                          <label className="text-xs font-medium text-zinc-400">Role color</label>
                           <div className="grid grid-cols-8 gap-2">
                             {ROLE_COLORS.map(color => (
                               <button
@@ -1714,7 +1763,7 @@ export default function WorkspaceSettingsModal() {
                       </div>
 
                       <div className="p-5 space-y-4">
-                        <h4 className="font-semibold text-zinc-200 uppercase text-xs border-b border-zinc-900 pb-2">Role Permissions</h4>
+                        <h4 className="font-semibold text-zinc-200 text-[13px] border-b border-zinc-900 pb-2">Role permissions</h4>
                         <div className="space-y-4">
                           {ROLE_PERMISSIONS.map(perm => {
                             const isGranted = selectedRole.permissions.includes(perm.id) || selectedRole.permissions.includes('all') || selectedRole.permissions.includes('administrator');
@@ -1770,7 +1819,7 @@ export default function WorkspaceSettingsModal() {
                       <div className="space-y-1 min-w-0">
                         <div className="flex items-baseline gap-2">
                           <span className="font-semibold text-zinc-200 font-mono tracking-tight">{t.name}</span>
-                          <span className="text-[8.5px] font-mono text-zinc-550 bg-zinc-950 border border-zinc-900 rounded px-1 group uppercase inline-block">
+                          <span className="text-[9px] font-mono text-zinc-550 bg-zinc-950 border border-zinc-900 rounded px-1 inline-block">
                             {t.category}
                           </span>
                         </div>
@@ -1817,11 +1866,11 @@ export default function WorkspaceSettingsModal() {
                   {/* Create Category Form */}
                   <form onSubmit={handleCreateCategory} className="bg-zinc-950 border border-zinc-900 p-4 rounded-lg flex flex-col justify-between space-y-3 animate-fade-in leading-snug select-text">
                     <div className="space-y-3">
-                      <span className="text-[10px] font-mono font-bold text-zinc-450 tracking-wider flex items-center gap-1 uppercase select-none">
-                        <Layers size={11} /><span>Assemble New Category</span>
+                      <span className="text-[13px] font-medium text-zinc-300 flex items-center gap-1.5 select-none">
+                        <Layers size={13} /><span>New category</span>
                       </span>
                       <div className="space-y-1">
-                        <label className="text-[10px] font-mono text-zinc-500 font-bold block mb-1">CATEGORY NAME</label>
+                        <label className="text-[11px] font-medium text-zinc-400 block mb-1">Category name</label>
                         <input
                           required
                           type="text"
@@ -1849,17 +1898,17 @@ export default function WorkspaceSettingsModal() {
                         className="px-2.5 py-1.5 bg-indigo-500 hover:bg-indigo-600 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-indigo-500 font-semibold text-white rounded flex items-center gap-1 cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
                       >
                         <Plus size={13} aria-hidden="true" />
-                        <span>Assemble Category</span>
+                        <span>Create category</span>
                       </button>
                     </div>
                   </form>
 
                   {/* Scaffold Operational Channel */}
                   <form onSubmit={handleCreateChannel} className="bg-zinc-950 border border-zinc-900 p-4 rounded-lg space-y-3 animate-fade-in leading-snug select-text">
-                    <span className="text-[10px] font-mono font-bold text-zinc-450 tracking-wider flex items-center gap-1 uppercase select-none"><Hash size={11} /><span>Scaffold Operational Channel</span></span>
+                    <span className="text-[13px] font-medium text-zinc-300 flex items-center gap-1.5 select-none"><Hash size={13} /><span>New channel</span></span>
                     <div className="grid grid-cols-2 gap-3 leading-snug">
                       <div className="space-y-1">
-                        <label className="text-[10px] font-mono text-zinc-500 font-bold block mb-1">CHANNEL CODE LABEL</label>
+                        <label className="text-[11px] font-medium text-zinc-400 block mb-1">Channel name</label>
                         <input
                           required
                           type="text"
@@ -1884,7 +1933,7 @@ export default function WorkspaceSettingsModal() {
                       </div>
 
                       <div className="space-y-1">
-                        <label className="text-[10px] font-mono text-zinc-500 font-bold block mb-1">BOUND CATEGORY</label>
+                        <label className="text-[11px] font-medium text-zinc-400 block mb-1">Category</label>
                         <select
                           value={newChannelCategory}
                           required
@@ -1900,7 +1949,7 @@ export default function WorkspaceSettingsModal() {
                     </div>
 
                     <div className="space-y-1">
-                      <label className="text-[10px] font-mono text-zinc-500 font-bold block mb-1">DESCRIPTION</label>
+                        <label className="text-[11px] font-medium text-zinc-400 block mb-1">Description</label>
                       <input
                         type="text"
                         maxLength={120}
@@ -1930,8 +1979,8 @@ export default function WorkspaceSettingsModal() {
                   {activeWS.channels && activeWS.channels.length > 0 && (
                     <div className="space-y-1">
                       <div className="flex items-center justify-between px-1 mb-1">
-                        <h4 className="font-mono text-[9.5px] font-bold text-zinc-500 uppercase">
-                          TOP-LEVEL CHANNELS
+                        <h4 className="text-[13px] font-medium text-zinc-400">
+                          Top-level channels
                         </h4>
                       </div>
                       <div className="space-y-1">
@@ -1951,7 +2000,7 @@ export default function WorkspaceSettingsModal() {
                                     type="button"
                                     onClick={() => runCrudAction(() => archiveChannel(ch.id, true), 'Failed to archive channel.')}
                                     className="px-2 py-0.5 bg-zinc-950 hover:bg-zinc-900 border border-zinc-850 text-zinc-400 text-[10px] rounded cursor-pointer"
-                                    title="Archive Channel"
+                                    title="Archive channel"
                                   >
                                     Archive
                                   </button>
@@ -1961,7 +2010,7 @@ export default function WorkspaceSettingsModal() {
                                       askConfirmation({
                                         title: `Delete Channel #${ch.name}?`,
                                         description: `Delete channel #${ch.name} permanently? All message history in this channel will be purged. Action is irreversible.`,
-                                        confirmLabel: 'Delete Channel',
+                                        confirmLabel: 'Delete channel',
                                         isDanger: true,
                                         onConfirm: () => {
                                           runCrudAction(() => deleteChannel(ch.id), 'Failed to delete channel.');
@@ -1969,14 +2018,14 @@ export default function WorkspaceSettingsModal() {
                                       });
                                     }}
                                     className="p-1 bg-zinc-950 hover:bg-rose-950/40 text-rose-450 border border-zinc-800 hover:border-rose-950 rounded cursor-pointer"
-                                    title="Delete Channel"
+                                    title="Delete channel"
                                   >
                                     <Trash2 size={11.5} />
                                   </button>
                                 </>
                               )}
                               {ch.name === 'general' && (
-                                <span className="text-[9.5px] text-zinc-650 font-mono">SYSTEM LOCK</span>
+                                <span className="text-[10px] text-zinc-500">System channel</span>
                               )}
                             </div>
                           </div>
@@ -1990,7 +2039,7 @@ export default function WorkspaceSettingsModal() {
                     <div key={c.id} className="space-y-1 border-t border-zinc-900/60 pt-3 first:border-0 first:pt-0">
                       <div className="flex items-center justify-between px-1 mb-1">
                         <div className="flex items-center gap-2">
-                          <h4 className="font-mono text-[9.5px] font-bold text-zinc-500 uppercase">
+                          <h4 className="text-[13px] font-medium text-zinc-300">
                             {c.name}
                           </h4>
                           <div className="flex items-center gap-0.5 select-none">
@@ -2067,7 +2116,7 @@ export default function WorkspaceSettingsModal() {
                                 type="button"
                                 onClick={() => runCrudAction(() => archiveChannel(ch.id, true), 'Failed to archive channel.')}
                                 className="px-2 py-0.5 bg-zinc-950 hover:bg-zinc-900 border border-zinc-805 text-zinc-400 text-[10px] rounded cursor-pointer"
-                                title="Archive Channel"
+                                title="Archive channel"
                               >
                                 Archive
                               </button>
@@ -2077,7 +2126,7 @@ export default function WorkspaceSettingsModal() {
                                   askConfirmation({
                                     title: `Delete Channel #${ch.name}?`,
                                     description: `Delete channel #${ch.name} permanently? All message history in this channel will be purged. Action is irreversible.`,
-                                    confirmLabel: 'Delete Channel',
+                                    confirmLabel: 'Delete channel',
                                     isDanger: true,
                                     onConfirm: () => {
                                       runCrudAction(() => deleteChannel(ch.id), 'Failed to delete channel.');
@@ -2085,7 +2134,7 @@ export default function WorkspaceSettingsModal() {
                                   });
                                 }}
                                 className="p-1 bg-zinc-950 hover:bg-rose-950/40 text-rose-455 border border-zinc-800 hover:border-rose-950 rounded cursor-pointer"
-                                title="Delete Channel"
+                                title="Delete channel"
                               >
                                 <Trash2 size={11.5} />
                               </button>
@@ -2100,8 +2149,8 @@ export default function WorkspaceSettingsModal() {
                   {archivedChannels && archivedChannels.length > 0 && (
                     <div className="space-y-1 border-t border-dashed border-zinc-800 pt-4 mt-4">
                       <div className="flex items-center justify-between px-1 mb-1">
-                        <h4 className="font-mono text-[9.5px] font-bold text-amber-500 uppercase tracking-wider">
-                          📁 Archived Operational Sectors (Read-Only)
+                        <h4 className="text-[13px] font-medium text-amber-400">
+                          Archived channels (read-only)
                         </h4>
                       </div>
                       <div className="space-y-1">
@@ -2119,7 +2168,7 @@ export default function WorkspaceSettingsModal() {
                                 type="button"
                                 onClick={() => runCrudAction(() => archiveChannel(ch.id, false), 'Failed to restore channel.')}
                                 className="px-2 py-0.5 bg-amber-950/20 hover:bg-amber-950/40 border border-amber-900/30 text-amber-400 text-[10px] rounded cursor-pointer transition"
-                                title="Restore Channel"
+                                title="Restore channel"
                               >
                                 Restore
                               </button>
@@ -2129,7 +2178,7 @@ export default function WorkspaceSettingsModal() {
                                   askConfirmation({
                                     title: `Hard-Delete Channel #${ch.name}?`,
                                     description: `Hard-delete archived channel #${ch.name} permanently? Action is irreversible.`,
-                                    confirmLabel: 'Hard-Delete Channel',
+                                    confirmLabel: 'Delete channel permanently',
                                     isDanger: true,
                                     onConfirm: () => {
                                       runCrudAction(() => deleteChannel(ch.id), 'Failed to delete channel.');
@@ -2137,7 +2186,7 @@ export default function WorkspaceSettingsModal() {
                                   });
                                 }}
                                 className="p-1 bg-zinc-950 hover:bg-rose-950/40 text-rose-455 border border-zinc-800 hover:border-rose-950 rounded cursor-pointer"
-                                title="Delete Channel"
+                                title="Delete channel"
                               >
                                 <Trash2 size={11.5} />
                               </button>
@@ -2173,8 +2222,8 @@ export default function WorkspaceSettingsModal() {
                     <div className="flex items-center justify-between bg-zinc-950/20 pb-2 border-b border-zinc-900">
                       <div className="flex items-center gap-1.5">
                         <Brain size={13.5} className="text-indigo-400 shrink-0" />
-                        <span className="font-bold text-zinc-200 tracking-wider font-mono text-[10px] uppercase">
-                          [Skill] Catalog ({instructionModules.length})
+                        <span className="font-medium text-zinc-200 text-[13px]">
+                          Skills <span className="tnum text-zinc-500 text-[11px]">({instructionModules.length})</span>
                         </span>
                       </div>
                       
@@ -2191,7 +2240,7 @@ export default function WorkspaceSettingsModal() {
                           className="px-2 py-1 text-[10px] font-mono font-bold text-indigo-400 hover:text-indigo-300 border border-indigo-500/20 hover:border-indigo-500/40 bg-indigo-500/[0.03] rounded transition flex items-center gap-0.5"
                         >
                           <Plus size={10} />
-                          <span>NEW SKILL</span>
+                          <span>New skill</span>
                         </button>
                       )}
                     </div>
@@ -2206,9 +2255,9 @@ export default function WorkspaceSettingsModal() {
                         transition={{ duration: 0.2 }}
                         className="bg-[#0c0c0e] border border-zinc-800 p-3.5 rounded-lg space-y-3 overflow-hidden"
                       >
-                        <div className="flex items-center justify-between border-b border-zinc-900 pb-1.5 select-none text-[10px] font-mono uppercase">
-                          <span className="text-indigo-400 font-bold">
-                            {isCreatingSkill ? 'Create New Skill Card' : 'Configure Skill Parameter'}
+                        <div className="flex items-center justify-between border-b border-zinc-900 pb-1.5 select-none">
+                          <span className="text-[13px] font-medium text-zinc-300">
+                            {isCreatingSkill ? 'New skill' : 'Edit skill'}
                           </span>
                           <button 
                             onClick={() => {
@@ -2223,7 +2272,7 @@ export default function WorkspaceSettingsModal() {
                         
                         <div className="space-y-2.5">
                           <div>
-                            <label className="text-[10px] font-bold text-zinc-450 font-mono uppercase block mb-1">SKILL NAME</label>
+                            <label className="text-[11px] font-medium text-zinc-400 block mb-1">Name</label>
                             <input 
                               type="text"
                               value={skillFormName}
@@ -2234,7 +2283,7 @@ export default function WorkspaceSettingsModal() {
                           </div>
 
                           <div>
-                            <label className="text-[10px] font-bold text-zinc-450 font-mono uppercase block mb-1">DESCRIPTION</label>
+                            <label className="text-[11px] font-medium text-zinc-400 block mb-1">Description</label>
                             <input 
                               type="text"
                               value={skillFormDesc}
@@ -2246,7 +2295,7 @@ export default function WorkspaceSettingsModal() {
 
                           <div className="grid grid-cols-2 gap-2">
                             <div>
-                              <label className="text-[10px] font-bold text-zinc-450 font-mono uppercase block mb-1">MODEL PROVIDER</label>
+                              <label className="text-[11px] font-medium text-zinc-400 block mb-1">Model</label>
                               <select
                                 value={skillFormModelProfileId}
                                 onChange={(e) => setSkillFormModelProfileId(e.target.value)}
@@ -2258,7 +2307,7 @@ export default function WorkspaceSettingsModal() {
                               </select>
                             </div>
                             <div>
-                              <label className="text-[10px] font-bold text-zinc-450 font-mono uppercase block mb-1">SANDBOX LOCATION</label>
+                              <label className="text-[11px] font-medium text-zinc-400 block mb-1">Skill file</label>
                               <input 
                                 type="text"
                                 value={skillFormSandboxPath}
@@ -2270,9 +2319,9 @@ export default function WorkspaceSettingsModal() {
                           </div>
 
                           <div>
-                            <label className="text-[10px] font-bold text-zinc-450 font-mono uppercase block mb-1 flex items-center justify-between">
-                              <span>MARKDOWN INSTRUCTIONS</span>
-                              <span className="text-[9px] text-zinc-550 capitalize normal-case font-normal">Parsed as Markdown format</span>
+                            <label className="text-[11px] font-medium text-zinc-400 block mb-1 flex items-center justify-between">
+                              <span>Instructions</span>
+                              <span className="text-[10px] text-zinc-500 font-normal">Markdown</span>
                             </label>
                             <textarea 
                               value={skillFormPrompt}
@@ -2390,8 +2439,8 @@ export default function WorkspaceSettingsModal() {
 
                           {/* Attached Agents Row */}
                           <div className="pt-1.5 border-t border-zinc-900/40 select-none">
-                            <span className="text-[9.5px] font-mono font-bold text-zinc-650 uppercase block mb-1">
-                              Linked Sandbox Agents:
+                            <span className="text-[11px] font-medium text-zinc-400 block mb-1">
+                              Linked agents
                             </span>
                             <div className="flex flex-wrap gap-1.5 items-center">
                               {agents.map(agent => {
@@ -2427,8 +2476,8 @@ export default function WorkspaceSettingsModal() {
                     <div className="flex items-center justify-between bg-zinc-950/20 pb-2 border-b border-zinc-900">
                       <div className="flex items-center gap-1.5">
                         <Wrench size={13.5} className="text-teal-400 shrink-0" />
-                        <span className="font-bold text-zinc-200 tracking-wider font-mono text-[10px] uppercase">
-                          [Tool] Schema Catalog ({toolkitModules.length})
+                        <span className="font-medium text-zinc-200 text-[13px]">
+                          Tools <span className="tnum text-zinc-500 text-[11px]">({toolkitModules.length})</span>
                         </span>
                       </div>
                       
@@ -2455,7 +2504,7 @@ export default function WorkspaceSettingsModal() {
                           className="px-2 py-1 text-[10px] font-mono font-bold text-teal-405 hover:text-teal-400 border border-teal-500/20 hover:border-teal-500/40 bg-teal-500/[0.03] rounded transition flex items-center gap-0.5"
                         >
                           <Plus size={10} />
-                          <span>NEW TOOL</span>
+                          <span>New tool</span>
                         </button>
                       )}
                     </div>
@@ -2470,9 +2519,9 @@ export default function WorkspaceSettingsModal() {
                         transition={{ duration: 0.2 }}
                         className="bg-[#0c0c0e] border border-zinc-800 p-3.5 rounded-lg space-y-3 overflow-hidden"
                       >
-                        <div className="flex items-center justify-between border-b border-zinc-900 pb-1.5 select-none text-[10px] font-mono uppercase">
-                          <span className="text-teal-400 font-bold">
-                            {isCreatingToolModule ? 'Create Modular Tool Box' : 'Configure function parameter'}
+                        <div className="flex items-center justify-between border-b border-zinc-900 pb-1.5 select-none">
+                          <span className="text-[13px] font-medium text-zinc-300">
+                            {isCreatingToolModule ? 'New tool' : 'Edit tool'}
                           </span>
                           <button 
                             onClick={() => {
@@ -2487,7 +2536,7 @@ export default function WorkspaceSettingsModal() {
 
                         <div className="space-y-2.5">
                           <div>
-                            <label className="text-[10px] font-bold text-zinc-450 font-mono uppercase block mb-1">TOOL BLOCK NAME</label>
+                            <label className="text-[11px] font-medium text-zinc-400 block mb-1">Name</label>
                             <input 
                               type="text"
                               value={toolFormName}
@@ -2498,7 +2547,7 @@ export default function WorkspaceSettingsModal() {
                           </div>
 
                           <div>
-                            <label className="text-[10px] font-bold text-zinc-450 font-mono uppercase block mb-1">DESCRIPTION</label>
+                            <label className="text-[11px] font-medium text-zinc-400 block mb-1">Description</label>
                             <input 
                               type="text"
                               value={toolFormDesc}
@@ -2510,7 +2559,7 @@ export default function WorkspaceSettingsModal() {
 
                           {/* Capabilities whitelist checkbox stack */}
                           <div>
-                            <label className="text-[10px] font-bold text-zinc-450 font-mono uppercase block mb-1">WHITELISTED CAPABILITIES</label>
+                            <label className="text-[11px] font-medium text-zinc-400 block mb-1">Allowed capabilities</label>
                             <div className="grid grid-cols-2 gap-1.5 bg-zinc-950 p-2.5 border border-zinc-850 rounded text-[10.5px] select-none text-zinc-400 leading-normal">
                               {['sandbox.exec', 'web.search', 'github.read', 'db.query', 'agent.orchestrate'].map(capId => {
                                 const checked = toolFormCapabilities.includes(capId);
@@ -2537,9 +2586,9 @@ export default function WorkspaceSettingsModal() {
 
                           {/* Function call schema object definition */}
                           <div>
-                            <label className="text-[10px] font-bold text-zinc-450 font-mono uppercase block mb-1 flex items-center justify-between">
-                              <span>FUNCTION SCHEMAS (JSON)</span>
-                              <span className="text-[9.5px] font-mono text-zinc-650 text-right uppercase">JSON SCHEMA</span>
+                            <label className="text-[11px] font-medium text-zinc-400 block mb-1 flex items-center justify-between">
+                              <span>Function schemas (JSON)</span>
+                              <span className="text-[10px] text-zinc-500 text-right">JSON Schema</span>
                             </label>
                             <textarea 
                               value={toolFormSchema}
@@ -2652,8 +2701,8 @@ export default function WorkspaceSettingsModal() {
 
                           {/* Attached Agents Row */}
                           <div className="pt-1.5 border-t border-zinc-900/40 select-none">
-                            <span className="text-[9.5px] font-mono font-bold text-zinc-650 uppercase block mb-1">
-                              Linked Sandbox Agents:
+                            <span className="text-[11px] font-medium text-zinc-400 block mb-1">
+                              Linked agents
                             </span>
                             <div className="flex flex-wrap gap-1.5 items-center">
                               {agents.map(agent => {
@@ -2802,7 +2851,7 @@ export default function WorkspaceSettingsModal() {
                           className="text-[10px] text-indigo-400 hover:text-indigo-350 flex items-center gap-1 font-mono transition select-none cursor-pointer"
                         >
                           <RotateCcw size={10} />
-                          <span>RESET ALL COUNTERS</span>
+                      <span>Reset all counters</span>
                         </button>
                       </div>
 
@@ -2836,7 +2885,7 @@ export default function WorkspaceSettingsModal() {
                       <div className="bg-zinc-950/70 border border-zinc-900/60 p-3 rounded space-y-3">
                         <div className="grid grid-cols-2 gap-3">
                           <div className="flex flex-col gap-1">
-                            <span className="text-[10px] text-zinc-400 uppercase font-semibold">Provider Cap Limit</span>
+                            <span className="text-[11px] text-zinc-400 font-medium">Provider cap limit</span>
                             <input
                               type="number"
                               value={provSoftCapInput}
@@ -2846,7 +2895,7 @@ export default function WorkspaceSettingsModal() {
                           </div>
 
                           <div className="flex flex-col gap-1">
-                            <span className="text-[10px] text-zinc-400 uppercase font-semibold">Reset Cadence</span>
+                            <span className="text-[11px] text-zinc-400 font-medium">Reset cadence</span>
                             <select
                               value={provResetPeriodInput}
                               onChange={(e: any) => setProvResetPeriodInput(e.target.value)}
@@ -2930,30 +2979,30 @@ export default function WorkspaceSettingsModal() {
 
                   {/* Operational Kill-Switch trigger */}
                   <div className="bg-rose-500/[0.02] border border-rose-500/20 p-4 rounded-lg space-y-3">
-                    <h4 className="font-semibold text-rose-400 text-xs flex items-center gap-1.5">
+                      <h4 className="font-semibold text-rose-400 text-[13px] flex items-center gap-1.5">
                       <ShieldAlert size={14} className="animate-pulse" />
-                      <span>Operational Swarm Termination Switch</span>
+                      <span>Stop all running work</span>
                     </h4>
                     <p className="text-[11.5px] text-zinc-400 leading-normal font-sans">
-                      Activating current switch triggers an immediate signal to dispatch servers, forcing a hard-abort on running sub-agent threads and freezing Sandbox processes.
+                      Activating this switch immediately stops running sub-agent threads and freezes sandbox processes.
                     </p>
                     <button
                       onClick={() => {
                         const nextState = !emergencyKill;
                         setEmergencyKill(nextState);
                         if (nextState) {
-                          showError('EMERGENCY SHUTDOWN', 'RUNNING WORKERS TERMINATED.');
+                          showError('Work stopped', 'Running workers were terminated.');
                         } else {
-                          showSuccess('SYSTEM RESTORED', 'Workspace unlocked. Restoring model loops.');
+                          showSuccess('System restored', 'Workspace unlocked. Model calls resume.');
                         }
                       }}
-                      className={`px-3 py-1.5 rounded text-xs font-mono font-bold uppercase transition select-none cursor-pointer focus:outline-none ${
+                      className={`px-3 py-1.5 rounded text-xs font-semibold transition select-none cursor-pointer focus:outline-none ${
                         emergencyKill 
                           ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/25 hover:bg-emerald-500/15' 
                           : 'bg-rose-500/10 text-rose-450 border border-rose-500/25 hover:bg-rose-500/15'
                       }`}
                     >
-                      {emergencyKill ? 'RESTORE SYSTEM SWARM LOOPS' : 'TERMINATE RUNNING COMPUTATIONS'}
+                      {emergencyKill ? 'Resume agent work' : 'Stop all running work'}
                     </button>
                   </div>
                 </div>
@@ -2961,7 +3010,12 @@ export default function WorkspaceSettingsModal() {
             )}
 
             {workspaceSettingsTab === 'screen_lock' && (
-              <ScreenLockSettingsPanel workspaceId={activeWS.id} />
+              <div className="space-y-3">
+                <ScreenLockSettingsPanel workspaceId={activeWS.id} />
+                <div className="px-3 bg-zinc-900 border border-zinc-800 rounded-xl">
+                  <AutostartToggle />
+                </div>
+              </div>
             )}
           </motion.div>
         </AnimatePresence>

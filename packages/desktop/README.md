@@ -51,9 +51,23 @@ binary + electron-builder), client+server built (`npm run build`).
   `npm run dist:desktop` → `packages/desktop/release/CrowdSpace-Nightly-Setup-*.exe`.
 - First run: main forks server `db/bootstrap.js` (drizzle migrations + seed,
   120 s timeout). No Postgres, no problem: boot logs a warning and continues
-  offline (DB-backed routes degrade until Postgres is up) — start Postgres
-  and relaunch, or `npm run db:push`. Rollback: keep the previous installer
-  + `pg_dump` before upgrading; restore = reinstall + `psql < backup.sql`.
+  offline (DB-backed routes degrade until Postgres is up, and the renderer
+  shows an OfflineBanner distinguishing offline vs socket-down vs DB-degraded)
+  — start Postgres and relaunch, or `npm run db:push`. Rollback: keep the
+  previous installer + `pg_dump` before upgrading; restore = reinstall +
+  `psql < backup.sql`.
+- Desktop parity (Nightly v1): single global shortcut `Ctrl+Shift+O`
+  (show/hide, rest stays in-app on `Ctrl+K`); launch-on-login toggle in
+  Workspace Settings → Screen Lock (`crowdos:autostart:get/set`); tray +
+  Windows JumpList recents (cap 8/5, recorded on `windows:open-channel`);
+  taskbar badge bumps on native notifications, cleared on focus; spellcheck
+  suggestions context menu; `render-process-gone` reload dialog;
+  `crashReporter` without upload; renderer warn/error tee to
+  `<userData>/logs/desktop.log` via `crowdos:log:write`.
+- Updates stay manual-install in v1 (`publish: null`,
+  `updater:check → updateAvailable: false` + drain reason when runs are in
+  flight). Ship N/N+1 installers; verify manual upgrade preserves
+  `<userData>` + DB.
 - Signing: unsigned local builds warn on SmartScreen. Signed Nightly builds
   come from CI with `CSC_LINK` + `CSC_KEY_PASSWORD` set (or Azure Trusted
   Signing via `win.azureSignOptions` in `electron-builder.yml`); verify the

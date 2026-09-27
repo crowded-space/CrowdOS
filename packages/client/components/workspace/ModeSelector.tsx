@@ -117,7 +117,7 @@ export default function ModeSelector({ value, onChange, isPinned, onTogglePin, d
           role="listbox"
           aria-label="Execution mode"
         >
-          <div className="px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-zinc-500 border-b border-zinc-800/60 mb-1">
+          <div className="px-2 py-1 text-[11px] font-medium text-zinc-500 border-b border-zinc-800/60 mb-1">
             Execution Mode
           </div>
           {MODE_OPTIONS.map((opt) => {

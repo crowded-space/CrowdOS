@@ -43,7 +43,7 @@ export default function ToolExecutionMessage({ toolExecution, timestamp, inline 
     const swarmTools = ['dispatch_agent', 'system_scheduler', 'search_all_channels', 'agent.orchestrate'];
 
     if (memoryTools.includes(toolName)) {
-      return 'bg-blue-500/10 text-blue-400 border border-blue-500/30 rounded-full px-2.5';
+      return 'bg-blue-500/10 text-blue-400 border border-blue-500/30 rounded px-1.5';
     }
     if (fileTools.includes(toolName)) {
       return 'bg-teal-500/10 text-teal-400 border border-teal-500/30 rounded px-1.5';
@@ -61,16 +61,16 @@ export default function ToolExecutionMessage({ toolExecution, timestamp, inline 
   };
 
   let statusBadgeClass = 'bg-rose-500/10 text-rose-400 border border-rose-500/20';
-  let statusText = 'ERROR';
+  let statusText = 'Failed';
   let settingsColor = 'text-rose-400';
 
   if (isSuccess) {
     statusBadgeClass = 'bg-teal-500/10 text-teal-400 border border-teal-500/20';
-    statusText = 'SUCCESS';
+    statusText = 'Success';
     settingsColor = 'text-teal-400';
   } else if (isWorking) {
     statusBadgeClass = 'bg-amber-500/10 text-amber-400 border border-amber-500/20';
-    statusText = 'RUNNING';
+    statusText = 'Running';
     settingsColor = 'text-amber-400 animate-spin';
   }
 
@@ -95,8 +95,8 @@ export default function ToolExecutionMessage({ toolExecution, timestamp, inline 
             style={!isWorking ? { animation: 'spin 4s linear infinite' } : undefined} 
           />
           <div>
-            <span className="font-semibold text-zinc-300">TOOL CALL:</span>
-            <span className={`ml-1.5 py-0.5 font-mono text-[10px] uppercase font-bold tracking-wide transition ${getToolPillStyle(name)}`}>
+            <span className="font-semibold text-zinc-300">Tool</span>
+            <span className={`ml-1.5 py-0.5 font-mono text-[10px] font-semibold transition ${getToolPillStyle(name)}`}>
               {name}
             </span>
           </div>

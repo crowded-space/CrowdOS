@@ -50,7 +50,7 @@ export default function SafetySettingsPanel({ targetType, targetId }: Props) {
 
   return (
     <div className="space-y-3 p-3 bg-zinc-900 border border-zinc-800 rounded-xl">
-      <div className="flex items-center gap-2 text-xs font-semibold text-zinc-200"><Shield size={14} className="text-amber-400" /> FS Safety — {targetType}</div>
+      <div className="flex items-center gap-2 text-xs font-semibold text-zinc-200"><Shield size={14} className="text-amber-400" /> FS safety: {targetType}</div>
       <p className="text-[11px] text-zinc-500">Choose which FS operations require approval before execution. Agent will show warning and wait for: <span className="text-zinc-300">Always Allow</span> / <span className="text-zinc-300">Allow on Channel</span> / <span className="text-zinc-300">Allow on Workspace</span> / <span className="text-zinc-300">Session</span>.</p>
 
       <div className="space-y-2">
@@ -73,7 +73,7 @@ export default function SafetySettingsPanel({ targetType, targetId }: Props) {
           <option value="workspace">Allow on workspace (30d)</option>
           <option value="global">Always allow (global, indefinite)</option>
         </select>
-        {defaultScope === 'global' && <p className="text-[11px] text-amber-400 flex items-center gap-1"><AlertTriangle size={10} /> Global always-allow is powerful — blocked unless workspace allows it.</p>}
+        {defaultScope === 'global' && <p className="text-[11px] text-amber-400 flex items-center gap-1"><AlertTriangle size={10} /> Global always-allow is powerful. Blocked unless the workspace allows it.</p>}
       </div>
 
       <button onClick={save} disabled={saving} className="w-full py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 disabled:opacity-50">

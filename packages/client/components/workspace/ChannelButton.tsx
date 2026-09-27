@@ -32,7 +32,7 @@ function ChannelButtonInner({ channel, isActive, onSelect }: Props) {
       <div className="flex items-center gap-1.5 shrink-0 pl-2">
         {hasMention && <span className="w-2 h-2 rounded-full bg-rose-500 shadow-[0_0_6px_rgba(239,68,68,0.5)] animate-pulse" />}
         {unreads > 0 && (
-          <span className="px-1.5 py-0.5 min-w-[20px] h-[19px] flex items-center justify-center text-center rounded-full bg-rose-500 text-[10px] font-mono font-bold text-white leading-none">
+          <span className="tnum px-1.5 py-0.5 min-w-[20px] h-[19px] flex items-center justify-center text-center rounded-md bg-rose-500 text-[10px] font-mono font-semibold text-white leading-none">
             {unreads > 99 ? '99+' : unreads}
           </span>
         )}

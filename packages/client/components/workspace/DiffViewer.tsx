@@ -32,7 +32,7 @@ function SideBySideView({ patch }: { patch: string }) {
   return (
     <div className="grid grid-cols-2 gap-0 border border-zinc-800 rounded-lg overflow-hidden bg-zinc-950">
       <div className="border-r border-zinc-800">
-        <div className="text-[10px] font-mono font-bold text-zinc-500 px-2 py-1 bg-zinc-900 border-b border-zinc-800">BEFORE</div>
+        <div className="text-[10px] font-semibold text-zinc-500 px-2 py-1 bg-zinc-900 border-b border-zinc-800">Before</div>
         <pre className="p-2 text-[11px] font-mono leading-5 overflow-x-auto">
           {left.map((l, i) => (
             <div
@@ -50,7 +50,7 @@ function SideBySideView({ patch }: { patch: string }) {
         </pre>
       </div>
       <div>
-        <div className="text-[10px] font-mono font-bold text-zinc-500 px-2 py-1 bg-zinc-900 border-b border-zinc-800">AFTER</div>
+        <div className="text-[10px] font-semibold text-zinc-500 px-2 py-1 bg-zinc-900 border-b border-zinc-800">After</div>
         <pre className="p-2 text-[11px] font-mono leading-5 overflow-x-auto">
           {right.map((l, i) => (
             <div
@@ -164,7 +164,7 @@ export function DiffViewer({ runId, artifactId }: { runId?: string; artifactId?:
               <FileCode2 size={13} className="text-zinc-500 shrink-0" />
               <span className="text-xs font-mono font-semibold text-zinc-200 truncate">{art.path || art.id}</span>
               <span className="text-[10px] font-mono text-zinc-500 hidden sm:inline">
-                {art.beforeHash?.slice(0, 7) || '—'} → {art.afterHash?.slice(0, 7) || '—'}
+                {art.beforeHash?.slice(0, 7) || '-'} → {art.afterHash?.slice(0, 7) || '-'}
               </span>
             </div>
             <div className="flex items-center gap-1.5 shrink-0">

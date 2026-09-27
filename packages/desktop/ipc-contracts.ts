@@ -24,6 +24,8 @@ export const IpcInvokeChannelSchema = z.enum([
   "crowdos:updater:check",
   "crowdos:updater:install",
   "crowdos:log:write",
+  "crowdos:autostart:get",
+  "crowdos:autostart:set",
 ]);
 
 // Main -> renderer (one-way events via webContents.send / ipcRenderer.on).

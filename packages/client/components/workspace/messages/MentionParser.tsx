@@ -60,7 +60,7 @@ function CodeSandboxBlock({ language, code }: { language: string; code: string }
       <div className="bg-zinc-900/90 px-3.5 py-1.5 border-b border-zinc-850 text-[10px] text-zinc-400 font-mono font-semibold flex justify-between items-center select-none">
         <div className="flex items-center gap-2">
           <Code2 size={12} className="text-indigo-400" />
-          <span className="uppercase text-zinc-300 font-bold tracking-wide">{language || 'plaintext'}</span>
+          <span className="text-zinc-300 font-semibold">{language || 'plaintext'}</span>
           <span className="text-[9px] text-zinc-600">({lines.length} lines)</span>
         </div>
         <div className="flex items-center gap-2">
@@ -112,7 +112,7 @@ function CodeSandboxBlock({ language, code }: { language: string; code: string }
               {isExpanded ? (
                 <>
                   <ChevronUp size={12} />
-                  <span>COLLAPSE CODE</span>
+                  <span>Collapse</span>
                 </>
               ) : (
                 <>

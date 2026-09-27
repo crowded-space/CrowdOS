@@ -84,7 +84,7 @@ export function MessageRouter({ message, agentLevel = 3, toolExecutions }: Messa
           >
             <div className="flex items-center gap-2 mb-1.5 text-amber-450 font-bold tracking-wide select-none">
               <ShieldAlert size={14} className="shrink-0 text-amber-450 animate-bounce" />
-              <span>SWARM SAFETY STRIKE INITIATED</span>
+              <span>Swarm safety strike initiated</span>
             </div>
             
             <div className="flex items-center gap-2 my-2 select-none">
@@ -130,10 +130,10 @@ export function MessageRouter({ message, agentLevel = 3, toolExecutions }: Messa
             className="max-w-xl mx-auto border border-indigo-500/20 bg-zinc-950/40 p-4 rounded-lg my-3 font-sans text-xs text-zinc-300 shadow-xl"
           >
             <div className="flex items-center justify-between border-b border-indigo-950/30 pb-2 mb-2 select-none">
-              <span className="font-bold text-zinc-300 font-mono text-[10px] tracking-widest uppercase flex items-center gap-1.5">
-                🏛️ Swarm Parliament Consensus
+              <span className="font-semibold text-zinc-300 text-[13px] flex items-center gap-1.5">
+                Swarm parliament consensus
               </span>
-              <span className={`px-2 py-0.5 rounded text-[9px] font-mono font-bold uppercase ${
+              <span className={`px-2 py-0.5 rounded text-[10px] font-mono font-medium ${
                 status === 'approved' 
                   ? 'bg-teal-500/10 text-teal-400 border border-teal-500/20' 
                   : 'bg-indigo-500/10 text-indigo-400 border border-indigo-500/20 animate-pulse'
@@ -148,9 +148,9 @@ export function MessageRouter({ message, agentLevel = 3, toolExecutions }: Messa
 
             {/* Voting Visual Bars */}
             <div className="space-y-1.5 mb-3.5 select-none">
-              <div className="flex justify-between text-[9px] font-mono text-zinc-550 font-bold uppercase">
-                <span>APPROVE ({approveCount})</span>
-                <span>REJECT ({rejectCount})</span>
+              <div className="flex justify-between text-[10px] text-zinc-400 font-medium tnum">
+                <span>Approve ({approveCount})</span>
+                <span>Reject ({rejectCount})</span>
               </div>
               <div className="w-full h-2 rounded bg-zinc-900 overflow-hidden flex">
                 <div 
@@ -166,8 +166,8 @@ export function MessageRouter({ message, agentLevel = 3, toolExecutions }: Messa
 
             {/* Voters List */}
             <div className="space-y-2 border-t border-zinc-900/60 pt-3">
-              <span className="text-[9px] font-mono font-bold text-zinc-650 uppercase tracking-wide block select-none">
-                Consensus Ballots:
+              <span className="text-[11px] font-medium text-zinc-400 block select-none">
+                Ballots
               </span>
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
                 {Object.entries(votes).map(([voterName, vote]) => (
@@ -211,13 +211,13 @@ export function MessageRouter({ message, agentLevel = 3, toolExecutions }: Messa
         >
           <div className="flex items-center gap-2 mb-1 text-rose-400 font-bold tracking-wide select-none">
             <ShieldAlert size={14} className="shrink-0 animate-bounce" />
-            <span>SWARM GOVERNANCE EXCEPTION</span>
+            <span>Swarm governance exception</span>
           </div>
           <p className="leading-relaxed text-zinc-300 font-sans pl-6 select-text">
             {message.content}
           </p>
           <div className="text-right text-[9px] text-zinc-500 mt-2 select-none">
-            AUDITED AT {new Date(message.timestamp).toLocaleTimeString()}
+            Audited at {new Date(message.timestamp).toLocaleTimeString()}
           </div>
         </div>
       );

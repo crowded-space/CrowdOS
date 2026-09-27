@@ -3,7 +3,7 @@ import { ShieldAlert, Check, X, Clock } from 'lucide-react';
 import { useCrowdOSStore, type ApprovalRequest } from '@/stores/crowdOsStore';
 
 function truncateJson(value: Record<string, unknown> | null, max = 300): string {
-  if (!value) return '—';
+  if (!value) return '-';
   try {
     const s = JSON.stringify(value, null, 2);
     if (s.length <= max) return s;
@@ -49,9 +49,9 @@ export function ApprovalCard({ approval }: { approval: ApprovalRequest }) {
       className="max-w-xl mx-auto border border-amber-500/25 bg-amber-500/[0.04] rounded-xl my-3 overflow-hidden shadow-md"
     >
       <div className="flex items-center justify-between px-3.5 py-2.5 border-b border-amber-500/15 bg-amber-500/[0.06]">
-        <div className="flex items-center gap-2 text-amber-300 font-mono text-[11px] font-bold tracking-widest">
+        <div className="flex items-center gap-2 text-amber-300 text-[12px] font-semibold">
           <ShieldAlert size={14} className="shrink-0" />
-          <span>APPROVAL REQUESTED</span>
+          <span>Approval requested</span>
           <span className={`ml-1 px-1.5 py-0.5 rounded text-[9px] font-bold border ${riskBadgeClass(approval.riskClass)}`}>
             {approval.riskClass}
           </span>
@@ -67,14 +67,14 @@ export function ApprovalCard({ approval }: { approval: ApprovalRequest }) {
           <span className="font-mono font-bold text-zinc-300">{approval.tool}</span>
           <span className="text-[10px] font-mono text-zinc-500">run {approval.runId.slice(0, 8)}…</span>
           {!isPending && (
-            <span className={`ml-auto px-2 py-0.5 rounded-full text-[10px] font-mono font-bold border ${approval.status === 'approved' ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/20' : approval.status === 'denied' ? 'bg-rose-500/15 text-rose-300 border-rose-500/20' : 'bg-zinc-800 text-zinc-400 border-zinc-700'}`}>
-              {approval.status.toUpperCase()}
+            <span className={`ml-auto px-2 py-0.5 rounded text-[10px] font-medium border ${approval.status === 'approved' ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/20' : approval.status === 'denied' ? 'bg-rose-500/15 text-rose-300 border-rose-500/20' : 'bg-zinc-800 text-zinc-400 border-zinc-700'}`}>
+              {approval.status}
             </span>
           )}
         </div>
 
         <div className="rounded-lg bg-zinc-950/60 border border-zinc-800 p-2.5">
-          <div className="text-[10px] font-mono font-bold text-zinc-500 mb-1">ARGS PREVIEW</div>
+          <div className="text-[11px] font-medium text-zinc-400 mb-1">Arguments</div>
           <pre className="text-[11px] font-mono text-zinc-300 whitespace-pre-wrap break-words max-h-32 overflow-y-auto scrollbar-thin">
             {preview}
           </pre>

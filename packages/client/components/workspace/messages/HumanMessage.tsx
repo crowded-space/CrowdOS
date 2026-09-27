@@ -36,7 +36,7 @@ export default function HumanMessage({ id, authorName, content, timestamp, attac
           <span className="font-semibold text-amber-200 tracking-[-0.01em] text-[13px] sm:text-sm">
             {authorName}
           </span>
-          <span className="text-[10px] font-mono font-semibold uppercase bg-amber-500/15 text-amber-300 px-1.5 py-0.5 rounded-full border border-amber-500/20">
+          <span className="text-[10px] font-medium bg-amber-500/15 text-amber-300 px-1.5 py-0.5 rounded border border-amber-500/20">
             Human
           </span>
           <span className="text-[11px] text-zinc-500 font-mono ml-auto sm:ml-0">
@@ -70,7 +70,7 @@ export default function HumanMessage({ id, authorName, content, timestamp, attac
       </div>
 
       {!editing && id && (
-        <div className="absolute -top-2 right-2 hidden group-hover:flex items-center gap-1 bg-zinc-900 border border-zinc-800 rounded-full shadow-lg p-1">
+        <div className="absolute -top-2 right-2 hidden group-hover:flex group-focus-within:flex focus-within:flex items-center gap-1 bg-zinc-900 border border-zinc-800 rounded-[4px] shadow-lg p-1">
           <button
             onClick={() => setEditing(true)}
             className="w-7 h-7 rounded-full bg-zinc-800 hover:bg-zinc-700 text-zinc-300 flex items-center justify-center transition cursor-pointer"

@@ -63,6 +63,10 @@ export interface IpcHandlerDeps {
   logFile: string;
   isPackaged: boolean;
   getRunningCount?: () => number;
+  getAutostart?: () => boolean;
+  setAutostart?: (enabled: boolean) => void;
+  onWorkspaceOpened?: (workspaceId: string) => void;
+  onNotificationShown?: (info: { title: string; channelId?: string }) => void;
 }
 
 const dialogOptionsSchema = z
@@ -205,6 +209,11 @@ async function handleInvoke(
         }
       });
       instance.show();
+      try {
+        deps.onNotificationShown?.({ title: parsed.title, channelId: parsed.channelId });
+      } catch {
+        // ignore
+      }
       return { ok: true };
     }
     case "crowdos:windows:open-channel": {
@@ -212,8 +221,27 @@ async function handleInvoke(
       const url = parsed.workspaceId
         ? `crowdos://w/${parsed.workspaceId}/${parsed.channelId}`
         : `crowdos://c/${parsed.channelId}`;
+      if (parsed.workspaceId) {
+        try {
+          deps.onWorkspaceOpened?.(parsed.workspaceId);
+        } catch {
+          // ignore
+        }
+      }
       focusAndDeepLink(deps, url);
       return { ok: true };
+    }
+    case "crowdos:autostart:get": {
+      return { enabled: deps.getAutostart?.() ?? false };
+    }
+    case "crowdos:autostart:set": {
+      const parsed = z.object({ enabled: z.boolean() }).parse(payload);
+      try {
+        deps.setAutostart?.(parsed.enabled);
+      } catch {
+        // ignore
+      }
+      return { enabled: deps.getAutostart?.() ?? parsed.enabled };
     }
     case "crowdos:windows:open-diff": {
       try {
@@ -276,6 +304,8 @@ export function registerIpcHandlers(deps: IpcHandlerDeps): void {
     "crowdos:updater:check",
     "crowdos:updater:install",
     "crowdos:log:write",
+    "crowdos:autostart:get",
+    "crowdos:autostart:set",
   ];
   for (const channel of channels) {
     if (!isIpcInvokeChannel(channel)) continue;

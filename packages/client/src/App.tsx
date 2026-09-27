@@ -15,6 +15,7 @@ import MobileDrawer from '@/components/workspace/mobile/MobileDrawer';
 import { ToastProvider } from '@/components/ui/ToastProvider';
 import ErrorBoundary from '@/components/ui/ErrorBoundary';
 import LockScreen from '@/components/lockscreen/LockScreen';
+import OfflineBanner from '@/components/ui/OfflineBanner';
 import { useScreenLockStore, SCREENLOCK_IDLE_MS } from '@/stores/screenLockStore';
 
 // Overlay-only surfaces: kept out of the initial bundle so first paint
@@ -24,12 +25,19 @@ const WorkspaceSettingsModal = lazy(() => import('@/components/workspace/modals/
 const OmniSearchModal = lazy(() => import('@/components/workspace/modals/OmniSearchModal'));
 
 function SpinnerFallback() {
-  return <div className="flex items-center justify-center p-6 text-zinc-500 text-xs font-mono animate-pulse">Loading…</div>;
+  return (
+    <div className="flex flex-col gap-2 p-4 min-w-[240px]" aria-label="Loading dialog" role="status">
+      <div className="h-5 w-2/3 skeleton" />
+      <div className="h-9 w-full skeleton" />
+      <div className="h-9 w-full skeleton" />
+    </div>
+  );
 }
 
 export default function App() {
-  const { 
+  const {
     activeWorkspaceId,
+    dbDegraded,
     mobileDrawerLeft,
     mobileDrawerRight,
     setMobileDrawerLeft,
@@ -37,6 +45,7 @@ export default function App() {
     fetchWorkspaces
   } = useCrowdOSStore(useShallow(s => ({
     activeWorkspaceId: s.activeWorkspaceId,
+    dbDegraded: (s.workspaces.find(w => w.id === s.activeWorkspaceId)?.database?.configured) === false,
     mobileDrawerLeft: s.mobileDrawerLeft,
     mobileDrawerRight: s.mobileDrawerRight,
     setMobileDrawerLeft: s.setMobileDrawerLeft,
@@ -138,32 +147,40 @@ export default function App() {
   return (
     <ToastProvider>
       <div className="w-full h-dvh overflow-hidden bg-[#0A0A0B] text-zinc-100 flex flex-col font-sans antialiased" id="crowd-os-root-shell">
+        <a
+          href="#main-chat-area"
+          className="sr-only focus:not-sr-only focus:absolute focus:top-2 focus:left-2 focus:z-[70] focus:px-3 focus:py-2 focus:rounded-lg focus:bg-zinc-900 focus:text-zinc-100 focus:outline-none"
+        >
+          Skip to chat
+        </a>
+        <div className="grain-overlay" aria-hidden />
         {/* Safe-top inset for notched devices */}
         <div className="h-[env(safe-area-inset-top)] shrink-0 bg-[#0A0A0B] md:hidden" aria-hidden />
-        
+        <OfflineBanner dbDegraded={dbDegraded} />
+
         {/* 3-Panel Content Area */}
         <div className="flex-1 flex overflow-hidden w-full relative isolate">
-          
+
           {/* Left Sidebar Panel — single responsive mount (deduped, w clamp) */}
-          <div className="hidden md:flex shrink-0 h-full w-[clamp(240px,20vw,280px)] border-r border-zinc-900/80">
+          <nav aria-label="Workspace channels" className="hidden md:flex shrink-0 h-full w-[clamp(240px,20vw,280px)] border-r border-zinc-900/80">
             <ErrorBoundary fallback={<div className="p-4 text-xs text-zinc-500">Sidebar failed to load</div>}>
               <WorkspaceSidebar />
             </ErrorBoundary>
-          </div>
+          </nav>
 
           {/* Center Chat Work Area - Desktop/Mobile flow */}
-          <div className="flex-1 flex flex-col h-full overflow-hidden min-w-0 bg-[#121214]">
+          <main className="flex-1 flex flex-col h-full overflow-hidden min-w-0 bg-[#121214]">
             <ErrorBoundary fallback={<div className="p-6 text-sm text-zinc-400">Chat failed to load</div>}>
               <MainChatArea onOpenSearch={() => setSearchOpen(true)} />
             </ErrorBoundary>
-          </div>
+          </main>
 
           {/* Right Sidebar Panel — single responsive mount */}
-          <div className="hidden lg:flex shrink-0 h-full">
+          <aside aria-label="Operations roster and telemetry" className="hidden lg:flex shrink-0 h-full">
             <ErrorBoundary fallback={<div className="p-4 text-xs text-zinc-500">Roster failed to load</div>}>
               <RightSidebar />
             </ErrorBoundary>
-          </div>
+          </aside>
 
           {/* Left slide drawer - Mobile/Tablet */}
           <MobileDrawer 

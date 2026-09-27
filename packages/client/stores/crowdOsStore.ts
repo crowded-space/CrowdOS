@@ -678,10 +678,10 @@ const initialSelectedMode: ComposerMode = (() => {
   socket.on('disconnect', () => {
     wasDisconnected = true;
     // Offline banner (auto-clears on reconnect)
-    set({ reconnectDigest: { message: 'Offline — reconnecting…', visible: true } } as any);
+    set({ reconnectDigest: { message: 'Offline. Reconnecting…', visible: true } } as any);
   });
   socket.on('connect_error' as any, () => {
-    set({ reconnectDigest: { message: 'Connection error — retrying…', visible: true } } as any);
+    set({ reconnectDigest: { message: 'Connection error. Retrying…', visible: true } } as any);
   });
   // HMR cleanup: avoid duplicate listeners on hot reload (store recreated)
   if (typeof import.meta !== 'undefined' && (import.meta as any).hot) {
@@ -1154,7 +1154,7 @@ const initialSelectedMode: ComposerMode = (() => {
             delegationInfo: {
               ...m.delegationInfo,
               status: 'completed' as const,
-              task: (payload as any).summary ? `${m.delegationInfo.task} — ${(payload as any).summary.slice(0,120)}` : m.delegationInfo.task
+              task: (payload as any).summary ? `${m.delegationInfo.task}: ${(payload as any).summary.slice(0,120)}` : m.delegationInfo.task
             },
             content: (payload as any).summary || m.content
           };
@@ -1468,7 +1468,7 @@ const initialSelectedMode: ComposerMode = (() => {
             }
             if (Notification.permission === 'granted') {
               const agentName = get().agents.find((a: Agent) => a.id === agentId)?.name || 'Agent';
-              const title = st === 'completed' ? `Run completed — ${agentName}` : `Run failed — ${agentName}`;
+              const title = st === 'completed' ? `Run completed: ${agentName}` : `Run failed: ${agentName}`;
               const body = `Channel #${channelId} • ${st}`;
               try { new Notification(title, { body }); } catch {}
             }
@@ -2046,7 +2046,7 @@ const initialSelectedMode: ComposerMode = (() => {
         if (!DEMO_FALLBACK) {
           // ponytail: never keep another workspace's rows on transport failure.
           get().clearTenantSlices();
-          set({ isFetchingWorkspaces: false, workspaceError: err instanceof Error ? err.message : 'Backend unavailable — DEMO_FALLBACK is off' });
+          set({ isFetchingWorkspaces: false, workspaceError: err instanceof Error ? err.message : 'Backend unavailable. DEMO_FALLBACK is off' });
           // Honesty: do not keep showing seeded demo workspaces/agents when DEMO_FALLBACK is off
           // (outage shows error, not demo). Keep current state but surface error; empty fallback only if no localStorage.
         } else {

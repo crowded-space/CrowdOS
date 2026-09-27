@@ -71,7 +71,7 @@ export default function CrowIcon({ variant, className = 'w-10 h-10', iconSize = 
       break;
 
     case 'crow-indigo-circle':
-      containerClasses += "bg-gradient-to-br from-[#1d1e2e] via-[#3359ff]/15 to-indigo-950 border border-[#3359ff]/40 text-[#5f7eff] animate-pulse-slow shadow-[0_0_12px_rgba(51,89,255,0.25)] rounded-full";
+      containerClasses += "bg-gradient-to-br from-[#1d1e2e] via-[#3359ff]/15 to-indigo-950 border border-[#3359ff]/40 text-[#5f7eff] animate-pulse-slow shadow-[0_0_12px_rgba(51,89,255,0.25)] rounded-lg";
       break;
 
     case 'crow-amber-cyber':
@@ -91,7 +91,7 @@ export default function CrowIcon({ variant, className = 'w-10 h-10', iconSize = 
       break;
 
     case 'crow-cosmos':
-      containerClasses += "bg-[#140e28] border border-indigo-500/25 text-indigo-300 hover:border-indigo-400/50 shadow-[0_0_15px_rgba(99,102,241,0.15)] rounded-full animate-pulse-slow";
+      containerClasses += "bg-[#140e28] border border-indigo-500/25 text-indigo-300 hover:border-indigo-400/50 shadow-[0_0_15px_rgba(99,102,241,0.15)] rounded-lg animate-pulse-slow";
       break;
 
     default:

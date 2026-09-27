@@ -230,8 +230,8 @@ export default function AgentStudioModal({ agentId, open, onClose }: AgentStudio
                   <div className="flex items-center justify-between pb-1.5 border-b border-zinc-900">
                     <div className="flex items-center gap-2">
                       <Cpu size={14} className="text-emerald-400" />
-                      <span className="font-bold text-zinc-200 font-mono text-[10px] uppercase tracking-wider">
-                        Slot 1: Cognitive Model Engine
+                      <span className="font-medium text-zinc-200 text-[13px]">
+                        Model
                       </span>
                     </div>
                     <span className="text-[10px] text-zinc-500 font-mono">
@@ -241,7 +241,7 @@ export default function AgentStudioModal({ agentId, open, onClose }: AgentStudio
 
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     <div className="space-y-1">
-                      <label className="text-[10px] text-zinc-400 font-mono uppercase font-bold block">Assigned Model Module</label>
+                      <label className="text-[11px] text-zinc-400 font-medium block">Model module</label>
                       <select
                         value={selectedModelId}
                         onChange={(e) => setSelectedModelId(e.target.value)}
@@ -267,8 +267,8 @@ export default function AgentStudioModal({ agentId, open, onClose }: AgentStudio
                   <div className="flex items-center justify-between pb-1.5 border-b border-zinc-900">
                     <div className="flex items-center gap-2">
                       <Layers size={14} className="text-indigo-400" />
-                      <span className="font-bold text-zinc-200 font-mono text-[10px] uppercase tracking-wider">
-                        Slot 2: Instruction Stack ({selectedInstructionIds.length} Layers)
+                      <span className="font-medium text-zinc-200 text-[13px]">
+                        Instructions <span className="tnum text-[11px] text-zinc-500">({selectedInstructionIds.length})</span>
                       </span>
                     </div>
                   </div>
@@ -344,8 +344,8 @@ export default function AgentStudioModal({ agentId, open, onClose }: AgentStudio
                   <div className="flex items-center justify-between pb-1.5 border-b border-zinc-900">
                     <div className="flex items-center gap-2">
                       <Brain size={14} className="text-amber-400" />
-                      <span className="font-bold text-zinc-200 font-mono text-[10px] uppercase tracking-wider">
-                        Slot 3: Specialized Skills ({selectedSkillIds.length} Active)
+                      <span className="font-medium text-zinc-200 text-[13px]">
+                        Skills <span className="tnum text-[11px] text-zinc-500">({selectedSkillIds.length})</span>
                       </span>
                     </div>
                   </div>
@@ -401,8 +401,8 @@ export default function AgentStudioModal({ agentId, open, onClose }: AgentStudio
                   <div className="flex items-center justify-between pb-1.5 border-b border-zinc-900">
                     <div className="flex items-center gap-2">
                       <Hammer size={14} className="text-rose-400" />
-                      <span className="font-bold text-zinc-200 font-mono text-[10px] uppercase tracking-wider">
-                        Slot 4: Authorized Tools & MCP Connectors ({resolvedTools.length})
+                      <span className="font-medium text-zinc-200 text-[13px]">
+                        Tools <span className="tnum text-[11px] text-zinc-500">({resolvedTools.length})</span>
                       </span>
                     </div>
                   </div>
@@ -414,11 +414,11 @@ export default function AgentStudioModal({ agentId, open, onClose }: AgentStudio
                           <span className="font-mono text-zinc-200 text-[11px] truncate block">
                             {t.displayName || t.name}
                           </span>
-                          <span className="text-[9px] text-zinc-500 font-mono block uppercase">
+                          <span className="text-[9px] text-zinc-500 font-mono block">
                             {t.category || t.sourceType || 'native'}
                           </span>
                         </div>
-                        <span className={`px-1.5 py-0.5 rounded text-[8.5px] font-mono shrink-0 uppercase ${
+                        <span className={`px-1.5 py-0.5 rounded text-[9px] font-mono shrink-0 ${
                           t.sourceType === 'mcp' ? 'bg-indigo-500/15 text-indigo-400 border border-indigo-500/30' : 'bg-zinc-800 text-zinc-400'
                         }`}>
                           {t.sourceType || 'native'}
@@ -435,8 +435,8 @@ export default function AgentStudioModal({ agentId, open, onClose }: AgentStudio
               <div className="space-y-3.5">
                 <div className="p-3 bg-zinc-950 border border-zinc-800 rounded-xl space-y-2.5">
                   <div className="flex items-center justify-between">
-                    <span className="font-mono font-bold text-indigo-400 uppercase text-[10px]">
-                      Simulated User Prompt Input
+                    <span className="font-medium text-indigo-400 text-[12px]">
+                      Simulated user prompt
                     </span>
                     <button
                       onClick={handleInspectPrompt}
@@ -456,32 +456,43 @@ export default function AgentStudioModal({ agentId, open, onClose }: AgentStudio
                   />
                 </div>
 
-                {inspectionResult && (
+                {inspecting && (
+                  <div className="space-y-2" role="status" aria-label="Compiling context">
+                    <div className="h-12 w-full skeleton" />
+                    <div className="h-32 w-full skeleton" />
+                  </div>
+                )}
+                {!inspecting && !inspectionResult && (
+                  <div className="p-3 bg-zinc-950 border border-dashed border-zinc-800 rounded-[6px] text-[12px] text-zinc-500">
+                    Run Re-Compile Context to preview the assembled prompt, token estimate, and tool list.
+                  </div>
+                )}
+                {inspectionResult && !inspecting && (
                   <div className="space-y-3">
                     <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
                       <div className="p-2.5 bg-zinc-950 border border-zinc-800 rounded-lg">
-                        <span className="text-[9px] text-zinc-500 font-mono uppercase block">Estimated Tokens</span>
+                        <span className="text-[10px] text-zinc-500 font-medium block">Est. tokens</span>
                         <span className="text-base font-bold text-indigo-400 font-mono">{inspectionResult.tokenEstimate}</span>
                       </div>
                       <div className="p-2.5 bg-zinc-950 border border-zinc-800 rounded-lg">
-                        <span className="text-[9px] text-zinc-500 font-mono uppercase block">Active Provider</span>
-                        <span className="text-xs font-semibold text-emerald-400 font-mono uppercase truncate block">
+                        <span className="text-[10px] text-zinc-500 font-medium block">Provider</span>
+                        <span className="text-xs font-semibold text-emerald-400 font-mono truncate block">
                           {inspectionResult.modelConfig?.provider || 'google'}
                         </span>
                       </div>
                       <div className="p-2.5 bg-zinc-950 border border-zinc-800 rounded-lg">
-                        <span className="text-[9px] text-zinc-500 font-mono uppercase block">Compiled Tools</span>
+                        <span className="text-[10px] text-zinc-500 font-medium block">Tools</span>
                         <span className="text-base font-bold text-zinc-200 font-mono">{inspectionResult.tools?.length || 0}</span>
                       </div>
                       <div className="p-2.5 bg-zinc-950 border border-zinc-800 rounded-lg">
-                        <span className="text-[9px] text-zinc-500 font-mono uppercase block">History Turns</span>
+                        <span className="text-[10px] text-zinc-500 font-medium block">History</span>
                         <span className="text-base font-bold text-zinc-200 font-mono">{inspectionResult.history?.length || 0}</span>
                       </div>
                     </div>
 
                     <div className="space-y-1">
-                      <label className="text-[10px] text-zinc-400 font-mono uppercase font-bold block">
-                        Compiled System Prompt Sent to LLM
+                      <label className="text-[11px] text-zinc-400 font-medium block">
+                        Compiled system prompt
                       </label>
                       <pre className="p-3 bg-zinc-950 border border-zinc-850 rounded-lg text-zinc-300 font-mono text-[10.5px] leading-relaxed max-h-72 overflow-y-auto whitespace-pre-wrap select-text">
                         {inspectionResult.systemPrompt}

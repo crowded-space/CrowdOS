@@ -38,13 +38,13 @@ function AgentRowInner({ id, name, species, status, level, avatar, isOmniscient,
         <div className="text-[13px] font-semibold text-zinc-100 truncate flex items-center gap-1.5 font-sans tracking-[-0.01em]">
           <span className={`${meta.text}`}>{name}</span>
           {isOmniscient && (
-            <span className="inline-flex items-center px-1.5 py-0.5 rounded-full text-[9px] font-extrabold font-mono bg-cyan-500/10 text-cyan-400 border border-cyan-500/20 tracking-tight leading-none">👁️ OMNI</span>
+            <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[9px] font-semibold font-mono bg-cyan-500/10 text-cyan-400 border border-cyan-500/20 tracking-tight leading-none">Omni</span>
           )}
         </div>
         <div className="text-[11px] text-zinc-500 font-sans flex items-center gap-1.5">
           <span>{species}</span>
           <span className="w-1 h-1 rounded-full bg-zinc-700" />
-          <span className="font-mono text-[10px] uppercase font-semibold tracking-wide px-1.5 py-0.5 rounded-full bg-zinc-900 border border-zinc-800 text-zinc-400">L{level}</span>
+          <span className="tnum font-mono text-[10px] font-medium px-1.5 py-0.5 rounded bg-zinc-900 border border-zinc-800 text-zinc-400">L{level}</span>
         </div>
       </div>
     </button>

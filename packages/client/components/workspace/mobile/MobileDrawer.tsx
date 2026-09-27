@@ -120,7 +120,7 @@ export default function MobileDrawer({ open, onClose, side = 'left', children }:
               <button
                 onClick={onClose}
                 aria-label="Close drawer"
-                className="w-11 h-11 bg-zinc-900/80 backdrop-blur hover:bg-zinc-800 text-zinc-400 hover:text-zinc-100 rounded-full flex items-center justify-center transition focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500/40 cursor-pointer active:scale-[0.96] border border-white/[0.06] touch-manipulation"
+                className="w-11 h-11 bg-zinc-900/80 backdrop-blur hover:bg-zinc-800 text-zinc-400 hover:text-zinc-100 rounded-lg flex items-center justify-center transition focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500/40 cursor-pointer active:scale-[0.96] border border-white/[0.06] touch-manipulation"
               >
                 <X size={18} aria-hidden="true" />
               </button>

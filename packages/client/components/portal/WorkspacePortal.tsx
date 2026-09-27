@@ -3,6 +3,7 @@ import { apiClient } from '@/src/api/client';
 import { useCrowdOSStore } from '@/stores/crowdOsStore';
 import { Terminal, Play, ChevronRight, CheckCircle2, XCircle, Loader2, Database, Plug } from 'lucide-react';
 import CrowIcon from '@/components/ui/CrowIcon';
+import ThemeToggle from '@/components/ui/ThemeToggle';
 
 type TestStatus = 'idle' | 'testing' | 'success' | 'failed';
 
@@ -71,7 +72,7 @@ export default function WorkspacePortal() {
 
       if (result.success) {
         pushLog('Schema integrity check passed.', 'ok');
-        pushLog('Connection verified — URL kept in workspace registry', 'ok');
+        pushLog('Connection verified. URL kept in workspace registry', 'ok');
         setTestStatus('success');
       } else {
         pushLog(`Error: ${result.message}`, 'err');
@@ -87,7 +88,7 @@ export default function WorkspacePortal() {
     if (!workspaceName.trim() || isLaunching || isCreatingWorkspace) return;
     if (withDb && testStatus !== 'success') return;
     setIsLaunching(true);
-    pushLog(withDb ? 'Applying schema migrations & presets...' : 'Creating local workspace (no database — RAG degraded)...');
+    pushLog(withDb ? 'Applying schema migrations and presets...' : 'Creating local workspace (no database, RAG degraded)...');
     try {
       await createWorkspace(workspaceName, withDb ? dbUrl : undefined, selectedIcon);
       pushLog('Workspace launched successfully.', 'ok');
@@ -106,24 +107,26 @@ export default function WorkspacePortal() {
       className="fixed inset-0 bg-[#060608] flex items-center justify-center p-4 sm:p-6 font-sans select-none overflow-y-auto overscroll-contain"
       id="workspace-portal"
     >
-      {/* Background ambient glow */}
-      <div className="absolute inset-0 pointer-events-none">
-        <div className="absolute top-1/4 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[520px] h-[520px] bg-indigo-600/10 blur-[140px] rounded-full" />
-        <div className="absolute bottom-1/4 right-1/4 w-[360px] h-[360px] bg-violet-600/06 blur-[120px] rounded-full" />
+      {/* Background ambient glow — single desaturated accent, radial falloff */}
+      <div className="absolute inset-0 pointer-events-none" aria-hidden>
+        <div className="absolute top-1/4 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[520px] h-[520px] bg-[#465EDB]/10 blur-[140px] rounded-full" />
       </div>
 
       {/* Main card */}
-      <div className="w-full max-w-[440px] bg-[#141416] border border-zinc-800 rounded-[20px] overflow-hidden shadow-[0_24px_64px_rgba(0,0,0,0.6)] p-6 sm:p-7 space-y-6 relative flex flex-col items-center my-auto">
+      <div className="card-elevated w-full max-w-[440px] rounded-xl overflow-hidden shadow-[0_24px_64px_rgba(10,14,32,0.6)] p-6 sm:p-7 space-y-6 relative flex flex-col items-center my-auto">
+        <div className="absolute top-4 right-4">
+          <ThemeToggle />
+        </div>
 
         {/* Logo */}
         <div className="text-center space-y-3 select-none flex flex-col items-center">
-          <img src="/horizontal_logo_dark.png" alt="Crowd OS Logo" className="h-10 object-contain w-auto mb-1" />
+          <img src="/horizontal_logo_dark.png" alt="Crowd OS wordmark" className="h-10 object-contain w-auto mb-1" />
           <div>
-            <p className="text-[9.5px] font-mono tracking-[0.22em] text-zinc-500 uppercase mt-1 animate-pulse-slow">
-              INTELLIGENCE . COORDINATION . IMPACT
+            <p className="text-xs italic text-zinc-500 mt-1 leading-[1.15] pb-0.5">
+              intelligence, coordination, impact
             </p>
-            <p className="text-xs text-zinc-500 mt-2 max-w-xs leading-normal">
-              Name your workspace to start locally. A PostgreSQL database is optional — it only enables semantic memory / RAG.
+            <p className="text-[13px] text-zinc-400 mt-2 max-w-[38ch] leading-relaxed text-balance">
+              Name your workspace to start locally. A PostgreSQL database is optional. It only enables semantic memory and RAG.
             </p>
           </div>
         </div>
@@ -133,9 +136,9 @@ export default function WorkspacePortal() {
 
           {/* Step 1 — DB URL */}
           <div className="space-y-2 text-left">
-            <label className="text-zinc-400 font-semibold font-sans text-[13px] flex items-center gap-2">
-              <span className="w-6 h-6 rounded-full bg-indigo-500 text-white flex items-center justify-center text-[11px] font-bold shrink-0">1</span>
-              PostgreSQL Connection URL
+            <label className="text-zinc-300 font-medium font-sans text-[13px] flex items-center gap-2">
+              <span className="w-6 h-6 rounded-md bg-indigo-500/15 border border-indigo-500/25 text-indigo-300 flex items-center justify-center text-[11px] font-semibold shrink-0">1</span>
+              PostgreSQL connection URL
               <Database size={13} className="text-zinc-500 ml-auto" />
             </label>
             <div className="relative">
@@ -153,12 +156,12 @@ export default function WorkspacePortal() {
                 className="w-full bg-zinc-900 border border-zinc-800 focus:border-zinc-700 focus:ring-2 focus:ring-indigo-500/20 rounded-xl px-3.5 py-3.5 min-h-[48px] text-[15px] sm:text-[13px] font-mono text-zinc-100 focus:outline-none placeholder-zinc-600 pr-10 shadow-inner"
               />
               {testStatus === 'success' && (
-                <span className="absolute right-2.5 top-1/2 -translate-y-1/2 w-7 h-7 rounded-full bg-emerald-500/15 border border-emerald-500/20 flex items-center justify-center">
+                <span className="absolute right-2.5 top-1/2 -translate-y-1/2 w-7 h-7 rounded-md bg-emerald-500/15 border border-emerald-500/20 flex items-center justify-center">
                   <CheckCircle2 size={14} className="text-emerald-400 shrink-0" />
                 </span>
               )}
               {testStatus === 'failed' && (
-                <span className="absolute right-2.5 top-1/2 -translate-y-1/2 w-7 h-7 rounded-full bg-rose-500/15 border border-rose-500/20 flex items-center justify-center">
+                <span className="absolute right-2.5 top-1/2 -translate-y-1/2 w-7 h-7 rounded-md bg-rose-500/15 border border-rose-500/20 flex items-center justify-center">
                   <XCircle size={14} className="text-rose-400 shrink-0" />
                 </span>
               )}
@@ -169,11 +172,11 @@ export default function WorkspacePortal() {
           <button
             type="submit"
             disabled={!canTest}
-            className={`w-full py-2.5 min-h-[44px] rounded-lg text-sm font-semibold flex items-center justify-center gap-1.5 transition select-none leading-none tracking-tight active:scale-[0.99] ${
+            className={`w-full py-2.5 min-h-[44px] rounded-lg text-sm font-medium flex items-center justify-center gap-1.5 transition-colors duration-200 select-none leading-none tracking-tight active:scale-[0.98] ${
               canTest
                 ? testStatus === 'success'
                   ? 'bg-emerald-600/20 border border-emerald-600/40 text-emerald-300 cursor-default'
-                  : 'bg-indigo-500 text-white hover:bg-indigo-600 shadow-[0_4px_12px_rgba(99,102,241,0.3)]'
+                  : 'bg-indigo-500 text-white hover:bg-indigo-600 shadow-[0_4px_16px_rgba(30,45,110,0.45)]'
                 : 'bg-brand-sidebar text-zinc-600 border border-brand-border-muted/45 cursor-not-allowed'
             }`}
           >
@@ -200,7 +203,7 @@ export default function WorkspacePortal() {
             <div className="bg-brand-bg border border-brand-border rounded-md p-3 font-mono text-[10px] space-y-1 text-left max-h-28 overflow-y-auto">
               <div className="text-zinc-600 font-bold flex items-center gap-1 select-none mb-1">
                 <Terminal size={9} />
-                <span>CONNECTION LOG</span>
+                <span>Connection log</span>
               </div>
               {logs.map((log, i) => (
                 <div key={i} className="whitespace-pre-wrap flex gap-1.5">
@@ -225,9 +228,9 @@ export default function WorkspacePortal() {
 
             {/* Workspace name */}
             <div className="space-y-1.5 text-left">
-              <label className="text-zinc-500 font-bold font-mono text-[10px] uppercase tracking-wide flex items-center gap-1.5">
-                <span className="w-4 h-4 rounded-full bg-indigo-500/15 border border-indigo-500/30 text-indigo-400 flex items-center justify-center text-[9px] font-bold shrink-0">2</span>
-                Workspace Name
+              <label className="text-zinc-400 font-medium text-[13px] flex items-center gap-1.5">
+                <span className="w-5 h-5 rounded-md bg-indigo-500/15 border border-indigo-500/30 text-indigo-300 flex items-center justify-center text-[10px] font-semibold shrink-0">2</span>
+                Workspace name
               </label>
               <input
                 type="text"
@@ -242,7 +245,7 @@ export default function WorkspacePortal() {
 
             {/* Icon picker */}
             <div className="space-y-1.5 text-left select-none">
-              <label className="text-zinc-500 font-bold font-mono text-[10px] uppercase tracking-wide">Workspace Icon</label>
+              <label className="text-zinc-400 font-medium text-[13px]">Workspace icon</label>
               <div className="grid grid-cols-4 gap-2 pt-0.5">
                 {ICONS.map(ic => (
                   <button
@@ -272,9 +275,9 @@ export default function WorkspacePortal() {
               type="button"
               onClick={() => handleCreate(true)}
               disabled={!canCreateDb || isLaunching || isCreatingWorkspace}
-              className={`w-full py-2.5 min-h-[44px] rounded-lg text-sm font-semibold flex items-center justify-center gap-1.5 transition select-none tracking-tight leading-none active:scale-[0.99] ${
+              className={`w-full py-2.5 min-h-[44px] rounded-lg text-sm font-medium flex items-center justify-center gap-1.5 transition-colors duration-200 select-none tracking-tight leading-none active:scale-[0.98] ${
                 canCreateDb && !isLaunching && !isCreatingWorkspace
-                  ? 'bg-indigo-500 text-white hover:bg-indigo-600 shadow-[0_4px_12px_rgba(99,102,241,0.3)]'
+                  ? 'bg-indigo-500 text-white hover:bg-indigo-600 shadow-[0_4px_16px_rgba(30,45,110,0.45)]'
                   : 'bg-brand-sidebar text-zinc-600 border border-brand-border-muted/45 cursor-not-allowed'
               }`}
             >
@@ -294,22 +297,22 @@ export default function WorkspacePortal() {
               type="button"
               onClick={() => handleCreate(false)}
               disabled={!canCreateLocal || isLaunching || isCreatingWorkspace}
-              className={`w-full py-2.5 min-h-[44px] rounded-lg text-sm font-semibold flex items-center justify-center gap-1.5 transition select-none tracking-tight leading-none active:scale-[0.99] ${
+              className={`w-full py-2.5 min-h-[44px] rounded-lg text-sm font-medium flex items-center justify-center gap-1.5 transition-colors duration-200 select-none tracking-tight leading-none active:scale-[0.98] ${
                 canCreateLocal && !isLaunching && !isCreatingWorkspace
                   ? 'bg-zinc-800 text-zinc-100 hover:bg-zinc-700 border border-zinc-700'
                   : 'bg-brand-sidebar text-zinc-600 border border-brand-border-muted/45 cursor-not-allowed'
               }`}
             >
               <Play size={13} />
-              <span>Create Local Workspace (no database)</span>
+              <span>Create local workspace (no database)</span>
             </button>
         </div>
 
         {/* ── Existing workspaces ── */}
         {workspaces.length > 0 && (
           <div className="w-full border-t border-brand-border/60 pt-4 space-y-2 select-none">
-            <h3 className="text-[9px] font-mono tracking-wider font-bold text-zinc-550 text-left uppercase">
-              Or Choose Active Local Session ({workspaces.length})
+            <h3 className="text-[13px] font-medium text-zinc-400 text-left">
+              Recent workspaces <span className="tnum text-zinc-500">({workspaces.length})</span>
             </h3>
             <div className="space-y-1.5 max-h-32 overflow-y-auto scrollbar-thin pr-1">
               {(workspaces as Array<{ id: string; name: string; icon: string }>).map((ws) => (

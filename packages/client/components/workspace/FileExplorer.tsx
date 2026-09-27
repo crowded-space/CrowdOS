@@ -415,7 +415,7 @@ export default function FileExplorer() {
       {/* Header — which folder this panel is showing, and why. */}
       <div className="shrink-0 border-b border-zinc-900">
         <div className="flex items-center gap-1.5 px-2.5 py-2">
-          <h2 className="text-[11px] font-mono font-semibold uppercase tracking-[0.07em] text-zinc-400 truncate">
+          <h2 className="text-[13px] font-medium text-zinc-400 truncate">
             Repository
           </h2>
           <div className="ml-auto flex items-center gap-0.5">
@@ -566,7 +566,7 @@ export default function FileExplorer() {
             onClick={() => setLocalOpen((open) => !open)}
             aria-expanded={localOpen}
             className="flex w-full items-center gap-1.5 px-2.5 py-1.5 text-left cursor-pointer hover:bg-zinc-800/40 transition focus:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-indigo-400/60"
-            title="The workspace's own directory — configuration and workspace state"
+            title="The workspace's own directory: configuration and workspace state"
           >
             {localOpen
               ? <ChevronDown size={13} className="text-zinc-500 shrink-0" />

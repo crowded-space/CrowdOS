@@ -29,7 +29,7 @@ export default function DelegationMessage({ delegationInfo, timestamp }: Delegat
       <div className="flex items-center justify-between border-b border-indigo-500/10 pb-2">
         <div className="flex items-center gap-1.5 text-xs font-semibold text-indigo-300">
           <GitFork size={13} className="rotate-90 text-indigo-400" />
-          <span>DELEGATION DISPATCH</span>
+          <span>Delegation</span>
         </div>
         <span className="text-[10px] text-zinc-500">
           {timeStr}
@@ -59,7 +59,7 @@ export default function DelegationMessage({ delegationInfo, timestamp }: Delegat
 
       {/* Instruction Task */}
       <div className="text-xs bg-zinc-950/65 border border-zinc-900/80 p-2.5 rounded text-zinc-300 leading-relaxed font-sans">
-        <span className="text-[10px] font-mono text-zinc-500 font-bold block mb-1">TASK DIRECTIVE:</span>
+        <span className="text-[11px] font-medium text-zinc-400 block mb-1">Task</span>
         {task}
       </div>
 
@@ -72,10 +72,10 @@ export default function DelegationMessage({ delegationInfo, timestamp }: Delegat
           </span>
           <span className="flex items-center gap-0.5">
             <DollarSign size={11} className="text-emerald-500" />
-            <span>${cost.toFixed(4)} gas</span>
+            <span>${cost.toFixed(4)}</span>
           </span>
         </div>
-        <span className={`px-2 py-0.5 rounded-full border text-[10px] font-semibold uppercase ${statusStyles[status]}`}>
+        <span className={`px-2 py-0.5 rounded border text-[10px] font-medium ${statusStyles[status]}`}>
           {status}
         </span>
       </div>

@@ -173,7 +173,7 @@ export default function ThreadDrawer({ channelId, open, onClose, onOpenThread }:
           {selectedThread ? (
             <button onClick={() => { setSelectedThread(null); setThreadMessages([]); setError(null); }} className="text-indigo-300 hover:text-indigo-200">Threads</button>
           ) : 'Threads'}
-          <span className="text-[11px] bg-zinc-900 border border-zinc-800 rounded-full px-1.5 py-0.5 text-zinc-500">{threads.length}</span>
+          <span className="tnum text-[11px] bg-zinc-900 border border-zinc-800 rounded-md px-1.5 py-0.5 text-zinc-500">{threads.length}</span>
         </div>
         <button onClick={onClose} aria-label="Close threads" className="w-7 h-7 rounded-lg bg-zinc-900 border border-zinc-800 flex items-center justify-center text-zinc-400 hover:bg-zinc-800"><X size={12} /></button>
       </div>
@@ -203,7 +203,7 @@ export default function ThreadDrawer({ channelId, open, onClose, onOpenThread }:
             <div className="flex items-center gap-2 text-xs font-medium text-zinc-200">
               <span className={`w-2 h-2 rounded-full ${t.status === 'active' ? 'bg-emerald-500' : 'bg-zinc-600'}`} />
               <span className="truncate flex-1">{t.title || `Thread ${t.id.slice(0, 8)}`}</span>
-              {t.isEphemeral && <span className="text-[10px] bg-amber-500/15 text-amber-400 border border-amber-500/20 rounded-full px-1.5 py-0.5">ephemeral</span>}
+              {t.isEphemeral && <span className="text-[10px] bg-amber-500/15 text-amber-400 border border-amber-500/20 rounded-md px-1.5 py-0.5">ephemeral</span>}
             </div>
             <div className="flex items-center gap-2 mt-1.5 text-[11px] text-zinc-500">
               <span className="flex items-center gap-1"><MessageSquare size={10} /> {t.messageCount}</span>

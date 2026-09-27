@@ -136,7 +136,7 @@ export default function ScreenLockSettingsPanel({ workspaceId }: Props) {
         <KeyRound size={14} className="text-indigo-400" />
         <span>Screen Lock PIN</span>
         <span
-          className={`ml-auto px-1.5 py-0.5 rounded text-[10px] font-mono uppercase font-semibold border ${
+          className={`ml-auto px-1.5 py-0.5 rounded text-[10px] font-medium border ${
             enabled
               ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400'
               : 'bg-zinc-800 border-zinc-700 text-zinc-400'
@@ -147,7 +147,7 @@ export default function ScreenLockSettingsPanel({ workspaceId }: Props) {
       </div>
       <p className="text-[11px] text-zinc-500">
         Low-friction screenlock against casual physical access (not full auth). Disabled by
-        default — set a PIN to opt in. Only a hash is stored server-side.
+        default. Set a PIN to opt in. Only a hash is stored server-side.
       </p>
 
       {enabled && (
