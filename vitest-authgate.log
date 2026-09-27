@@ -1,0 +1,77 @@
+
+ RUN  v4.1.7 C:/Users/Asus/Documents/GitHub/.ThisCrowd/packages/server
+
+stderr | src/auth-gate-mount.test.ts > auth gate mounted on the real server > trusts a keyless loopback peer (embedded desktop backend)
+[agents] PG read failed, falling back: DATABASE_URL is not set. Local workspace registry remains available; PG-backed features (chat history, RAG) are degraded until a database is configured.
+
+stdout | src/auth-gate-mount.test.ts
+[Runtime] Provider adapters registered.
+[MemoryLifecycle] Sweeper active every 600000ms (cap 500).
+[Heartbeat] Active — touch every 15000ms, sweep every 20000ms (threshold owned by Agents).
+
+ ❯ src/auth-gate-mount.test.ts (9 tests | 4 failed) 35026ms
+     × allows a non-loopback caller presenting a valid key 5021ms
+     × rejects an invalid key even from a loopback peer (presented credential is authoritative) 5010ms
+     × trusts a keyless loopback peer (embedded desktop backend) 5087ms
+     × leaves the pre-key portal discovery surface reachable without a key 5036ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 4 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  src/auth-gate-mount.test.ts > auth gate mounted on the real server > allows a non-loopback caller presenting a valid key
+Error: Test timed out in 5000ms.
+If this is a long-running test, pass a timeout value as the last argument or configure it globally with "testTimeout".
+ ❯ src/auth-gate-mount.test.ts:62:3
+     60|   });
+     61|
+     62|   it("allows a non-loopback caller presenting a valid key", async () =…
+       |   ^
+     63|     const res = await inject({ method: "GET", url: "/api/agents", key:…
+     64|     expect(res.statusCode).not.toBe(401);
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/4]⎯
+
+ FAIL  src/auth-gate-mount.test.ts > auth gate mounted on the real server > rejects an invalid key even from a loopback peer (presented credential is authoritative)
+Error: Test timed out in 5000ms.
+If this is a long-running test, pass a timeout value as the last argument or configure it globally with "testTimeout".
+ ❯ src/auth-gate-mount.test.ts:67:3
+     65|   });
+     66|
+     67|   it("rejects an invalid key even from a loopback peer (presented cred…
+       |   ^
+     68|     const res = await inject({ method: "GET", url: "/api/agents", remo…
+     69|     expect(res.statusCode).toBe(401);
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/4]⎯
+
+ FAIL  src/auth-gate-mount.test.ts > auth gate mounted on the real server > trusts a keyless loopback peer (embedded desktop backend)
+Error: Test timed out in 5000ms.
+If this is a long-running test, pass a timeout value as the last argument or configure it globally with "testTimeout".
+ ❯ src/auth-gate-mount.test.ts:72:3
+     70|   });
+     71|
+     72|   it("trusts a keyless loopback peer (embedded desktop backend)", asyn…
+       |   ^
+     73|     for (const addr of ["127.0.0.1", "::1", "::ffff:127.0.0.1"]) {
+     74|       const res = await inject({ method: "GET", url: "/api/agents", re…
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[3/4]⎯
+
+ FAIL  src/auth-gate-mount.test.ts > auth gate mounted on the real server > leaves the pre-key portal discovery surface reachable without a key
+Error: Test timed out in 5000ms.
+If this is a long-running test, pass a timeout value as the last argument or configure it globally with "testTimeout".
+ ❯ src/auth-gate-mount.test.ts:79:3
+     77|   });
+     78|
+     79|   it("leaves the pre-key portal discovery surface reachable without a …
+       |   ^
+     80|     const list = await inject({ method: "GET", url: "/api/workspaces" …
+     81|     expect(list.statusCode).not.toBe(401);
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[4/4]⎯
+
+
+ Test Files  1 failed (1)
+      Tests  4 failed | 5 passed (9)
+   Start at  14:05:46
+   Duration  37.19s (transform 9.28s, setup 327ms, import 581ms, tests 35.03s, environment 0ms)
+

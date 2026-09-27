@@ -2,6 +2,7 @@ import React, { useState, useMemo } from 'react';
 import { Copy, Check, ChevronDown, ChevronUp, Code2 } from 'lucide-react';
 import { useCrowdOSStore } from '@/stores/crowdOsStore';
 import { stripToolCalls } from '@crowdspace/shared';
+import { highlightCode } from '../code-highlight';
 
 interface MentionParserProps {
   text: string;
@@ -47,6 +48,10 @@ function CodeSandboxBlock({ language, code }: { language: string; code: string }
   const lines = code.split('\n');
   const isLong = lines.length > 20;
   const displayedLines = isLong && !isExpanded ? lines.slice(0, 20) : lines;
+  const shownCode = displayedLines.join('\n');
+  // One highlight pass over the visible slice; the gutter and the pre both
+  // rely on inherited line-height (no per-line divs) so rows stay aligned.
+  const highlighted = useMemo(() => highlightCode(shownCode, language), [shownCode, language]);
 
   const handleCopy = () => {
     navigator.clipboard.writeText(code);
@@ -88,18 +93,17 @@ function CodeSandboxBlock({ language, code }: { language: string; code: string }
       <div className="relative overflow-x-auto scrollbar-thin select-text">
         <div className="flex p-3 leading-relaxed text-indigo-200 font-mono text-xs">
           {/* Line Numbers */}
-          <div className="select-none text-zinc-650 pr-3 border-r border-zinc-900 text-right min-w-[2.2rem] space-y-0.5">
+          <div className="select-none text-zinc-650 pr-3 border-r border-zinc-900 text-right min-w-[2.2rem]">
             {displayedLines.map((_, i) => (
               <div key={i}>{i + 1}</div>
             ))}
           </div>
 
           {/* Code Text */}
-          <pre className="pl-3 overflow-x-auto whitespace-pre font-mono flex-1 space-y-0.5">
-            {displayedLines.map((line, i) => (
-              <div key={i}>{line || ' '}</div>
-            ))}
-          </pre>
+          <pre
+            className="hljs pl-3 overflow-x-auto whitespace-pre font-mono flex-1 m-0"
+            dangerouslySetInnerHTML={{ __html: highlighted }}
+          />
         </div>
 
         {/* Collapsible toggle for long code */}

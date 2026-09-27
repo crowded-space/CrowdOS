@@ -1,11 +1,12 @@
-import React, { useState, useRef, useEffect, useMemo } from 'react';
+import React, { useState, useRef, useEffect, useLayoutEffect, useMemo } from 'react';
 import { motion, AnimatePresence, useReducedMotion } from 'motion/react';
 import {
   Hash, Users, Search, Bell, Pin,
   Trash2, Send, PlusCircle, Smile,
   Paperclip, FileText, Image as ImageIcon, X,
   ChevronDown, ChevronRight, ChevronUp,
-  Clock, Terminal, FileCode2, BellOff, ArrowDown, Sparkles, Square
+  Clock, Terminal, FileCode2, BellOff, ArrowDown, Sparkles, Square,
+  Maximize2, Minimize2
 } from 'lucide-react';
 import { useCrowdOSStore } from '@/stores/crowdOsStore';
 import MessageRouter from './messages/MessageRouter';
@@ -18,6 +19,7 @@ import EmojiPickerPopover from './EmojiPickerPopover';
 import { apiClient } from '@/src/api/client';
 import ModeSelector from './ModeSelector';
 import ApprovalCard from './messages/ApprovalCard';
+import { highlightCode, languageFromPath } from './code-highlight';
 const DiffViewer = React.lazy(() => import('./DiffViewer'));
 
 function SandboxCodeViewer({ path, workspaceId, channelId }: { path: string; workspaceId?: string | null; channelId?: string | null }) {
@@ -68,9 +70,14 @@ function SandboxCodeViewer({ path, workspaceId, channelId }: { path: string; wor
 
   const isDirty = content !== originalContent;
 
+  // Highlighted mirror behind the textarea: same font/padding/nowrap so the
+  // two layers stay pixel-aligned while the textarea keeps caret + editing.
+  const preRef = useRef<HTMLPreElement | null>(null);
+  const highlighted = useMemo(() => highlightCode(content, languageFromPath(path)), [content, path]);
+
   return (
     <>
-      <div className="flex-1 overflow-hidden py-3">
+      <div className="flex-1 overflow-hidden py-3 relative">
         {isLoading ? (
           <div className="text-zinc-500 text-xs p-4 font-mono">Loading content...</div>
         ) : loadError ? (
@@ -80,12 +87,25 @@ function SandboxCodeViewer({ path, workspaceId, channelId }: { path: string; wor
             <div className="mt-1 text-zinc-400">{loadError}</div>
           </div>
         ) : (
-          <textarea
-            className="w-full h-full bg-transparent text-zinc-300 font-mono text-xs resize-none focus:outline-none p-2 px-4"
-            value={content}
-            onChange={e => setContent(e.target.value)}
-            spellCheck={false}
-          />
+          <div className="relative w-full h-full">
+            <pre
+              ref={preRef}
+              aria-hidden
+              className="hljs absolute inset-0 m-0 overflow-hidden p-2 px-4 font-mono text-xs whitespace-pre text-zinc-300 pointer-events-none select-none"
+              dangerouslySetInnerHTML={{ __html: highlighted + '\n' }}
+            />
+            <textarea
+              wrap="off"
+              className="absolute inset-0 w-full h-full bg-transparent font-mono text-xs whitespace-pre resize-none focus:outline-none p-2 px-4 text-transparent caret-indigo-400 selection:bg-indigo-500/30"
+              value={content}
+              onChange={e => setContent(e.target.value)}
+              onScroll={e => {
+                const ta = e.currentTarget;
+                preRef.current?.scrollTo(ta.scrollLeft, ta.scrollTop);
+              }}
+              spellCheck={false}
+            />
+          </div>
         )}
       </div>
       <div className="flex items-center justify-end gap-2 px-3 py-2 border-t border-zinc-900 bg-zinc-950/50 shrink-0">
@@ -161,7 +181,66 @@ export default function MainChatArea({ onOpenSearch }: MainChatAreaProps) {
   const [showMentions, setShowMentions] = useState(false);
   const [mentionFilter, setMentionFilter] = useState('');
   const [mentionIndex, setMentionIndex] = useState(0);
-  const [isSandboxMinimized, setIsSandboxMinimized] = useState(false);
+  // Code viewer height: min (44px bar), dock (30% sheet), full (100% fill).
+  // One chevron toggles min ⇄ dock (never reaches full — that's the maximize
+  // button's job). Every step tweens an explicit px height (single driver).
+  const [sandboxView, setSandboxView] = useState<'min' | 'dock' | 'full'>('dock');
+  // A newly opened file always starts docked.
+  useEffect(() => {
+    if (selectedSandboxFile) setSandboxView('dock');
+  }, [selectedSandboxFile]);
+  const [sandboxDockH, setSandboxDockH] = useState(240);
+  const [sandboxFullH, setSandboxFullH] = useState(480);
+  // Collapsed bar = header (h-11) + panel border (2px), so the panel bottom
+  // edge lands exactly on the header edge instead of clipping it.
+  const SANDBOX_MIN_H = 46;
+  // Full height = whatever space is left between the header and the composer.
+  // Measured from the live DOM (siblings, not assumptions) so composer growth,
+  // the mention popup, and viewport changes can never leave a gap. The panel
+  // tweens to it like any other height — one driver, no snap.
+  const chatRootRef = useRef<HTMLDivElement | null>(null);
+  const panelRef = useRef<HTMLDivElement | null>(null);
+  const composerBoxRef = useRef<HTMLDivElement | null>(null);
+  const computeFullH = () => {
+    const root = chatRootRef.current;
+    const panel = panelRef.current;
+    if (!root || !panel) return null;
+    // Skip the panel itself AND the stream: at full the stream collapses to
+    // zero (its padding is tweened out with the view), so everything else is
+    // what the panel has to leave behind. Margins count too — offsetHeight
+    // excludes them and an uncounted margin overflows the column.
+    const stream = scrollContainerRef.current;
+    let used = 8; // panel's own mb-2
+    for (const child of Array.from(root.children)) {
+      if (child === panel || child === stream) continue;
+      const el = child as HTMLElement;
+      used += el.offsetHeight + (parseFloat(getComputedStyle(el).marginBottom) || 0);
+    }
+    return Math.max(240, Math.round(root.clientHeight - used));
+  };
+  // Measure the live space between header and composer: full = all of it,
+  // dock = 30% of it. Layout effect so the first paint already carries the
+  // measured heights (no 240px flash), kept fresh by observer + resizes,
+  // so composer growth or viewport changes can never leave a gap.
+  useLayoutEffect(() => {
+    const compute = () => {
+      const next = computeFullH();
+      if (next === null) return;
+      setSandboxFullH(next);
+      setSandboxDockH(Math.max(160, Math.round(next * 0.3)));
+    };
+    compute();
+    const ro = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(compute);
+    if (ro) {
+      if (chatRootRef.current) ro.observe(chatRootRef.current);
+      if (composerBoxRef.current) ro.observe(composerBoxRef.current);
+    }
+    window.addEventListener('resize', compute);
+    return () => {
+      ro?.disconnect();
+      window.removeEventListener('resize', compute);
+    };
+  }, [sandboxView, showMentions, selectedSandboxFile]);
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
   const [confirmClearOpen, setConfirmClearOpen] = useState(false);
   const [mutedChannels, setMutedChannels] = useState<Record<string, boolean>>(() => {
@@ -699,7 +778,7 @@ export default function MainChatArea({ onOpenSearch }: MainChatAreaProps) {
   }, [currentMessages, agents]);
 
   return (
-    <div id="main-chat-area" className="flex-1 bg-[#121214] flex flex-col h-full overflow-hidden relative">
+    <div id="main-chat-area" ref={chatRootRef} className="flex-1 bg-[#121214] flex flex-col h-full overflow-hidden relative">
       {/* Top Channel Header Zone — thumb-friendly, safe */}
       <header className="min-h-[56px] border-b border-zinc-900/80 px-2.5 sm:px-4 flex items-center justify-between bg-[#121214]/95 backdrop-blur-xl shrink-0 select-none sticky top-0 z-10">
         <div className="flex items-center gap-2 sm:gap-3 min-w-0 flex-1">
@@ -822,7 +901,9 @@ export default function MainChatArea({ onOpenSearch }: MainChatAreaProps) {
       <div
         ref={scrollContainerRef}
         onScroll={handleScroll}
-        className="flex-1 overflow-y-auto px-3 sm:px-4 lg:px-6 py-4 sm:py-6 space-y-3 sm:space-y-4 scrollbar-thin scroll-smooth overscroll-contain contain-paint select-text selection:bg-indigo-500/30 relative"
+        className={`flex-1 overflow-y-auto px-3 sm:px-4 lg:px-6 ${
+          selectedSandboxFile && sandboxView === 'full' ? 'py-0' : 'py-4 sm:py-6'
+        } transition-[padding] duration-300 ease-[cubic-bezier(0.16,1,0.3,1)] space-y-3 sm:space-y-4 scrollbar-thin scroll-smooth overscroll-contain contain-paint select-text selection:bg-indigo-500/30 relative`}
       >
         {reconnectDigest?.visible && (
           <div className="mx-auto max-w-xl flex items-center justify-between gap-3 px-3.5 py-2.5 rounded-xl bg-indigo-500/10 border border-indigo-500/20 text-xs font-sans text-indigo-200 shadow-sm">
@@ -932,6 +1013,93 @@ export default function MainChatArea({ onOpenSearch }: MainChatAreaProps) {
         )}
       </div>
 
+      {/* Code viewer — in-flow panel between stream and composer so drafts
+          survive view switches (single SandboxCodeViewer mount). min: 46px
+          bar; dock: sheet; full: fills the chat area below the header. */}
+      <AnimatePresence>
+        {selectedSandboxFile && (
+          <motion.div
+            key="sandbox-code-viewer"
+            ref={panelRef}
+            initial={{ opacity: 0, y: 12, height: SANDBOX_MIN_H }}
+            animate={{
+              opacity: 1,
+              y: 0,
+              height: sandboxView === 'min' ? SANDBOX_MIN_H : sandboxView === 'dock' ? sandboxDockH : sandboxFullH,
+            }}
+            exit={{
+              opacity: 0,
+              y: 12,
+              height: 0,
+              marginBottom: 0,
+              transition: shouldReduceMotion ? { duration: 0 } : { duration: 0.2, ease: [0.16, 1, 0.3, 1] },
+            }}
+            transition={shouldReduceMotion ? { duration: 0 } : { duration: 0.3, ease: [0.16, 1, 0.3, 1] }}
+            style={{ flex: 'none' }}
+            className="mx-3 sm:mx-4 mb-2 flex min-h-0 flex-col bg-[#0c0c0f] border border-zinc-800 rounded-[8px] shadow-[0_-12px_40px_rgba(10,14,32,0.6)] overflow-hidden shrink-0">
+            {/* Constant header height in every view (h-11) so collapsing never
+                pops the title bar; the divider only exists outside `min`. */}
+            <div className={`flex items-center justify-between shrink-0 select-none px-3.5 h-11 bg-zinc-950/70 ${sandboxView === 'min' ? '' : 'border-b border-zinc-800'}`}>
+            <div className="flex items-center gap-2.5 min-w-0">
+              <span className="w-7 h-7 rounded-[4px] bg-zinc-900 border border-zinc-800 flex items-center justify-center shrink-0">
+                <FileCode2 size={13} className="text-zinc-400" />
+              </span>
+              <span className="text-[12px] font-mono font-medium text-zinc-300 tracking-tight truncate">{selectedSandboxFile}</span>
+            </div>
+            <div className="flex items-center gap-1">
+              <button
+                onClick={() => {
+                  // min ⇄ dock only; full is entered/exited via maximize.
+                  if (sandboxView === 'min') setSandboxView('dock');
+                  else if (sandboxView === 'dock') setSandboxView('min');
+                  else setSandboxView('dock');
+                }}
+                aria-label={sandboxView === 'min' ? 'Expand code editor' : 'Collapse code editor'}
+                className="w-9 h-9 text-zinc-500 hover:text-zinc-200 hover:bg-zinc-800 rounded-[4px] focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500/30 transition-colors cursor-pointer flex items-center justify-center active:scale-95"
+              >
+                {sandboxView === 'min' ? <ChevronUp size={15} /> : <ChevronDown size={15} />}
+              </button>
+              {/* Maximize jumps the extremes (min/dock ⇄ full), skipping the
+                  half sheet; from full the chevron collapses back through dock. */}
+              <button
+                onClick={() => {
+                  if (sandboxView === 'full') {
+                    setSandboxView('min');
+                  } else {
+                    setSandboxView('full');
+                  }
+                }}
+                aria-label={sandboxView === 'full' ? 'Minimize code editor' : 'Maximize code editor'}
+                className="w-9 h-9 text-zinc-500 hover:text-zinc-200 hover:bg-zinc-800 rounded-[4px] focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500/30 transition-colors cursor-pointer flex items-center justify-center active:scale-95"
+              >
+                {sandboxView === 'full' ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
+              </button>
+              <button
+                onClick={() => setSelectedSandboxFile(null)}
+                aria-label="Close code editor"
+                className="w-9 h-9 text-zinc-500 hover:text-zinc-200 hover:bg-zinc-800 rounded-[4px] focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500/30 transition-colors cursor-pointer flex items-center justify-center active:scale-95"
+              >
+                <X size={15} />
+              </button>
+            </div>
+          </div>
+          {/* Always mounted: drafts survive every switch, and the parent's
+              explicit height is the only thing that animates. The body fades
+              fast so text never smears mid-tween. */}
+          <motion.div
+            initial={false}
+            animate={{ opacity: sandboxView === 'min' ? 0 : 1 }}
+            transition={shouldReduceMotion ? { duration: 0 } : { duration: 0.15 }}
+            className="flex min-h-0 flex-col overflow-hidden"
+            style={{ flex: '1 1 auto' }}
+            aria-hidden={sandboxView === 'min'}
+          >
+            <SandboxCodeViewer path={selectedSandboxFile} workspaceId={activeWorkspaceId} channelId={activeChannelId} />
+          </motion.div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+
       {/* Dynamic Mention Suggestion — floats above composer, thumb-reachable */}
       {showMentions && filteredAgents.length > 0 && (
         <div className="mx-3 sm:mx-4 bg-[#1A1A1E] border border-zinc-800 rounded-2xl shadow-[0_16px_48px_rgba(10,14,32,0.6)] p-2 max-h-52 overflow-y-auto scrollbar-thin overscroll-contain mb-2 animate-scale-in" role="listbox" aria-label="Agent mentions">
@@ -958,40 +1126,7 @@ export default function MainChatArea({ onOpenSearch }: MainChatAreaProps) {
       )}
 
       {/* Input Composer Zone — sticky, thumb-ergonomic, safe-area aware */}
-      <div className="p-3 sm:p-4 pb-[max(0.75rem,env(safe-area-inset-bottom))] bg-[#121214] shrink-0 relative border-t border-zinc-900/60" id="input-composer-container">
-
-        {/* Code Preview Pane (Popup) — sheet-style, thumb-friendly */}
-        {selectedSandboxFile && (
-          <div className={`absolute bottom-full left-2 right-2 sm:left-3 sm:right-3 mb-3 flex flex-col bg-[#0c0c0f]/95 backdrop-blur-xl rounded-2xl border border-zinc-800 shadow-[0_-12px_40px_rgba(10,14,32,0.6)] z-20 overflow-hidden transition-all duration-300 ${isSandboxMinimized ? 'h-[44px]' : 'h-[min(56vh,320px)] animate-slide-up'}`}>
-            <div className="flex items-center justify-between px-3.5 py-2.5 border-b border-zinc-800 bg-zinc-950/70 shrink-0 select-none">
-              <div className="flex items-center gap-2.5 min-w-0">
-                <span className="w-7 h-7 rounded-lg bg-zinc-900 border border-zinc-800 flex items-center justify-center shrink-0">
-                  <FileCode2 size={13} className="text-zinc-400" />
-                </span>
-                <span className="text-[12px] font-mono font-medium text-zinc-300 tracking-tight truncate">{selectedSandboxFile}</span>
-              </div>
-              <div className="flex items-center gap-1">
-                <button
-                  onClick={() => setIsSandboxMinimized(!isSandboxMinimized)}
-                  aria-label={isSandboxMinimized ? 'Expand code editor' : 'Minimize code editor'}
-                  className="w-9 h-9 text-zinc-500 hover:text-zinc-200 hover:bg-zinc-800 rounded-xl focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500/30 transition-colors cursor-pointer flex items-center justify-center active:scale-95"
-                >
-                  {isSandboxMinimized ? <ChevronUp size={15} /> : <ChevronDown size={15} />}
-                </button>
-                <button
-                  onClick={() => setSelectedSandboxFile(null)}
-                  aria-label="Close code editor"
-                  className="w-9 h-9 text-zinc-500 hover:text-zinc-200 hover:bg-zinc-800 rounded-xl focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500/30 transition-colors cursor-pointer flex items-center justify-center active:scale-95"
-                >
-                  <X size={15} />
-                </button>
-              </div>
-            </div>
-            {!isSandboxMinimized && (
-              <SandboxCodeViewer path={selectedSandboxFile} workspaceId={activeWorkspaceId} channelId={activeChannelId} />
-            )}
-          </div>
-        )}
+      <div ref={composerBoxRef} className="p-3 sm:p-4 pb-[max(0.75rem,env(safe-area-inset-bottom))] bg-[#121214] shrink-0 relative border-t border-zinc-900/60" id="input-composer-container">
 
         <div
           onDragOver={handleDragOver}

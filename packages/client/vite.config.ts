@@ -31,6 +31,7 @@ export default defineConfig(() => {
             vendor: ['react', 'react-dom', 'zustand', 'socket.io-client'],
             motion: ['motion'],
             icons: ['lucide-react'],
+            highlight: ['highlight.js/lib/common'],
           },
         },
       },

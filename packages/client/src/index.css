@@ -232,6 +232,42 @@ a:not([class*="duration-"]) {
 .animate-scale-in { animation: scale-in 180ms var(--ease-out) forwards; }
 .animate-fade-in { animation: fade 150ms ease-out forwards; }
 
+/* ——— Syntax highlighting (highlight.js) — zinc/indigo code palette ——— */
+.hljs { color: #d4d4d8; }
+.hljs-comment,
+.hljs-quote { color: #71717a; font-style: italic; }
+.hljs-keyword,
+.hljs-selector-tag,
+.hljs-literal,
+.hljs-doctag,
+.hljs-formula { color: #a78bfa; }
+.hljs-string,
+.hljs-regexp,
+.hljs-addition,
+.hljs-attribute { color: #6ee7b7; }
+.hljs-number,
+.hljs-symbol,
+.hljs-bullet { color: #fbbf24; }
+.hljs-title,
+.hljs-section,
+.hljs-name,
+.hljs-selector-id,
+.hljs-selector-class,
+.hljs-function { color: #818cf8; }
+.hljs-type,
+.hljs-built_in,
+.hljs-class .hljs-title,
+.hljs-params { color: #67e8f9; }
+.hljs-attr,
+.hljs-variable,
+.hljs-template-variable,
+.hljs-link { color: #93c5fd; }
+.hljs-meta,
+.hljs-tag { color: #94a3b8; }
+.hljs-emphasis { font-style: italic; }
+.hljs-strong { font-weight: 600; }
+.hljs-deletion { color: #f87171; }
+
 /* ——— Line clamp ——— */
 .lines-clamp-2 {
   display: -webkit-box;
