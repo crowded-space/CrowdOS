@@ -67,8 +67,6 @@ html {
   color-scheme: dark;
   height: 100dvh;
   overscroll-behavior: none;
-  -webkit-text-size-adjust: 100%;
-  text-size-adjust: 100%;
   scrollbar-gutter: stable;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
@@ -87,12 +85,6 @@ p {
 
 .tnum {
   font-variant-numeric: tabular-nums;
-}
-
-body {
-  -webkit-tap-highlight-color: transparent;
-  -webkit-touch-callout: none;
-  touch-action: manipulation;
 }
 
 html, body {
@@ -139,16 +131,6 @@ button:focus:not(:focus-visible), a:focus:not(:focus-visible) {
   background: rgba(161, 161, 170, 0.32);
   border: 2px solid transparent;
   background-clip: padding-box;
-}
-
-/* Hide scrollbars on touch devices by default for cleaner mobile feel */
-@media (pointer: coarse) {
-  * {
-    scrollbar-width: none;
-  }
-  *::-webkit-scrollbar { display: none; }
-  .scrollbar-thin { scrollbar-width: none; }
-  .scrollbar-thin::-webkit-scrollbar { display: none; }
 }
 
 .scrollbar-thin {
@@ -276,16 +258,6 @@ a:not([class*="duration-"]) {
   overflow: hidden;
 }
 
-/* ——— Touch target helper ——— */
-.touch-target {
-  min-width: 44px;
-  min-height: 44px;
-}
-
-/* ——— Safe area utilities ——— */
-.pb-safe { padding-bottom: max(0.75rem, env(safe-area-inset-bottom)); }
-.pt-safe { padding-top: max(0.5rem, env(safe-area-inset-top)); }
-
 /* ——— Card elevation tokens ——— */
 .card-elevated {
   background: #141416;
@@ -305,14 +277,6 @@ a:not([class*="duration-"]) {
 }
 @media (prefers-reduced-motion: reduce) {
   .grain-overlay { display: none; }
-}
-
-/* ——— Input reset for iOS ——— */
-input, textarea, select {
-  font-size: 16px;
-}
-@media (min-width: 640px) {
-  input, textarea, select { font-size: inherit; }
 }
 
 /* ——— Warm light theme + semantic tokens ———

@@ -16,7 +16,6 @@ export default function WorkspaceSidebar() {
     toggleCategoryCollapse,
     setSettingsModalOpen,
     setWorkspaceSettingsTab,
-    setMobileDrawerLeft,
     isDatabaseOffline,
     databaseErrorMessage,
     fetchWorkspaces,
@@ -28,7 +27,6 @@ export default function WorkspaceSidebar() {
     toggleCategoryCollapse: s.toggleCategoryCollapse,
     setSettingsModalOpen: s.setSettingsModalOpen,
     setWorkspaceSettingsTab: s.setWorkspaceSettingsTab,
-    setMobileDrawerLeft: s.setMobileDrawerLeft,
     isDatabaseOffline: s.isDatabaseOffline,
     databaseErrorMessage: s.databaseErrorMessage,
     fetchWorkspaces: s.fetchWorkspaces,
@@ -41,9 +39,7 @@ export default function WorkspaceSidebar() {
 
   const handleSelectChannel = useCallback((channelId: string) => {
     setActiveChannel(channelId);
-    setMobileDrawerLeft(false);
-    try { (navigator as any)?.vibrate?.(6); } catch {}
-  }, [setActiveChannel, setMobileDrawerLeft]);
+  }, [setActiveChannel]);
 
   const isLoading = !activeWS;
 
@@ -100,7 +96,7 @@ export default function WorkspaceSidebar() {
                     onClick={() => toggleCategoryCollapse(category.id)}
                     aria-label={`${category.collapsed ? 'Expand' : 'Collapse'} category ${category.name}`}
                     aria-expanded={!category.collapsed}
-                    className="flex items-center gap-1.5 text-[13px] font-medium text-zinc-400 hover:text-zinc-200 transition-colors duration-200 cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500/30 rounded-lg text-left px-1.5 py-2 min-h-[36px] touch-manipulation active:text-zinc-200"
+                    className="flex items-center gap-1.5 text-[13px] font-medium text-zinc-400 hover:text-zinc-200 transition-colors duration-200 cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500/30 rounded-lg text-left px-1.5 py-2 min-h-[36px] active:text-zinc-200"
                   >
                     <span className="w-5 h-5 rounded-md bg-zinc-900/60 border border-zinc-800/60 flex items-center justify-center shrink-0">
                       {category.collapsed ? <ChevronRight size={11} aria-hidden="true" /> : <ChevronDown size={11} aria-hidden="true" />}
@@ -114,7 +110,7 @@ export default function WorkspaceSidebar() {
                       setCreateModalOpen(true);
                     }}
                     aria-label={`Create channel in ${category.name}`}
-                    className="w-9 h-9 rounded-xl bg-zinc-900/40 hover:bg-zinc-900 border border-transparent hover:border-zinc-800 text-zinc-500 hover:text-zinc-200 transition focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500/30 cursor-pointer flex items-center justify-center shrink-0 touch-manipulation active:scale-95"
+                    className="w-9 h-9 rounded-xl bg-zinc-900/40 hover:bg-zinc-900 border border-transparent hover:border-zinc-800 text-zinc-500 hover:text-zinc-200 transition focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500/30 cursor-pointer flex items-center justify-center shrink-0 active:scale-95"
                     title="Create Channel"
                   >
                     <Plus size={15} aria-hidden="true" />
@@ -160,7 +156,7 @@ export default function WorkspaceSidebar() {
       />
 
       {/* Operator profile — sticky bottom, safe area */}
-      <div className="bg-[#09090b]/95 backdrop-blur border-t border-zinc-900 p-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] flex items-center justify-between gap-2.5 select-none shrink-0" id="sidebar-user-section">
+      <div className="bg-[#09090b]/95 backdrop-blur border-t border-zinc-900 p-3 flex items-center justify-between gap-2.5 select-none shrink-0" id="sidebar-user-section">
         <div className="flex items-center gap-2.5 min-w-0">
           <div className="relative w-9 h-9 rounded-xl bg-amber-500/12 border border-amber-500/20 text-amber-400 flex items-center justify-center text-[11px] shrink-0 font-bold">
             JH
@@ -184,7 +180,7 @@ export default function WorkspaceSidebar() {
               setSettingsModalOpen(true);
             }}
             aria-label="Open settings"
-            className="w-11 h-11 rounded-xl bg-zinc-900/60 hover:bg-zinc-900 border border-zinc-800/60 hover:border-zinc-700 text-zinc-400 hover:text-zinc-100 transition-colors duration-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500/30 cursor-pointer flex items-center justify-center shrink-0 active:scale-95 touch-manipulation"
+            className="w-11 h-11 rounded-xl bg-zinc-900/60 hover:bg-zinc-900 border border-zinc-800/60 hover:border-zinc-700 text-zinc-400 hover:text-zinc-100 transition-colors duration-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500/30 cursor-pointer flex items-center justify-center shrink-0 active:scale-95"
             title="Open settings console"
           >
             <Settings2 size={18} className="shrink-0" />

@@ -295,7 +295,7 @@ export default function RightSidebar() {
       </div>
 
       {/* Bottom Telemetry Dashboard — readable, airy */}
-      <div className="bg-[#09090b] border-t border-zinc-900 p-4 pb-[max(1rem,env(safe-area-inset-bottom))] space-y-3.5 shrink-0 select-none">
+      <div className="bg-[#09090b] border-t border-zinc-900 p-4 space-y-3.5 shrink-0 select-none">
         <div className="flex items-center justify-between">
           <h4 className="text-[13px] font-medium text-zinc-300 flex items-center gap-1.5">
             <BarChart3 size={12} className="text-zinc-500" />
@@ -306,7 +306,7 @@ export default function RightSidebar() {
               onClick={() => setTelemetryTab('channel')}
               role="tab"
               aria-selected={telemetryTab === 'channel'}
-              className={`px-3 py-1 text-[11px] font-mono font-medium rounded-md transition-colors duration-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500/30 cursor-pointer touch-manipulation ${telemetryTab === 'channel' ? 'bg-zinc-800 text-zinc-100 shadow-sm border border-zinc-700' : 'text-zinc-500 hover:text-zinc-300'}`}
+              className={`px-3 py-1 text-[11px] font-mono font-medium rounded-md transition-colors duration-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500/30 cursor-pointer ${telemetryTab === 'channel' ? 'bg-zinc-800 text-zinc-100 shadow-sm border border-zinc-700' : 'text-zinc-500 hover:text-zinc-300'}`}
             >
               Channel
             </button>
@@ -314,7 +314,7 @@ export default function RightSidebar() {
               onClick={() => setTelemetryTab('global')}
               role="tab"
               aria-selected={telemetryTab === 'global'}
-              className={`px-3 py-1 text-[11px] font-mono font-medium rounded-md transition-colors duration-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500/30 cursor-pointer touch-manipulation ${telemetryTab === 'global' ? 'bg-zinc-800 text-zinc-100 shadow-sm border border-zinc-700' : 'text-zinc-500 hover:text-zinc-300'}`}
+              className={`px-3 py-1 text-[11px] font-mono font-medium rounded-md transition-colors duration-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500/30 cursor-pointer ${telemetryTab === 'global' ? 'bg-zinc-800 text-zinc-100 shadow-sm border border-zinc-700' : 'text-zinc-500 hover:text-zinc-300'}`}
             >
               Global
             </button>

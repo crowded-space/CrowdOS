@@ -16,131 +16,14 @@ import { Attachment, Agent, Message, ToolExecution } from '@/types/crowdOs';
 import { useToast } from '@/components/ui/ToastProvider';
 import ConfirmDialog from '@/components/ui/ConfirmDialog';
 import EmojiPickerPopover from './EmojiPickerPopover';
-import { apiClient } from '@/src/api/client';
 import ModeSelector from './ModeSelector';
 import ApprovalCard from './messages/ApprovalCard';
-import { highlightCode, languageFromPath } from './code-highlight';
+import SandboxCodeViewer from './SandboxCodeViewer';
 const DiffViewer = React.lazy(() => import('./DiffViewer'));
-
-function SandboxCodeViewer({ path, workspaceId, channelId }: { path: string; workspaceId?: string | null; channelId?: string | null }) {
-  const [content, setContent] = useState('');
-  const [originalContent, setOriginalContent] = useState('');
-  const [isLoading, setIsLoading] = useState(false);
-  const [isSaving, setIsSaving] = useState(false);
-  const [loadError, setLoadError] = useState<string | null>(null);
-  const [saveError, setSaveError] = useState<string | null>(null);
-
-  // `channelId` matters: the panel resolves the mount through the channel chain
-  // (§16), so reading without it can open a different root than the tree showed.
-  useEffect(() => {
-    let cancelled = false;
-    setIsLoading(true);
-    setLoadError(null);
-    apiClient
-      .getWorkspaceFileContent(path, workspaceId || 'default', channelId)
-      .then((text) => {
-        if (cancelled) return;
-        setContent(text);
-        setOriginalContent(text);
-      })
-      // The viewer used to swallow this into a fake "// File not found" comment,
-      // which reads as file content. Report the failure instead.
-      .catch((error: any) => {
-        if (cancelled) return;
-        setContent('');
-        setOriginalContent('');
-        setLoadError(error?.message || 'Could not read this file');
-      })
-      .finally(() => { if (!cancelled) setIsLoading(false); });
-    return () => { cancelled = true; };
-  }, [path, workspaceId, channelId]);
-
-  const handleSave = async () => {
-    setIsSaving(true);
-    setSaveError(null);
-    try {
-      await apiClient.saveWorkspaceFileContent(path, content, workspaceId || 'default', channelId);
-      setOriginalContent(content);
-    } catch (error: any) {
-      setSaveError(error?.message || 'Could not save this file');
-    } finally {
-      setIsSaving(false);
-    }
-  };
-
-  const isDirty = content !== originalContent;
-
-  // Highlighted mirror behind the textarea: same font/padding/nowrap so the
-  // two layers stay pixel-aligned while the textarea keeps caret + editing.
-  const preRef = useRef<HTMLPreElement | null>(null);
-  const highlighted = useMemo(() => highlightCode(content, languageFromPath(path)), [content, path]);
-
-  return (
-    <>
-      <div className="flex-1 overflow-hidden py-3 relative">
-        {isLoading ? (
-          <div className="text-zinc-500 text-xs p-4 font-mono">Loading content...</div>
-        ) : loadError ? (
-          <div className="p-4 text-xs font-mono text-rose-300/90 break-words">
-            <div className="text-rose-400 font-semibold mb-1">Could not open this file</div>
-            <div className="text-zinc-500 break-all">{path}</div>
-            <div className="mt-1 text-zinc-400">{loadError}</div>
-          </div>
-        ) : (
-          <div className="relative w-full h-full">
-            <pre
-              ref={preRef}
-              aria-hidden
-              className="hljs absolute inset-0 m-0 overflow-hidden p-2 px-4 font-mono text-xs whitespace-pre text-zinc-300 pointer-events-none select-none"
-              dangerouslySetInnerHTML={{ __html: highlighted + '\n' }}
-            />
-            <textarea
-              wrap="off"
-              className="absolute inset-0 w-full h-full bg-transparent font-mono text-xs whitespace-pre resize-none focus:outline-none p-2 px-4 text-transparent caret-indigo-400 selection:bg-indigo-500/30"
-              value={content}
-              onChange={e => setContent(e.target.value)}
-              onScroll={e => {
-                const ta = e.currentTarget;
-                preRef.current?.scrollTo(ta.scrollLeft, ta.scrollTop);
-              }}
-              spellCheck={false}
-            />
-          </div>
-        )}
-      </div>
-      <div className="flex items-center justify-end gap-2 px-3 py-2 border-t border-zinc-900 bg-zinc-950/50 shrink-0">
-        {saveError && (
-          <span className="mr-auto text-[11px] text-rose-400 truncate" title={saveError}>{saveError}</span>
-        )}
-        <button
-          onClick={() => setContent(originalContent)}
-          disabled={!isDirty || !!loadError}
-          className="px-3 py-1.5 min-h-[32px] text-[11px] font-medium text-zinc-400 hover:text-zinc-200 disabled:opacity-50 border border-transparent hover:bg-zinc-800 rounded transition cursor-pointer"
-        >
-          Revert
-        </button>
-        <button
-          onClick={handleSave}
-          disabled={!isDirty || isSaving || !!loadError}
-          className="px-3.5 py-1.5 min-h-[32px] text-[11px] font-medium bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 disabled:hover:bg-indigo-600 text-white rounded transition cursor-pointer shadow-sm"
-        >
-          {isSaving ? 'Saving...' : 'Save'}
-        </button>
-      </div>
-    </>
-  );
-}
 
 interface MainChatAreaProps {
   onOpenSearch?: () => void;
 }
-
-// Touch-first devices: Enter inserts a newline (native chat feel);
-// desktop keeps Enter-to-send.
-const isCoarsePointer =
-  typeof window !== 'undefined' &&
-  typeof window.matchMedia === 'function' &&
-  window.matchMedia('(pointer: coarse)').matches;
 
 export default function MainChatArea({ onOpenSearch }: MainChatAreaProps) {
   const {
@@ -156,7 +39,6 @@ export default function MainChatArea({ onOpenSearch }: MainChatAreaProps) {
     selectedSandboxFile,
     setSelectedSandboxFile,
     openAgentProfileModal,
-    setMobileDrawerLeft,
     selectedMode,
     isPinned,
     setMode,
@@ -529,9 +411,7 @@ export default function MainChatArea({ onOpenSearch }: MainChatAreaProps) {
         e.preventDefault();
         setShowMentions(false);
       }
-    } else if (e.key === 'Enter' && !e.shiftKey && !isCoarsePointer) {
-      // Desktop: Enter sends. Touch keyboards keep native newline behavior;
-      // mobile users send via the dedicated button (thumb-zone CTA).
+    } else if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       handleSend();
     }
@@ -601,9 +481,7 @@ export default function MainChatArea({ onOpenSearch }: MainChatAreaProps) {
     setShowMentions(false);
 
     // Return focus to the composer so rapid follow-up messages need zero clicks
-    if (!isCoarsePointer) {
-      requestAnimationFrame(() => composerRef.current?.focus());
-    }
+    requestAnimationFrame(() => composerRef.current?.focus());
     setTimeout(() => setIsSending(false), 600);
   };
 
@@ -782,14 +660,6 @@ export default function MainChatArea({ onOpenSearch }: MainChatAreaProps) {
       {/* Top Channel Header Zone — thumb-friendly, safe */}
       <header className="min-h-[56px] border-b border-zinc-900/80 px-2.5 sm:px-4 flex items-center justify-between bg-[#121214]/95 backdrop-blur-xl shrink-0 select-none sticky top-0 z-10">
         <div className="flex items-center gap-2 sm:gap-3 min-w-0 flex-1">
-          {/* Mobile hamburger — opens channel drawer */}
-          <button
-            onClick={() => setMobileDrawerLeft(true)}
-            aria-label="Open channels"
-            className="lg:hidden w-10 h-10 rounded-xl bg-zinc-900 border border-zinc-800 flex items-center justify-center text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800 transition shrink-0 touch-manipulation active:scale-95"
-          >
-            <Hash size={16} />
-          </button>
           <div className="hidden sm:flex w-8 h-8 rounded-xl bg-zinc-900 border border-zinc-800 items-center justify-center shrink-0">
             <Hash size={14} className="text-zinc-500" />
           </div>
@@ -811,7 +681,7 @@ export default function MainChatArea({ onOpenSearch }: MainChatAreaProps) {
           <button
             onClick={onOpenSearch}
             aria-label="Search"
-            className="flex items-center justify-center sm:justify-start gap-2 text-zinc-400 hover:text-zinc-100 w-10 h-10 sm:w-auto sm:px-3 sm:min-h-[38px] bg-zinc-900 sm:bg-zinc-950 border border-zinc-800 sm:border-zinc-800 hover:border-zinc-700 rounded-xl transition-colors text-xs font-sans cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500/30 active:scale-[0.97] touch-manipulation"
+            className="flex items-center justify-center sm:justify-start gap-2 text-zinc-400 hover:text-zinc-100 w-10 h-10 sm:w-auto sm:px-3 sm:min-h-[38px] bg-zinc-900 sm:bg-zinc-950 border border-zinc-800 sm:border-zinc-800 hover:border-zinc-700 rounded-xl transition-colors text-xs font-sans cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500/30 active:scale-[0.97]"
             title="Search (Ctrl+K)"
           >
             <Search size={16} />
@@ -823,7 +693,7 @@ export default function MainChatArea({ onOpenSearch }: MainChatAreaProps) {
             <button
               onClick={() => setConfirmClearOpen(true)}
               aria-label="Clear channel logs"
-              className="w-10 h-10 rounded-xl bg-zinc-900/60 hover:bg-zinc-900 border border-zinc-800/60 hover:border-zinc-700 text-zinc-500 hover:text-rose-400 flex items-center justify-center transition cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500/30 active:scale-95 touch-manipulation"
+              className="w-10 h-10 rounded-xl bg-zinc-900/60 hover:bg-zinc-900 border border-zinc-800/60 hover:border-zinc-700 text-zinc-500 hover:text-rose-400 flex items-center justify-center transition cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500/30 active:scale-95"
               title="Clear Channel Audit Logs"
             >
               <Trash2 size={16} />
@@ -848,7 +718,7 @@ export default function MainChatArea({ onOpenSearch }: MainChatAreaProps) {
             onClick={toggleMuteChannel}
             aria-label={isChannelMuted ? 'Unmute channel' : 'Mute channel'}
             aria-pressed={!!isChannelMuted}
-            className={`w-10 h-10 rounded-xl border flex items-center justify-center transition focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500/30 cursor-pointer hidden sm:flex active:scale-95 touch-manipulation ${
+            className={`w-10 h-10 rounded-xl border flex items-center justify-center transition focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500/30 cursor-pointer hidden sm:flex active:scale-95 ${
               isChannelMuted ? 'text-rose-400 bg-rose-500/10 border-rose-500/20 hover:bg-rose-500/15' : 'text-zinc-500 hover:text-zinc-300 bg-zinc-900/60 border-zinc-800/60 hover:bg-zinc-900'
             }`}
             title={isChannelMuted ? "Unmute Channel" : "Mute Channel Notifications"}
@@ -857,7 +727,7 @@ export default function MainChatArea({ onOpenSearch }: MainChatAreaProps) {
           </button>
 
           {/* Desktop Right Sidebar Selector — segmented */}
-          <div className="hidden lg:flex items-center bg-zinc-900 border border-zinc-800 rounded-xl p-1 ml-1 gap-1">
+          <div className="hidden md:flex items-center bg-zinc-900 border border-zinc-800 rounded-xl p-1 ml-1 gap-1">
             <button
               onClick={() => setRightSidebarOpen(true)}
               aria-label="Show agent roster panel"
@@ -970,7 +840,7 @@ export default function MainChatArea({ onOpenSearch }: MainChatAreaProps) {
                   <button
                     key={ag.id}
                     onClick={() => handleQuickStart(ag)}
-                    className="flex items-center gap-2.5 pl-3 pr-4 py-2.5 min-h-[44px] rounded-xl bg-zinc-900 border border-zinc-800 hover:border-indigo-500/30 hover:bg-zinc-800/80 transition-colors duration-200 text-[13px] text-zinc-200 cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500/30 active:scale-[0.98] touch-manipulation shadow-sm"
+                    className="flex items-center gap-2.5 pl-3 pr-4 py-2.5 min-h-[44px] rounded-xl bg-zinc-900 border border-zinc-800 hover:border-indigo-500/30 hover:bg-zinc-800/80 transition-colors duration-200 text-[13px] text-zinc-200 cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500/30 active:scale-[0.98] shadow-sm"
                   >
                     <PresenceIndicator status={ag.status} size="sm" />
                     <span className="font-medium">@{ag.name}</span>
@@ -1113,7 +983,7 @@ export default function MainChatArea({ onOpenSearch }: MainChatAreaProps) {
               aria-selected={index === mentionIndex}
               onMouseEnter={() => setMentionIndex(index)}
               onClick={() => insertMention(ag)}
-              className={`w-full flex items-center gap-3 px-3 py-2.5 min-h-[46px] rounded-xl text-[13px] font-sans text-left transition-colors select-none cursor-pointer focus:outline-none touch-manipulation active:scale-[0.99] ${
+              className={`w-full flex items-center gap-3 px-3 py-2.5 min-h-[46px] rounded-xl text-[13px] font-sans text-left transition-colors select-none cursor-pointer focus:outline-none active:scale-[0.99] ${
                 index === mentionIndex ? 'bg-indigo-600 text-white shadow-md' : 'text-zinc-300 hover:bg-zinc-800 active:bg-zinc-800'
               }`}
             >
@@ -1126,7 +996,7 @@ export default function MainChatArea({ onOpenSearch }: MainChatAreaProps) {
       )}
 
       {/* Input Composer Zone — sticky, thumb-ergonomic, safe-area aware */}
-      <div ref={composerBoxRef} className="p-3 sm:p-4 pb-[max(0.75rem,env(safe-area-inset-bottom))] bg-[#121214] shrink-0 relative border-t border-zinc-900/60" id="input-composer-container">
+      <div ref={composerBoxRef} className="p-3 sm:p-4 pb-3 bg-[#121214] shrink-0 relative border-t border-zinc-900/60" id="input-composer-container">
 
         <div
           onDragOver={handleDragOver}
@@ -1264,7 +1134,6 @@ export default function MainChatArea({ onOpenSearch }: MainChatAreaProps) {
             onKeyDown={handleMentionKeydown}
             maxLength={MAX_MESSAGE_LEN}
             aria-label={`Message ${activeChannel ? activeChannel.name : 'channel'}`}
-            enterKeyHint={isCoarsePointer ? 'enter' : 'send'}
             placeholder={
               isDragging
                 ? "Drop files here, release to attach"
@@ -1287,7 +1156,7 @@ export default function MainChatArea({ onOpenSearch }: MainChatAreaProps) {
                 onClick={() => setShowAttachmentMenu(!showAttachmentMenu)}
                 aria-label="Attach files"
                 aria-expanded={showAttachmentMenu}
-                className={`w-11 h-11 rounded-xl border transition-all cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500/30 flex items-center justify-center active:scale-95 touch-manipulation ${
+                className={`w-11 h-11 rounded-xl border transition-all cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500/30 flex items-center justify-center active:scale-95 ${
                   showAttachmentMenu ? 'text-indigo-300 bg-indigo-500/15 border-indigo-500/20' : 'bg-zinc-800 border-zinc-700/60 text-zinc-400 hover:text-zinc-200 hover:bg-zinc-700 hover:border-zinc-600'
                 }`}
                 title="Attach files or triggers"
@@ -1333,7 +1202,7 @@ export default function MainChatArea({ onOpenSearch }: MainChatAreaProps) {
                   onClick={() => setShowEmojiPicker(!showEmojiPicker)}
                   aria-label="Insert emoji"
                   aria-expanded={showEmojiPicker}
-                  className={`w-11 h-11 rounded-xl border transition-all cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500/30 flex items-center justify-center active:scale-95 touch-manipulation ${
+                  className={`w-11 h-11 rounded-xl border transition-all cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500/30 flex items-center justify-center active:scale-95 ${
                     showEmojiPicker ? 'text-indigo-300 bg-indigo-500/15 border-indigo-500/20' : 'bg-zinc-800 border-zinc-700/60 text-zinc-400 hover:text-zinc-200 hover:bg-zinc-700 hover:border-zinc-600'
                   }`}
                   title="Insert emoji"
@@ -1366,27 +1235,17 @@ export default function MainChatArea({ onOpenSearch }: MainChatAreaProps) {
             </div>
 
             <div className="flex items-center gap-2 shrink-0">
-              <div className="hidden sm:flex">
-                <ModeSelector
-                  value={selectedMode}
-                  onChange={(m) => setMode(m, activeChannelId || undefined)}
-                  isPinned={isPinned}
-                  onTogglePin={togglePin}
-                />
-              </div>
-              <div className="sm:hidden">
-                <ModeSelector
-                  value={selectedMode}
-                  onChange={(m) => setMode(m, activeChannelId || undefined)}
-                  isPinned={isPinned}
-                  onTogglePin={togglePin}
-                />
-              </div>
+              <ModeSelector
+                value={selectedMode}
+                onChange={(m) => setMode(m, activeChannelId || undefined)}
+                isPinned={isPinned}
+                onTogglePin={togglePin}
+              />
               <button
                 onClick={handleSend}
                 disabled={!canSend}
                 aria-label="Send message"
-                className={`min-w-[48px] min-h-[44px] sm:min-w-[56px] sm:min-h-[42px] px-3.5 sm:px-4 rounded-xl text-[14px] flex items-center justify-center gap-1.5 transition-all select-none cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 active:scale-[0.97] touch-manipulation ${
+                className={`min-w-[48px] min-h-[44px] sm:min-w-[56px] sm:min-h-[42px] px-3.5 sm:px-4 rounded-xl text-[14px] flex items-center justify-center gap-1.5 transition-all select-none cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 active:scale-[0.97] ${
                   isSending ? 'bg-zinc-800 text-zinc-500 cursor-wait border border-zinc-700' :
                   canSend
                     ? 'bg-indigo-600 text-white font-semibold hover:bg-indigo-500 shadow-[0_4px_16px_rgba(79,70,229,0.35)] hover:shadow-[0_6px_20px_rgba(79,70,229,0.45)] border border-indigo-500/20 hover:-translate-y-px active:translate-y-0'

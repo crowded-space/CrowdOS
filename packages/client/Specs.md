@@ -19,13 +19,12 @@
 11. [Portal (Workspace Onboarding)](#11-portal-workspace-onboarding)
 12. [Modals](#12-modals)
 13. [UI Primitives](#13-ui-primitives)
-14. [Mobile Components](#14-mobile-components)
-15. [File Explorer & Sandbox (Filesystem)](#15-file-explorer--sandbox-filesystem)
-16. [Settings Tabs](#16-settings-tabs)
-17. [Design System & Tokens](#17-design-system--tokens)
-18. [Animations](#18-animations)
-19. [Data Flow Summary](#19-data-flow-summary)
-20. [Comparison & Key Differences (vs Target Frontend)](#20-comparison--key-differences-vs-target-frontend)
+14. [File Explorer & Sandbox (Filesystem)](#14-file-explorer--sandbox-filesystem)
+15. [Settings Tabs](#15-settings-tabs)
+16. [Design System & Tokens](#16-design-system--tokens)
+17. [Animations](#17-animations)
+18. [Data Flow Summary](#18-data-flow-summary)
+19. [Comparison & Key Differences (vs Target Frontend)](#19-comparison--key-differences-vs-target-frontend)
 
 ---
 
@@ -111,10 +110,6 @@ packages/client/
 │       │
 │       ├── settings/
 │       │   └── model-cards-tab.tsx      # Provider routing visual cascading panel
-│       │
-│       ├── mobile/
-│       │   ├── bottom-nav.tsx           # Mobile footer buttons
-│       │   └── mobile-drawer.tsx        # Slide left/right drawer templates
 │       │
 │       └── ui/
 │           ├── presence-indicator.tsx   # OKLCH-colored status dots
@@ -324,11 +319,6 @@ Local storage caching is manually synchronized for `workspaces`, `agents`, `mess
 - `agentProfileModalOpen`: boolean (default `false`)
 - `workspaceSettingsTab`: string (default `'overview'`)
 
-#### Mobile Overlays
-- `activeMobileTab`: `'chat'` | `'channels'` | `'agents'` | `'stats'` | `'settings'`
-- `mobileDrawerLeft`: boolean
-- `mobileDrawerRight`: boolean
-
 ---
 
 ### Real-Time WebSockets Synchronization
@@ -418,19 +408,15 @@ All CRUD operations communicate with REST API backend endpoints:
 
 Applies an onboarding gate. If `!activeWorkspaceId`, aborts shell load and mounts `WorkspacePortal` verifier full screen.
 
-Once validated, renders 3-Panel desktop layout with responsive sliding mobile templates:
+Once validated, renders the 3-panel desktop layout:
 
 ```
 [div#crowd-os-root-shell] (w-screen h-screen, bg-[#0c0c0e], flex col)
 ├── [Main Work Area] (flex-1 flex overflow-hidden w-full relative)
 │   ├── [WorkspaceSidebar] (Desktop static left panel, hidden md:flex w-[245px])
 │   ├── [MainChatArea] (Flex-1 center console work area, min-w-0)
-│   ├── [RightSidebar] (Desktop static right panel, hidden md:flex shrink-0)
-│   │
-│   ├── [MobileDrawer Left] (Slide left drawer containing WorkspaceSidebar)
-│   └── [MobileDrawer Right] (Slide right drawer containing RightSidebar)
+│   └── [RightSidebar] (Desktop static right panel, hidden md:flex shrink-0)
 │
-├── [BottomNav] (Sticky bottom nav footer, md:hidden)
 ├── [AgentProfileModal] (Globally mounted profiles detail window)
 └── [WorkspaceSettingsModal] (Globally mounted settings console)
 ```
@@ -447,7 +433,7 @@ App
 │       └── CrowIcon Icon Picker
 │
 └── [GATE: activeWorkspaceId]
-    ├── WorkspaceSidebar (Desktop & Mobile drawer instance)
+    ├── WorkspaceSidebar (Static panel)
     │   ├── WorkspaceDropdown (Accordion menu with leave option)
     │   └── Hash categories channels listing & JH user profile card
     │
@@ -463,12 +449,11 @@ App
     │   ├── SandboxCodeViewer (filesystem text area editor with revert & save actions)
     │   └── Composer text area with Drag-and-drop file uploader & mention suggestions
     │
-    ├── RightSidebar (Desktop & Mobile drawer instance)
+    ├── RightSidebar (Static panel)
     │   ├── Telemetry Dashboard (Channel vs Global metrics cards)
     │   ├── Tiered agents roster list
     │   └── FileExplorer recursive tree node
     │
-    ├── BottomNav (Mobile footer)
     ├── AgentProfileModal (Runtime patches form & DM composer)
     └── WorkspaceSettingsModal (8-tab mega configuration console)
         └── ModelCardsTab (Dynamic failover map dashboard)
@@ -478,13 +463,13 @@ App
 
 ## 8. Main Chat Area (CRITICAL)
 
-**File**: `components/workspace/main-chat-area.tsx`
+**File**: `components/workspace/MainChatArea.tsx`
 
 Reads all layout states directly from the Zustand store. Has no custom component props.
 
-### Inline Filesystem Text Editor: `SandboxCodeViewer`
+### Filesystem Text Editor: `SandboxCodeViewer`
 
-Instead of target-frontend's simple mock highlights, the implemented client includes a fully active `SandboxCodeViewer` component embedded locally:
+Instead of target-frontend's simple mock highlights, the implemented client includes a fully active `SandboxCodeViewer` component in its own file (`components/workspace/SandboxCodeViewer.tsx`), mounted by the chat panel for the selected file:
 
 #### State Variables
 - `content`: string (active text content of file)
@@ -705,14 +690,7 @@ Pill badge container displaying presence dots and capitalized status labels. App
 
 ---
 
-## 14. Mobile Components
-
-- **Bottom Navigation (`bottom-nav.tsx`)**: Sticky footer bar visible only below the `md` breakpoint. Renders a safe-area inset wrapper with 3 buttons: Channels (`setMobileDrawerLeft(true)`), Agents (`setMobileDrawerRight(true)`), and Settings (opens Settings modal).
-- **Mobile Drawer (`mobile-drawer.tsx`)**: Adaptive sliding container. Slides in from left or right via `animate-slide-in-left` or `animate-slide-in-right` keyframes. Features a tap backdrop and close shortcut.
-
----
-
-## 15. File Explorer & Sandbox (Filesystem)
+## 14. File Explorer & Sandbox (Filesystem)
 
 **File**: `workspace/file-explorer.tsx`
 
@@ -728,7 +706,7 @@ The `FileExplorer` root element fetches root files from `/api/workspace/files?pa
 
 ---
 
-## 16. Settings Tabs
+## 15. Settings Tabs
 
 ### Model Modules Tab
 **File**: `settings/model-cards-tab.tsx`
@@ -741,7 +719,7 @@ Integrates the model cards catalog editor:
 
 ---
 
-## 17. Design System & Tokens
+## 16. Design System & Tokens
 
 **File**: `src/index.css`
 
@@ -750,7 +728,7 @@ Features Tailwind v4 design token overrides:
 - **Color Palettes**:
   - `--color-brand-bg`: `#0A0A0B` (Base deep background)
   - `--color-brand-nav`: `#0E0E10` (Footer panels)
-  - `--color-brand-sidebar`: `#111114` (Drawer overlays)
+  - `--color-brand-sidebar`: `#111114` (Sidebar panels)
   - `--color-brand-card`: `#1C1C1F` (Portal layouts)
   - `--color-brand-border`: `#1F1F23` (Dark borders)
   - `--color-brand-border-muted`: `#2D2D32` (Interactive highlights)
@@ -759,7 +737,7 @@ Features Tailwind v4 design token overrides:
 
 ---
 
-## 18. Animations
+## 17. Animations
 
 Keyframe animations defined in `index.css`:
 
@@ -799,7 +777,7 @@ Trigger classes are available as `.animate-slide-up`, `.animate-slide-in-left`, 
 
 ---
 
-## 19. Data Flow Summary
+## 18. Data Flow Summary
 
 ```
 [Operator Input] 
@@ -824,7 +802,7 @@ Trigger classes are available as `.animate-slide-up`, `.animate-slide-in-left`, 
 
 ---
 
-## 20. Comparison & Key Differences (vs Target Frontend)
+## 19. Comparison & Key Differences (vs Target Frontend)
 
 | Feature area | Target Frontend Spec (`/target-frontend`) | Implemented Client (`/packages/client`) |
 |---|---|---|

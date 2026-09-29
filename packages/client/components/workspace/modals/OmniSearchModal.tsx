@@ -171,7 +171,7 @@ export default function OmniSearchModal({ open, onClose }: OmniSearchModalProps)
   return (
     <AnimatePresence>
       {open && (
-        <div role="dialog" aria-modal="true" aria-label="Omni search" className="fixed inset-0 z-[9995] flex items-start justify-center pt-[max(12px,env(safe-area-inset-top))] sm:pt-20 p-3 sm:p-4 font-sans select-none">
+        <div role="dialog" aria-modal="true" aria-label="Omni search" className="fixed inset-0 z-[9995] flex items-start justify-center pt-3 sm:pt-20 p-3 sm:p-4 font-sans select-none">
           <motion.div
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
@@ -224,7 +224,7 @@ export default function OmniSearchModal({ open, onClose }: OmniSearchModalProps)
                         setActiveChannel(ch.id);
                         onClose();
                       }}
-                      className="w-full flex items-center justify-between px-3 py-3 min-h-[48px] hover:bg-zinc-900 active:bg-zinc-800 rounded-xl text-[13px] font-sans text-left transition select-none cursor-pointer group border border-transparent hover:border-zinc-800 touch-manipulation active:scale-[0.99]"
+                      className="w-full flex items-center justify-between px-3 py-3 min-h-[48px] hover:bg-zinc-900 active:bg-zinc-800 rounded-xl text-[13px] font-sans text-left transition select-none cursor-pointer group border border-transparent hover:border-zinc-800 active:scale-[0.99]"
                     >
                       <div className="flex items-center gap-3 min-w-0">
                         <span className="w-8 h-8 rounded-lg bg-zinc-900 border border-zinc-800 flex items-center justify-center shrink-0 group-hover:border-zinc-700">

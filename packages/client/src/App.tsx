@@ -10,8 +10,6 @@ import WorkspacePortal from '@/components/portal/WorkspacePortal';
 import WorkspaceSidebar from '@/components/workspace/WorkspaceSidebar';
 import MainChatArea from '@/components/workspace/MainChatArea';
 import RightSidebar from '@/components/workspace/RightSidebar';
-import BottomNav from '@/components/workspace/mobile/BottomNav';
-import MobileDrawer from '@/components/workspace/mobile/MobileDrawer';
 import { ToastProvider } from '@/components/ui/ToastProvider';
 import ErrorBoundary from '@/components/ui/ErrorBoundary';
 import LockScreen from '@/components/lockscreen/LockScreen';
@@ -38,18 +36,10 @@ export default function App() {
   const {
     activeWorkspaceId,
     dbDegraded,
-    mobileDrawerLeft,
-    mobileDrawerRight,
-    setMobileDrawerLeft,
-    setMobileDrawerRight,
     fetchWorkspaces
   } = useCrowdOSStore(useShallow(s => ({
     activeWorkspaceId: s.activeWorkspaceId,
     dbDegraded: (s.workspaces.find(w => w.id === s.activeWorkspaceId)?.database?.configured) === false,
-    mobileDrawerLeft: s.mobileDrawerLeft,
-    mobileDrawerRight: s.mobileDrawerRight,
-    setMobileDrawerLeft: s.setMobileDrawerLeft,
-    setMobileDrawerRight: s.setMobileDrawerRight,
     fetchWorkspaces: s.fetchWorkspaces,
   })));
 
@@ -154,56 +144,33 @@ export default function App() {
           Skip to chat
         </a>
         <div className="grain-overlay" aria-hidden />
-        {/* Safe-top inset for notched devices */}
-        <div className="h-[env(safe-area-inset-top)] shrink-0 bg-[#0A0A0B] md:hidden" aria-hidden />
         <OfflineBanner dbDegraded={dbDegraded} />
 
         {/* 3-Panel Content Area */}
         <div className="flex-1 flex overflow-hidden w-full relative isolate">
 
-          {/* Left Sidebar Panel — single responsive mount (deduped, w clamp) */}
-          <nav aria-label="Workspace channels" className="hidden md:flex shrink-0 h-full w-[clamp(240px,20vw,280px)] border-r border-zinc-900/80">
+          {/* Left Sidebar Panel — always mounted (desktop-first shell) */}
+          <nav aria-label="Workspace channels" className="flex shrink-0 h-full w-[clamp(240px,20vw,280px)] border-r border-zinc-900/80">
             <ErrorBoundary fallback={<div className="p-4 text-xs text-zinc-500">Sidebar failed to load</div>}>
               <WorkspaceSidebar />
             </ErrorBoundary>
           </nav>
 
-          {/* Center Chat Work Area - Desktop/Mobile flow */}
+          {/* Center Chat Work Area */}
           <main className="flex-1 flex flex-col h-full overflow-hidden min-w-0 bg-[#121214]">
             <ErrorBoundary fallback={<div className="p-6 text-sm text-zinc-400">Chat failed to load</div>}>
               <MainChatArea onOpenSearch={() => setSearchOpen(true)} />
             </ErrorBoundary>
           </main>
 
-          {/* Right Sidebar Panel — single responsive mount */}
-          <aside aria-label="Operations roster and telemetry" className="hidden lg:flex shrink-0 h-full">
+          {/* Right Sidebar Panel — hidden only in very narrow windows */}
+          <aside aria-label="Operations roster and telemetry" className="hidden md:flex shrink-0 h-full">
             <ErrorBoundary fallback={<div className="p-4 text-xs text-zinc-500">Roster failed to load</div>}>
               <RightSidebar />
             </ErrorBoundary>
           </aside>
 
-          {/* Left slide drawer - Mobile/Tablet */}
-          <MobileDrawer 
-            open={mobileDrawerLeft} 
-            onClose={() => setMobileDrawerLeft(false)} 
-            side="left"
-          >
-            <WorkspaceSidebar />
-          </MobileDrawer>
-
-          {/* Right slide drawer - Mobile/Tablet */}
-          <MobileDrawer 
-            open={mobileDrawerRight} 
-            onClose={() => setMobileDrawerRight(false)} 
-            side="right"
-          >
-            <RightSidebar />
-          </MobileDrawer>
-
         </div>
-
-        {/* Bottom Nav Panel - Mobile/Tablet only */}
-        <BottomNav />
 
         {/* Globally tracked status dialog modals */}
         <Suspense fallback={<SpinnerFallback />}>

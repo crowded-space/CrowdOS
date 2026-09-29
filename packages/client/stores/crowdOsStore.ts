@@ -309,11 +309,6 @@ interface CrowdOSState {
   agentProfileModalOpen: boolean;
   workspaceSettingsTab: string;
 
-  // Mobile navigation
-  activeMobileTab: 'channels' | 'chat' | 'agents' | 'stats' | 'settings';
-  mobileDrawerLeft: boolean;
-  mobileDrawerRight: boolean;
-
   // Search & Filters
   chatSearchQuery: string;
 
@@ -437,12 +432,6 @@ interface CrowdOSState {
 
   setSelectedSandboxFile: (file: string | null) => void;
   incrementFilesystemRevision: () => void;
-
-  // Mobile Layout Actions
-  setActiveMobileTab: (tab: CrowdOSState['activeMobileTab']) => void;
-  setMobileDrawerLeft: (open: boolean) => void;
-  setMobileDrawerRight: (open: boolean) => void;
-  selectChannelMobile: (channelId: string) => void;
 
   // Tools Setup Toggle
   toggleToolEnabled: (toolId: string) => void;
@@ -1520,11 +1509,6 @@ const initialSelectedMode: ComposerMode = (() => {
     agentProfileModalOpen: false,
     workspaceSettingsTab: 'overview',
 
-    // Mobile Navigation state
-    activeMobileTab: 'chat',
-    mobileDrawerLeft: false,
-    mobileDrawerRight: false,
-
     // Search query
     chatSearchQuery: '',
     selectedMode: initialSelectedMode,
@@ -2393,10 +2377,7 @@ const initialSelectedMode: ComposerMode = (() => {
 
       set({
         activeWorkspaceId: id,
-        activeChannelId: chId,
-        mobileDrawerLeft: false,
-        mobileDrawerRight: false,
-        activeMobileTab: 'chat'
+        activeChannelId: chId
       });
 
       await get().fetchWorkspaces();
@@ -2469,8 +2450,7 @@ const initialSelectedMode: ComposerMode = (() => {
 
       set({
         activeChannelId: id,
-        workspaces: updatedWorkspaces,
-        mobileDrawerLeft: false
+        workspaces: updatedWorkspaces
       });
 
       // §6: the ARRIVING channel's own pin decides the composer state. This is
@@ -3273,16 +3253,8 @@ const initialSelectedMode: ComposerMode = (() => {
       set({ workspaces: updatedWorkspaces });
     },
 
-    // Mobile States routing
     setSelectedSandboxFile: (file) => set({ selectedSandboxFile: file }),
     incrementFilesystemRevision: () => set(state => ({ filesystemRevision: state.filesystemRevision + 1 })),
-    setActiveMobileTab: (tab) => set({ activeMobileTab: tab }),
-    setMobileDrawerLeft: (open) => set({ mobileDrawerLeft: open }),
-    setMobileDrawerRight: (open) => set({ mobileDrawerRight: open }),
-    selectChannelMobile: (channelId) => {
-      get().setActiveChannel(channelId);
-      set({ activeMobileTab: 'chat', mobileDrawerLeft: false });
-    },
 
     // Tool toggling status
     toggleToolEnabled: (toolId) => {

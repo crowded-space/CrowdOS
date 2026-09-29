@@ -25,7 +25,7 @@ function AgentRowInner({ id, name, species, status, level, avatar, isOmniscient,
   return (
     <button
       onClick={handleClick}
-      className="w-full flex items-center gap-3 px-2.5 py-2.5 min-h-[52px] hover:bg-zinc-900/60 active:bg-zinc-900 rounded-xl transition-colors text-left cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500/30 border border-transparent hover:border-zinc-800/60 touch-manipulation active:scale-[0.99]"
+      className="w-full flex items-center gap-3 px-2.5 py-2.5 min-h-[52px] hover:bg-zinc-900/60 active:bg-zinc-900 rounded-xl transition-colors text-left cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500/30 border border-transparent hover:border-zinc-800/60 active:scale-[0.99]"
       id={`agent-row-${id}`}
     >
       <div className={`relative w-9 h-9 rounded-xl flex items-center justify-center bg-zinc-950 border ${meta.border} select-none text-[15px] font-sans shrink-0 shadow-sm`}>

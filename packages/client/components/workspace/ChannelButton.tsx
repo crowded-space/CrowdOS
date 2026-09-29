@@ -16,7 +16,7 @@ function ChannelButtonInner({ channel, isActive, onSelect }: Props) {
     <button
       onClick={handleClick}
       aria-current={isActive ? 'page' : undefined}
-      className={`relative w-full group flex items-center justify-between px-2.5 py-2.5 min-h-[42px] rounded-xl text-[13.5px] font-medium tracking-[-0.01em] text-left transition-all select-none cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500/30 touch-manipulation active:scale-[0.99] ${
+      className={`relative w-full group flex items-center justify-between px-2.5 py-2.5 min-h-[42px] rounded-xl text-[13.5px] font-medium tracking-[-0.01em] text-left transition-all select-none cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500/30 active:scale-[0.99] ${
         isActive
           ? 'bg-[#1e1e22] text-zinc-100 shadow-[inset_0_1px_0_rgba(255,255,255,0.06)] border border-white/[0.06]'
           : 'text-zinc-400 hover:bg-zinc-900/70 hover:text-zinc-200 border border-transparent'

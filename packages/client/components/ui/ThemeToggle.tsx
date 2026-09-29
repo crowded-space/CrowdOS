@@ -44,7 +44,7 @@ export default function ThemeToggle() {
       onClick={handleClick}
       aria-label={`Theme ${labels[pref]}. Switch to ${labels[next]}.`}
       title={`Theme ${labels[pref]}. Click for ${labels[next]}.`}
-      className="w-11 h-11 rounded-xl bg-zinc-900/60 hover:bg-zinc-900 border border-zinc-800/60 hover:border-zinc-700 text-zinc-400 hover:text-zinc-100 transition-colors duration-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500/30 cursor-pointer flex items-center justify-center shrink-0 active:scale-95 touch-manipulation"
+      className="w-11 h-11 rounded-xl bg-zinc-900/60 hover:bg-zinc-900 border border-zinc-800/60 hover:border-zinc-700 text-zinc-400 hover:text-zinc-100 transition-colors duration-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500/30 cursor-pointer flex items-center justify-center shrink-0 active:scale-95"
     >
       <Icon size={18} className="shrink-0" aria-hidden="true" />
     </button>

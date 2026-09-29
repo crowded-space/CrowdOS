@@ -73,13 +73,13 @@ export default function ModeSelector({ value, onChange, isPinned, onTogglePin, d
   };
 
   const triggerClass = [
-    'flex items-center gap-1.5 px-3 py-2 rounded-xl text-[13px] font-medium transition cursor-pointer select-none focus:outline-none border touch-manipulation active:scale-[0.97]',
+    'flex items-center gap-1.5 px-3 py-2 rounded-xl text-[13px] font-medium transition cursor-pointer select-none focus:outline-none border active:scale-[0.97]',
     isOpen ? 'bg-zinc-800 text-white border-zinc-700 shadow-sm' : 'bg-zinc-800 text-zinc-200 border-zinc-700 hover:bg-zinc-700 hover:text-white',
     disabled ? 'opacity-50 cursor-not-allowed' : ''
   ].filter(Boolean).join(' ');
 
   const pinClass = [
-    'p-2.5 rounded-xl transition cursor-pointer select-none focus:outline-none border touch-manipulation active:scale-95',
+    'p-2.5 rounded-xl transition cursor-pointer select-none focus:outline-none border active:scale-95',
     isPinned ? 'bg-indigo-500/15 text-indigo-400 border-indigo-500/30 hover:bg-indigo-500/25' : 'bg-zinc-800 text-zinc-500 border-zinc-700 hover:text-zinc-300 hover:bg-zinc-700',
     disabled ? 'opacity-50 cursor-not-allowed' : ''
   ].filter(Boolean).join(' ');

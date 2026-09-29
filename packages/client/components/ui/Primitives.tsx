@@ -20,7 +20,7 @@ export function Button({
   ...props
 }: React.ButtonHTMLAttributes<HTMLButtonElement> & { variant?: buttonVariant }) {
   const base =
-    'inline-flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-[3px] text-[13px] font-medium transition duration-200 active:scale-[0.98] focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500/40 disabled:opacity-50 disabled:pointer-events-none cursor-pointer touch-manipulation';
+    'inline-flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-[3px] text-[13px] font-medium transition duration-200 active:scale-[0.98] focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500/40 disabled:opacity-50 disabled:pointer-events-none cursor-pointer';
   const styles: Record<buttonVariant, string> = {
     primary: 'bg-[#465EDB] hover:bg-[#5A73E6] text-white shadow-sm',
     secondary: 'bg-zinc-900 hover:bg-zinc-800 text-zinc-200 border border-zinc-800',
