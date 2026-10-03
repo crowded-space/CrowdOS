@@ -16,8 +16,9 @@
   --color-zinc-150: #e4e4e7;
   --color-zinc-250: #c8c8cd;
   --color-zinc-350: #a1a1aa;
-  --color-zinc-450: #8b8b94;
-  --color-zinc-550: #74747e;
+  --color-zinc-450: #9d9da6;
+  --color-zinc-500: #92929b;
+  --color-zinc-550: #8b8b94;
   --color-zinc-650: #5c5c66;
   --color-zinc-750: #3f3f46;
   --color-zinc-805: #303036;
@@ -31,7 +32,7 @@
   --color-indigo-500: #3359FF;
   --color-indigo-650: #1E3EC4;
   --color-indigo-600: #1A3ECC;
-  --color-indigo-400: #4B70FF;
+  --color-indigo-400: #6680ff;
   --color-indigo-300: #708EFF;
   --color-indigo-700: #142B8A;
 
@@ -193,7 +194,9 @@ button:focus:not(:focus-visible), a:focus:not(:focus-visible) {
 }
 
 /* Motion rule (locked): interactive elements settle in 200ms unless a
-   component declares its own duration. Spring easings stay on tokens. */
+   component declares its own duration. Spring easings stay on tokens.
+   Dialog entrances use 150ms fade only; the composer lifts 1px on focus;
+   mention chips spring once when added. Nothing else moves on mount. */
 button:not([class*="duration-"]),
 a:not([class*="duration-"]) {
   transition-duration: 200ms;
@@ -337,6 +340,7 @@ a:not([class*="duration-"]) {
 [data-theme="light"] [class~="text-amber-450"] { color: #b45309; }
 [data-theme="light"] [class~="text-amber-300"] { color: #b45309; }
 [data-theme="light"] [class~="text-amber-200"] { color: #92400e; }
+[data-theme="light"] [class~="text-amber-100"] { color: #a3410b; }
 [data-theme="light"] [class~="text-indigo-400"] { color: #4338ca; }
 [data-theme="light"] [class~="text-indigo-350"] { color: #4f46e5; }
 [data-theme="light"] [class~="text-indigo-300"] { color: #4f46e5; }

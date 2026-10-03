@@ -7,7 +7,11 @@ import InlineChannelModal from './modals/InlineChannelModal';
 import ChannelButton from './ChannelButton';
 import ThemeToggle from '@/components/ui/ThemeToggle';
 
-export default function WorkspaceSidebar() {
+interface WorkspaceSidebarProps {
+  onClose?: () => void;
+}
+
+export default function WorkspaceSidebar({ onClose }: WorkspaceSidebarProps) {
   const {
     workspaces,
     activeWorkspaceId,
@@ -39,7 +43,8 @@ export default function WorkspaceSidebar() {
 
   const handleSelectChannel = useCallback((channelId: string) => {
     setActiveChannel(channelId);
-  }, [setActiveChannel]);
+    onClose?.();
+  }, [onClose, setActiveChannel]);
 
   const isLoading = !activeWS;
 
@@ -54,7 +59,7 @@ export default function WorkspaceSidebar() {
       {/* Degraded State Banner */}
       {isDatabaseOffline && (
         <div className="mx-2.5 mt-2 p-2.5 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-200 flex items-start gap-2.5 select-text">
-          <Database size={15} className="shrink-0 text-amber-400 mt-0.5 animate-pulse" />
+          <Database size={15} className="shrink-0 text-amber-400 mt-0.5" aria-hidden="true" />
           <div className="min-w-0 flex-1">
             <div className="text-[12px] font-semibold leading-tight text-amber-300">Database Offline</div>
             <div className="text-[10.5px] text-amber-400/80 leading-snug mt-0.5 line-clamp-2">
@@ -133,12 +138,12 @@ export default function WorkspaceSidebar() {
             ))}
 
             {activeWS?.categories.length === 0 && (!activeWS?.channels || activeWS.channels.length === 0) && (
-              <div className="text-center py-10 px-4">
-                <div className="w-10 h-10 rounded-xl bg-zinc-900 border border-zinc-800 flex items-center justify-center mx-auto mb-3 text-zinc-600">
-                  <Hash size={16} />
+              <div className="text-center py-10 px-4" role="status">
+                <div className="w-10 h-10 rounded-xl bg-zinc-900 border border-zinc-800 flex items-center justify-center mx-auto mb-3 text-zinc-500" aria-hidden="true">
+                  <Hash size={16} aria-hidden="true" />
                 </div>
                 <p className="text-xs font-medium text-zinc-300">No channels yet</p>
-                <p className="text-[11px] text-zinc-500 mt-1 leading-relaxed">Create a category or channel to get started.</p>
+                <p className="text-[11px] text-zinc-400 mt-1 leading-relaxed">Create a category or channel to open your first thread.</p>
               </div>
             )}
           </>
@@ -156,8 +161,8 @@ export default function WorkspaceSidebar() {
       />
 
       {/* Operator profile — sticky bottom, safe area */}
-      <div className="bg-[#09090b]/95 backdrop-blur border-t border-zinc-900 p-3 flex items-center justify-between gap-2.5 select-none shrink-0" id="sidebar-user-section">
-        <div className="flex items-center gap-2.5 min-w-0">
+      <div className="bg-[#09090b] border-t border-zinc-900 p-2 flex items-center justify-between gap-1 select-none shrink-0" id="sidebar-user-section">
+        <div className="flex items-center gap-1 min-w-0">
           <div className="relative w-9 h-9 rounded-xl bg-amber-500/12 border border-amber-500/20 text-amber-400 flex items-center justify-center text-[11px] shrink-0 font-bold">
             JH
             <span className="absolute -bottom-0.5 -right-0.5 w-3 h-3 rounded-full bg-emerald-500 border-2 border-[#09090b]" />
@@ -172,7 +177,7 @@ export default function WorkspaceSidebar() {
           </div>
         </div>
 
-        <div className="flex items-center gap-2 shrink-0">
+        <div className="flex items-center gap-1 shrink-0 [&>button]:w-7 [&>button]:h-7">
           <ThemeToggle />
           <button
             onClick={() => {

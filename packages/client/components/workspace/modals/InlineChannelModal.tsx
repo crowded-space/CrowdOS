@@ -1,8 +1,10 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'motion/react';
 import { Hash, X, Plus } from 'lucide-react';
 import { useCrowdOSStore } from '@/stores/crowdOsStore';
 import { useToast } from '@/components/ui/ToastProvider';
+import { useOverlayFocus } from '@/components/ui/use-overlay-focus';
 
 interface InlineChannelModalProps {
   open: boolean;
@@ -21,6 +23,12 @@ export default function InlineChannelModal({ open, categoryId, onClose }: Inline
   const [description, setDescription] = useState('');
   const [selectedCatId, setSelectedCatId] = useState(categoryId || targetCategory?.id || '');
   const firstInputRef = useRef<HTMLInputElement>(null);
+  const dialogRef = useRef<HTMLDivElement>(null);
+
+  useOverlayFocus(open, dialogRef, {
+    initialFocusRef: firstInputRef,
+    fallbackFocusSelector: targetCategory ? `[aria-label="Create channel in ${targetCategory.name}"]` : undefined,
+  });
 
   useEffect(() => {
     if (open) {
@@ -68,10 +76,13 @@ export default function InlineChannelModal({ open, categoryId, onClose }: Inline
     }
   };
 
-  return (
+  if (typeof document === 'undefined') return null;
+
+  return createPortal(
     <AnimatePresence>
       {open && (
         <div
+          ref={dialogRef}
           role="dialog"
           aria-modal="true"
           aria-labelledby="inline-channel-title"
@@ -102,7 +113,7 @@ export default function InlineChannelModal({ open, categoryId, onClose }: Inline
               <button
                 onClick={onClose}
                 aria-label="Close create channel dialog"
-                className="text-zinc-500 hover:text-zinc-300 p-1 rounded-md hover:bg-zinc-900 transition focus:outline-none focus-visible:ring-2 focus-visible:ring-zinc-700 cursor-pointer"
+                className="w-6 h-6 flex items-center justify-center text-zinc-500 hover:text-zinc-300 rounded-md hover:bg-zinc-900 transition focus:outline-none focus-visible:ring-2 focus-visible:ring-zinc-700 cursor-pointer"
               >
                 <X size={14} aria-hidden="true" />
               </button>
@@ -201,6 +212,7 @@ export default function InlineChannelModal({ open, categoryId, onClose }: Inline
           </motion.div>
         </div>
       )}
-    </AnimatePresence>
+    </AnimatePresence>,
+    document.body,
   );
 }

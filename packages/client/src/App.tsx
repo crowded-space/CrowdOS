@@ -36,17 +36,26 @@ export default function App() {
   const {
     activeWorkspaceId,
     dbDegraded,
-    fetchWorkspaces
+    fetchWorkspaces,
+    setSettingsModalOpen,
+    setWorkspaceSettingsTab
   } = useCrowdOSStore(useShallow(s => ({
     activeWorkspaceId: s.activeWorkspaceId,
     dbDegraded: (s.workspaces.find(w => w.id === s.activeWorkspaceId)?.database?.configured) === false,
     fetchWorkspaces: s.fetchWorkspaces,
+    setSettingsModalOpen: s.setSettingsModalOpen,
+    setWorkspaceSettingsTab: s.setWorkspaceSettingsTab,
   })));
 
   const [searchOpen, setSearchOpen] = useState(false);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
   const locked = useScreenLockStore(s => s.locked);
 
   const stableFetchWorkspaces = useCallback(() => { void fetchWorkspaces(); }, [fetchWorkspaces]);
+  const openDatabaseSettings = useCallback(() => {
+    setWorkspaceSettingsTab('overview');
+    setSettingsModalOpen(true);
+  }, [setSettingsModalOpen, setWorkspaceSettingsTab]);
   useEffect(() => {
     stableFetchWorkspaces();
   }, [stableFetchWorkspaces]);
@@ -112,6 +121,13 @@ export default function App() {
   // Keyboard shortcut listener for Cmd+K / Ctrl+K
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      const overlayOpen = document.querySelector(
+        '[role="dialog"][aria-modal="true"], [role="menu"]',
+      );
+      if (e.key === 'Escape' && sidebarOpen && !overlayOpen) {
+        setSidebarOpen(false);
+        return;
+      }
       if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
         e.preventDefault();
         setSearchOpen(prev => !prev);
@@ -119,7 +135,7 @@ export default function App() {
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, []);
+  }, [sidebarOpen]);
 
   // Onboarding Portal Gate — with skeleton fallback while bootstrapping
   if (!activeWorkspaceId) {
@@ -144,27 +160,45 @@ export default function App() {
           Skip to chat
         </a>
         <div className="grain-overlay" aria-hidden />
-        <OfflineBanner dbDegraded={dbDegraded} />
+        <OfflineBanner dbDegraded={dbDegraded} onOpenDatabaseSettings={openDatabaseSettings} />
 
         {/* 3-Panel Content Area */}
         <div className="flex-1 flex overflow-hidden w-full relative isolate">
 
-          {/* Left Sidebar Panel — always mounted (desktop-first shell) */}
-          <nav aria-label="Workspace channels" className="flex shrink-0 h-full w-[clamp(240px,20vw,280px)] border-r border-zinc-900/80">
+          {sidebarOpen && (
+            <button
+              type="button"
+              aria-label="Close workspace menu"
+              onPointerDown={() => setSidebarOpen(false)}
+              onClick={() => setSidebarOpen(false)}
+              className="absolute inset-y-0 right-0 left-[min(86vw,300px)] z-30 bg-black/55 xl:hidden cursor-pointer"
+            />
+          )}
+
+          {/* Left panel is off-canvas below xl so the chat keeps the full viewport. */}
+          <nav
+            aria-label="Workspace channels"
+            className={`absolute inset-y-0 left-0 z-40 flex h-full w-[min(86vw,300px)] border-r border-zinc-900/80 bg-[#0c0c0f] transition-transform duration-200 xl:static xl:z-auto xl:w-[clamp(240px,20vw,280px)] xl:translate-x-0 ${
+              sidebarOpen ? 'translate-x-0 visible' : '-translate-x-full invisible xl:visible'
+            }`}
+          >
             <ErrorBoundary fallback={<div className="p-4 text-xs text-zinc-500">Sidebar failed to load</div>}>
-              <WorkspaceSidebar />
+              <WorkspaceSidebar onClose={() => setSidebarOpen(false)} />
             </ErrorBoundary>
           </nav>
 
           {/* Center Chat Work Area */}
           <main className="flex-1 flex flex-col h-full overflow-hidden min-w-0 bg-[#121214]">
             <ErrorBoundary fallback={<div className="p-6 text-sm text-zinc-400">Chat failed to load</div>}>
-              <MainChatArea onOpenSearch={() => setSearchOpen(true)} />
+              <MainChatArea
+                onOpenSearch={() => setSearchOpen(true)}
+                onOpenSidebar={() => setSidebarOpen(true)}
+              />
             </ErrorBoundary>
           </main>
 
-          {/* Right Sidebar Panel — hidden only in very narrow windows */}
-          <aside aria-label="Operations roster and telemetry" className="hidden md:flex shrink-0 h-full">
+          {/* Keep narrow and tablet widths for the chat; the roster is desktop-only. */}
+          <aside aria-label="Operations roster and telemetry" className="hidden xl:flex shrink-0 h-full">
             <ErrorBoundary fallback={<div className="p-4 text-xs text-zinc-500">Roster failed to load</div>}>
               <RightSidebar />
             </ErrorBoundary>

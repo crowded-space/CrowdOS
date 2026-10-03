@@ -192,7 +192,7 @@ export default function FolderMountPicker({ targetType, targetId, workspaceId, i
             value={path}
             onChange={(e) => setPath(e.target.value)}
             placeholder="C:\repos\my-repo or /home/user/projects/my-repo"
-            className="flex-1 bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-xs font-mono text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-zinc-700"
+            className="flex-1 bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-xs font-mono text-zinc-200 placeholder-zinc-500 focus:outline-none focus:border-zinc-700"
           />
           <button
             onClick={() => handleSave()}
@@ -243,8 +243,9 @@ export default function FolderMountPicker({ targetType, targetId, workspaceId, i
                 disabled={browserLoading}
                 className="p-1 text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800 rounded transition shrink-0"
                 title="Go up to parent directory"
+                aria-label="Go up to parent directory"
               >
-                <CornerLeftUp size={12} />
+                <CornerLeftUp size={12} aria-hidden="true" />
               </button>
             )}
             <span className="truncate flex-1" title={browsingPath}>
@@ -256,8 +257,9 @@ export default function FolderMountPicker({ targetType, targetId, workspaceId, i
               disabled={browserLoading}
               className="p-1 text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800 rounded transition shrink-0"
               title="Refresh directory"
+              aria-label="Refresh directory"
             >
-              <RefreshCw size={11} className={browserLoading ? 'animate-spin' : ''} />
+              <RefreshCw size={11} className={browserLoading ? 'animate-spin' : ''} aria-hidden="true" />
             </button>
           </div>
 

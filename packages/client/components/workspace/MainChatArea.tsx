@@ -4,8 +4,8 @@ import {
   Hash, Users, Search, Bell, Pin,
   Trash2, Send, PlusCircle, Smile,
   Paperclip, FileText, Image as ImageIcon, X,
-  ChevronDown, ChevronRight, ChevronUp,
-  Clock, Terminal, FileCode2, BellOff, ArrowDown, Sparkles, Square,
+  ChevronDown, ChevronUp,
+  Terminal, FileCode2, BellOff, ArrowDown, Sparkles, Square, Menu,
   Maximize2, Minimize2
 } from 'lucide-react';
 import { useCrowdOSStore } from '@/stores/crowdOsStore';
@@ -23,9 +23,10 @@ const DiffViewer = React.lazy(() => import('./DiffViewer'));
 
 interface MainChatAreaProps {
   onOpenSearch?: () => void;
+  onOpenSidebar?: () => void;
 }
 
-export default function MainChatArea({ onOpenSearch }: MainChatAreaProps) {
+export default function MainChatArea({ onOpenSearch, onOpenSidebar }: MainChatAreaProps) {
   const {
     workspaces,
     activeWorkspaceId,
@@ -34,8 +35,8 @@ export default function MainChatArea({ onOpenSearch }: MainChatAreaProps) {
     agents,
     addMessage,
     clearChannelMessages,
-    rightSidebarOpen,
-    setRightSidebarOpen,
+    rightPanelView,
+    setRightPanelView,
     selectedSandboxFile,
     setSelectedSandboxFile,
     openAgentProfileModal,
@@ -147,7 +148,7 @@ export default function MainChatArea({ onOpenSearch }: MainChatAreaProps) {
 
   useEffect(() => {
     if (!reconnectDigest?.visible) return;
-    showInfo(reconnectDigest.message, 'Reconnected');
+    showInfo('Connection update', reconnectDigest.message);
   }, [reconnectDigest?.message, reconnectDigest?.visible]);
 
   // Attachment overlay states
@@ -185,25 +186,6 @@ export default function MainChatArea({ onOpenSearch }: MainChatAreaProps) {
     };
   }, []);
 
-  const handleAttachRecentFile = () => {
-    const mockRecents = [
-      { name: 'spanner_query_audit.log', type: 'text/plain', content: 'Database performance verification logs: latency 12.4ms, uptime 99.98%' },
-      { name: 'swarm_dispatch_v2.json', type: 'application/json', content: '{"agents": [{"id": "cognitive_engine", "status": "active"}]}' },
-      { name: 'prod_cognitive_diagram.png', type: 'image/png', content: 'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="300" height="200" viewBox="0 0 300 200"><rect width="100%" height="100%" fill="%23111114"/><circle cx="150" cy="100" r="40" fill="%233359ff" opacity="0.8"/><text x="150" y="105" font-family="sans-serif" font-size="12" fill="white" text-anchor="middle">Swarm Core</text></svg>' }
-    ];
-    const file = mockRecents[Math.floor(Math.random() * mockRecents.length)];
-    const id = `attach-recent-${Date.now()}`;
-    const newAttachment: Attachment = {
-      id,
-      name: file.name,
-      type: file.type,
-      url: file.type === 'image/png' ? file.content : `data:text/plain;charset=utf-8,${encodeURIComponent(file.content)}`,
-      size: file.content.length
-    };
-    setAttachments(prev => [...prev, newAttachment]);
-    setShowAttachmentMenu(false);
-    showSuccess('File Attached', file.name);
-  };
 
   // File parsing procedures
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -677,6 +659,16 @@ export default function MainChatArea({ onOpenSearch }: MainChatAreaProps) {
 
         {/* Action Toolbar — 44px touch targets */}
         <div className="flex items-center gap-1 sm:gap-1.5 shrink-0">
+          <button
+            type="button"
+            onClick={onOpenSidebar}
+            aria-label="Open workspace menu"
+            className="xl:hidden w-10 h-10 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-400 hover:text-zinc-100 hover:border-zinc-700 flex items-center justify-center transition-colors cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500/30 active:scale-[0.97]"
+            title="Workspace menu"
+          >
+            <Menu size={16} aria-hidden="true" />
+          </button>
+
           {/* Quick Search Button (Cmd+K) */}
           <button
             onClick={onOpenSearch}
@@ -726,25 +718,27 @@ export default function MainChatArea({ onOpenSearch }: MainChatAreaProps) {
             {isChannelMuted ? <BellOff size={16} /> : <Bell size={16} />}
           </button>
 
-          {/* Desktop Right Sidebar Selector — segmented */}
-          <div className="hidden md:flex items-center bg-zinc-900 border border-zinc-800 rounded-xl p-1 ml-1 gap-1">
+          {/* Desktop Right Sidebar Selector — segmented: roster vs repository panel */}
+          <div className="hidden xl:flex items-center bg-zinc-900 border border-zinc-800 rounded-xl p-1 ml-1 gap-1" role="tablist" aria-label="Right panel view">
             <button
-              onClick={() => setRightSidebarOpen(true)}
+              role="tab"
+              aria-selected={rightPanelView === 'roster'}
+              onClick={() => setRightPanelView('roster')}
               aria-label="Show agent roster panel"
-              aria-pressed={rightSidebarOpen}
-              className={`w-9 h-8 rounded-lg transition-colors cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500/30 flex items-center justify-center ${rightSidebarOpen ? 'text-indigo-300 bg-indigo-500/15 border border-indigo-500/20' : 'text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800 border border-transparent active:bg-zinc-800'}`}
-              title="Agent Roster"
+              className={`w-9 h-8 rounded-lg transition-colors cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500/30 flex items-center justify-center ${rightPanelView === 'roster' ? 'text-indigo-300 bg-indigo-500/15 border border-indigo-500/20' : 'text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800 border border-transparent active:bg-zinc-800'}`}
+              title="Show agent roster panel"
             >
-              <Users size={14} />
+              <Users size={14} aria-hidden="true" />
             </button>
             <button
-              onClick={() => setRightSidebarOpen(!rightSidebarOpen)}
-              aria-label="Toggle workspace sandbox panel"
-              aria-pressed={!rightSidebarOpen}
-              className={`w-9 h-8 rounded-lg transition-colors cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500/30 flex items-center justify-center ${!rightSidebarOpen ? 'text-indigo-300 bg-indigo-500/15 border border-indigo-500/20' : 'text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800 border border-transparent active:bg-zinc-800'}`}
-              title={!rightSidebarOpen ? "Open Workspace Sandbox" : "Open Agent Roster"}
+              role="tab"
+              aria-selected={rightPanelView === 'repo'}
+              onClick={() => setRightPanelView('repo')}
+              aria-label="Show repository panel"
+              className={`w-9 h-8 rounded-lg transition-colors cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500/30 flex items-center justify-center ${rightPanelView === 'repo' ? 'text-indigo-300 bg-indigo-500/15 border border-indigo-500/20' : 'text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800 border border-transparent active:bg-zinc-800'}`}
+              title="Show repository panel"
             >
-              <Terminal size={14} />
+              <Terminal size={14} aria-hidden="true" />
             </button>
           </div>
         </div>
@@ -778,11 +772,11 @@ export default function MainChatArea({ onOpenSearch }: MainChatAreaProps) {
         {reconnectDigest?.visible && (
           <div className="mx-auto max-w-xl flex items-center justify-between gap-3 px-3.5 py-2.5 rounded-xl bg-indigo-500/10 border border-indigo-500/20 text-xs font-sans text-indigo-200 shadow-sm">
             <span className="flex items-center gap-2 min-w-0">
-              <Sparkles size={12} className="text-indigo-400 shrink-0" />
+              <Sparkles size={12} className="text-indigo-400 shrink-0" aria-hidden="true" />
               <span className="truncate">{reconnectDigest.message}</span>
             </span>
-            <button onClick={clearReconnectDigest} aria-label="Dismiss" className="p-1.5 rounded-lg hover:bg-indigo-500/20 text-indigo-300 shrink-0 transition">
-              <X size={12} />
+            <button onClick={clearReconnectDigest} aria-label="Dismiss connection notice" title="Dismiss connection notice" className="p-1.5 rounded-lg hover:bg-indigo-500/20 text-indigo-300 shrink-0 transition cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500/30">
+              <X size={12} aria-hidden="true" />
             </button>
           </div>
         )}
@@ -1182,17 +1176,6 @@ export default function MainChatArea({ onOpenSearch }: MainChatAreaProps) {
                     <span>Add photos & files</span>
                   </button>
 
-                  <button
-                    onClick={handleAttachRecentFile}
-                    type="button"
-                    className="w-full flex items-center justify-between px-3 min-h-[44px] hover:bg-zinc-800/80 hover:text-white rounded-xl transition-colors text-[13px] font-medium cursor-pointer focus:outline-none focus-visible:bg-zinc-800/80"
-                  >
-                    <div className="flex items-center gap-3">
-                      <Clock size={16} className="text-zinc-400 shrink-0" />
-                      <span>Recent files</span>
-                    </div>
-                    <ChevronRight size={14} className="text-zinc-550 shrink-0" />
-                  </button>
                 </div>
               )}
 

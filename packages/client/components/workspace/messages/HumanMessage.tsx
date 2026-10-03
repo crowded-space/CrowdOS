@@ -73,10 +73,11 @@ export default function HumanMessage({ id, authorName, content, timestamp, attac
         <div className="absolute -top-2 right-2 hidden group-hover:flex group-focus-within:flex focus-within:flex items-center gap-1 bg-zinc-900 border border-zinc-800 rounded-[4px] shadow-lg p-1">
           <button
             onClick={() => setEditing(true)}
-            className="w-7 h-7 rounded-full bg-zinc-800 hover:bg-zinc-700 text-zinc-300 flex items-center justify-center transition cursor-pointer"
+            className="w-7 h-7 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-300 flex items-center justify-center transition cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500/30"
             title="Edit and resend"
+            aria-label="Edit and resend"
           >
-            <Pencil size={12} />
+            <Pencil size={12} aria-hidden="true" />
           </button>
         </div>
       )}

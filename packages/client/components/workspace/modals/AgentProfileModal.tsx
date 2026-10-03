@@ -9,6 +9,7 @@ import PresenceIndicator from '../ui/PresenceIndicator';
 import StatusBadge from '../ui/StatusBadge';
 import { useToast } from '@/components/ui/ToastProvider';
 import AgentStudioModal from '@/components/studio/AgentStudioModal';
+import { useOverlayFocus } from '@/components/ui/use-overlay-focus';
 
 export default function AgentProfileModal() {
   const { 
@@ -33,6 +34,11 @@ export default function AgentProfileModal() {
   const { showSuccess } = useToast();
   const [dmText, setDmText] = useState('');
   const [studioOpen, setStudioOpen] = useState(false);
+  const dialogRef = useRef<HTMLDivElement>(null);
+
+  useOverlayFocus(agentProfileModalOpen, dialogRef, {
+    fallbackFocusSelector: '[aria-label="Show agent roster panel"], [title^="View Profile of "]',
+  });
   
   // Patch states
   const [patchPanelOpen, setPatchPanelOpen] = useState(false);
@@ -130,7 +136,7 @@ export default function AgentProfileModal() {
   return (
     <>
       <AnimatePresence>
-        <div role="dialog" aria-modal="true" aria-label={`Agent profile for ${agent.name}`} className="fixed inset-0 z-50 flex items-center justify-center p-4">
+        <div ref={dialogRef} role="dialog" aria-modal="true" aria-label={`Agent profile for ${agent.name}`} className="fixed inset-0 z-50 flex items-center justify-center p-4">
           {/* Blur Backdrop */}
           <motion.div 
             initial={{ opacity: 0 }}
@@ -209,7 +215,7 @@ export default function AgentProfileModal() {
                   </h3>
                   <button
                     onClick={() => setStudioOpen(true)}
-                    className="px-2 py-0.5 rounded bg-indigo-600 hover:bg-indigo-500 text-white font-mono text-[9.5px] font-semibold flex items-center gap-1 transition cursor-pointer"
+                    className="px-2 py-0.5 -my-1.5 min-h-[24px] rounded bg-indigo-600 hover:bg-indigo-500 text-white font-mono text-[9.5px] font-semibold flex items-center gap-1 transition cursor-pointer"
                   >
                     <Layers size={10} />
                     <span>Open studio</span>
@@ -320,14 +326,16 @@ export default function AgentProfileModal() {
                             checked={o.active}
                             onChange={() => toggleRuntimeOverride(o.id, !o.active)}
                             className="h-3.5 w-3.5 rounded border-zinc-800 bg-zinc-900 text-indigo-500 cursor-pointer focus:ring-0"
-                            title="Toggle Patch State"
+                            title={`Toggle patch ${o.reason || o.type}`}
+                            aria-label={`Toggle patch ${o.reason || o.type}`}
                           />
                           <button 
                             onClick={() => deleteRuntimeOverride(o.id)}
                             className="text-zinc-550 hover:text-rose-400 p-0.5 hover:bg-rose-950/20 rounded cursor-pointer transition"
-                            title="Revert Patch"
+                            title={`Revert patch ${o.reason || o.type}`}
+                            aria-label={`Revert patch ${o.reason || o.type}`}
                           >
-                            <Trash2 size={11.5} />
+                            <Trash2 size={11.5} aria-hidden="true" />
                           </button>
                         </div>
                       </div>
@@ -519,7 +527,7 @@ export default function AgentProfileModal() {
                 <button 
                   onClick={handleSendDM}
                   disabled={!dmText.trim()}
-                  className="h-6 w-6 rounded bg-indigo-500 text-white flex items-center justify-center transition disabled:bg-zinc-800 disabled:text-zinc-600 focus:outline-none cursor-pointer"
+                  className="h-6 min-h-[24px] w-6 min-w-[24px] shrink-0 rounded bg-indigo-500 text-white flex items-center justify-center transition disabled:bg-zinc-800 disabled:text-zinc-600 focus:outline-none cursor-pointer"
                 >
                   <X size={12} className="rotate-45" />
                 </button>

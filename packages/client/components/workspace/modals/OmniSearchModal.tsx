@@ -1,7 +1,8 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Search, Hash, Users, Hammer, MessageSquare, X, ArrowRight } from 'lucide-react';
 import { useCrowdOSStore } from '@/stores/crowdOsStore';
+import { useOverlayFocus } from '@/components/ui/use-overlay-focus';
 
 interface OmniSearchModalProps {
   open: boolean;
@@ -25,6 +26,13 @@ export default function OmniSearchModal({ open, onClose }: OmniSearchModalProps)
     messages: Array<{ id: string; channelId: string; authorId: string; authorName: string; content: string; timestamp?: string }>;
   } | null>(null);
   const [isSearchingServer, setIsSearchingServer] = useState(false);
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const searchInputRef = useRef<HTMLInputElement>(null);
+
+  useOverlayFocus(open, dialogRef, {
+    initialFocusRef: searchInputRef,
+    fallbackFocusSelector: '[aria-label="Search"]',
+  });
 
   // Keybinding trigger listener (Cmd+K or Ctrl+K) and Escape + body lock
   useEffect(() => {
@@ -171,7 +179,7 @@ export default function OmniSearchModal({ open, onClose }: OmniSearchModalProps)
   return (
     <AnimatePresence>
       {open && (
-        <div role="dialog" aria-modal="true" aria-label="Omni search" className="fixed inset-0 z-[9995] flex items-start justify-center pt-3 sm:pt-20 p-3 sm:p-4 font-sans select-none">
+        <div ref={dialogRef} role="dialog" aria-modal="true" aria-label="Omni search" className="fixed inset-0 z-[9995] flex items-start justify-center pt-3 sm:pt-20 p-3 sm:p-4 font-sans select-none">
           <motion.div
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
@@ -193,6 +201,7 @@ export default function OmniSearchModal({ open, onClose }: OmniSearchModalProps)
                 <Search size={16} className={`transition-colors ${isSearchingServer ? 'text-indigo-400 animate-pulse' : 'text-zinc-400'}`} />
               </span>
               <input
+                ref={searchInputRef}
                 type="text"
                 autoFocus
                 value={query}

@@ -61,19 +61,21 @@ export default function AttachmentsView({ attachments }: AttachmentsViewProps) {
                         e.stopPropagation();
                         setLightboxImage(file.url);
                       }}
-                      className="p-1.5 bg-zinc-900 border border-zinc-750/80 rounded-full hover:bg-zinc-850 hover:text-white text-zinc-350 hover:border-zinc-600 transition"
-                      title="Preview Image"
+                      className="p-1.5 bg-zinc-900 border border-zinc-750/80 rounded-lg hover:bg-zinc-850 hover:text-white text-zinc-350 hover:border-zinc-600 transition"
+                      title="Preview image"
+                      aria-label={`Preview image ${file.name}`}
                     >
-                      <Eye size={14} />
+                      <Eye size={14} aria-hidden="true" />
                     </button>
                     <a 
                       href={file.url} 
                       download={file.name}
                       onClick={(e) => e.stopPropagation()}
-                      className="p-1.5 bg-zinc-900 border border-zinc-750/80 rounded-full hover:bg-zinc-850 hover:text-white text-zinc-350 hover:border-zinc-600 transition"
-                      title="Download Image"
+                      className="p-1.5 bg-zinc-900 border border-zinc-750/80 rounded-lg hover:bg-zinc-850 hover:text-white text-zinc-350 hover:border-zinc-600 transition"
+                      title={`Download image ${file.name}`}
+                      aria-label={`Download image ${file.name}`}
                     >
-                      <Download size={14} />
+                      <Download size={14} aria-hidden="true" />
                     </a>
                   </div>
                 </div>
@@ -117,10 +119,11 @@ export default function AttachmentsView({ attachments }: AttachmentsViewProps) {
                 <a 
                   href={file.url} 
                   download={file.name}
-                  className="p-1.5 text-zinc-500 hover:text-indigo-400 hover:bg-zinc-900 rounded-md transition focus:outline-none"
-                  title="Download File"
+                  className="p-1.5 text-zinc-400 hover:text-indigo-300 hover:bg-zinc-900 rounded-md transition focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500/30"
+                  title={`Download file ${file.name}`}
+                  aria-label={`Download file ${file.name}`}
                 >
-                  <Download size={13.5} />
+                  <Download size={13.5} aria-hidden="true" />
                 </a>
               </div>
             </div>
@@ -132,14 +135,15 @@ export default function AttachmentsView({ attachments }: AttachmentsViewProps) {
       {lightboxImage && (
         <div 
           onClick={() => setLightboxImage(null)}
-          className="fixed inset-0 z-55 bg-black/85 backdrop-blur-xs flex items-center justify-center p-4 cursor-zoom-out animate-fade-in"
+          className="fixed inset-0 z-55 bg-black/85 flex items-center justify-center p-4 cursor-zoom-out animate-fade-in"
           id="lightbox-attachment-overlay"
         >
           <button 
             onClick={() => setLightboxImage(null)}
-            className="absolute top-4 right-4 text-zinc-400 hover:text-white p-2 hover:bg-white/10 rounded-full transition focus:outline-none cursor-pointer"
+            aria-label="Close image preview"
+            className="absolute top-4 right-4 text-zinc-400 hover:text-white p-2 hover:bg-white/10 rounded-lg transition focus:outline-none focus-visible:ring-2 focus-visible:ring-white/30 cursor-pointer"
           >
-            <X size={20} />
+            <X size={20} aria-hidden="true" />
           </button>
           <img 
             src={lightboxImage} 

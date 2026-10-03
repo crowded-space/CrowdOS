@@ -89,7 +89,7 @@ function NoticePanel({ failure, onRetry }: { failure: scopeFailure; onRetry?: ()
       {onRetry && (
         <button
           onClick={onRetry}
-          className="mt-1.5 text-[11px] text-amber-300 hover:text-amber-200 cursor-pointer"
+          className="-mt-px min-h-[24px] inline-flex items-center text-[11px] text-amber-200 hover:text-amber-100 cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-amber-300/50 rounded"
         >
           Try again
         </button>
@@ -146,7 +146,7 @@ const TreeRow: React.FC<TreeRowProps> = ({
       {entryIcon(entry, expanded)}
       <span className="truncate text-[12.5px] leading-none">{entry.name}</span>
       {showEmptyHint && (
-        <span className="ml-auto pl-2 text-[10.5px] text-zinc-600 shrink-0">empty</span>
+        <span className="ml-auto pl-2 text-[10.5px] text-zinc-400 shrink-0">empty</span>
       )}
     </button>
   );
@@ -428,7 +428,7 @@ export default function FileExplorer() {
               <RefreshCw size={13} />
             </button>
             <button
-              onClick={() => useCrowdOSStore.getState().setRightSidebarOpen(true)}
+              onClick={() => useCrowdOSStore.getState().setRightPanelView('roster')}
               className="p-1.5 rounded text-zinc-500 hover:text-zinc-200 hover:bg-zinc-800/60 transition cursor-pointer focus:outline-none focus-visible:ring-1 focus-visible:ring-indigo-400/60"
               title="Close (back to agent roster)"
               aria-label="Close repository panel"

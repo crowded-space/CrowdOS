@@ -89,29 +89,31 @@ export default function AgentMessage({
   return (
     <div 
       id={`agent-message-${authorId}`}
-      className={`group relative flex gap-3 p-3.5 sm:p-4 bg-[#1A1A1E] border rounded-2xl hover:bg-[#1E1E22] transition-colors ${
-        isCancelled ? 'border-amber-500/40 shadow-[0_4px_16px_rgba(245,158,11,0.12)] opacity-95' : isStreaming ? 'border-indigo-500/30 shadow-[0_4px_20px_rgba(99,102,241,0.12)]' : 'border-zinc-800/70'
+      className={`group relative flex gap-2 p-3.5 sm:p-4 bg-[#1A1A1E] border rounded-lg hover:bg-[#1E1E22] transition-colors ${
+        isCancelled ? 'border-amber-500/40 opacity-95' : isStreaming ? 'border-indigo-500/30' : 'border-zinc-800/70'
       }`}
     >
-      {/* Level-themed avatar border */}
+      {/* Avatar border follows agent level so the author stays identifiable at a glance. */}
       <button 
         type="button"
         onClick={() => openAgentProfileModal(authorId)}
-        className={`flex items-center justify-center w-9 h-9 rounded-xl border ${levelMeta.border} bg-zinc-950 text-[15px] select-none hover:opacity-90 hover:scale-[1.03] active:scale-95 transition cursor-pointer focus:outline-none shrink-0 mt-0.5 shadow-sm`}
+        className={`flex items-center justify-center w-9 h-9 rounded-lg border ${levelMeta.border} bg-zinc-950 text-[15px] select-none hover:opacity-90 hover:scale-[1.03] active:scale-95 transition cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500/30 shrink-0 mt-0.5 shadow-sm`}
         title={`View Profile of ${authorName}`}
+        aria-label={`View Profile of ${authorName}`}
       >
         {authorAvatar}
       </button>
 
       <div className="flex-1 min-w-0 space-y-2">
-        {/* Header Header Info Bar */}
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <div className="flex flex-wrap items-center gap-2">
+        {/* Header Info Bar */}
+        <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-1">
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
             <button
               type="button"
               onClick={() => openAgentProfileModal(authorId)}
               className="font-semibold text-zinc-100 text-sm tracking-tight truncate hover:text-indigo-400/90 transition cursor-pointer focus:outline-none text-left"
               title={`View Profile of ${authorName}`}
+              aria-label={`View Profile of ${authorName}`}
             >
               {authorName}
             </button>
@@ -288,10 +290,11 @@ export default function AgentMessage({
           {canRegenerate && (
             <button
               onClick={() => id && regenerate(id)}
-              className="w-7 h-7 rounded-full bg-zinc-800 hover:bg-zinc-700 text-zinc-300 flex items-center justify-center transition cursor-pointer"
+              className="w-7 h-7 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-300 flex items-center justify-center transition cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500/30"
               title="Regenerate"
+              aria-label="Regenerate response"
             >
-              <RotateCcw size={12} />
+              <RotateCcw size={12} aria-hidden="true" />
             </button>
           )}
           {canRetry && (
@@ -300,10 +303,11 @@ export default function AgentMessage({
                 const runId = (metadata as any)?.runId || (metadata as any)?.run_id || id;
                 if (runId) void retryRun(runId);
               }}
-              className="w-7 h-7 rounded-full bg-amber-600 hover:bg-amber-500 text-white flex items-center justify-center transition cursor-pointer"
+              className="w-7 h-7 rounded-lg bg-amber-600 hover:bg-amber-500 text-white flex items-center justify-center transition cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500/30"
               title="Retry failed run"
+              aria-label="Retry failed run"
             >
-              <RefreshCw size={12} />
+              <RefreshCw size={12} aria-hidden="true" />
             </button>
           )}
         </div>

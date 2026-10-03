@@ -94,11 +94,12 @@ export default function ModeSelector({ value, onChange, isPinned, onTogglePin, d
         aria-haspopup="listbox"
         aria-expanded={isOpen}
         className={triggerClass + ' min-h-[42px]'}
-        title={'Current mode: ' + currentOption.label}
+        title={'Execution mode: ' + currentOption.label}
       >
-        <CurrentIcon size={15} className={currentOption.accentColor} />
+        <CurrentIcon size={15} className={currentOption.accentColor} aria-hidden="true" />
+        <span className="sr-only">Execution mode: </span>
         <span>{currentOption.label}</span>
-        <ChevronDown size={13} className={'text-zinc-500 transition-transform ' + (isOpen ? 'rotate-180' : '')} />
+        <ChevronDown size={13} className={'text-zinc-500 transition-transform ' + (isOpen ? 'rotate-180' : '')} aria-hidden="true" />
       </button>
       <button
         type="button"
@@ -108,8 +109,9 @@ export default function ModeSelector({ value, onChange, isPinned, onTogglePin, d
         className={pinClass + ' w-11 h-11 sm:w-10 sm:h-[42px] flex items-center justify-center shrink-0'}
         // §6: the pin belongs to THIS channel, not the browser.
         title={isPinned ? 'Mode pinned for this channel. Click to unpin.' : 'Pin mode for this channel'}
+        aria-label={isPinned ? 'Mode pinned for this channel. Click to unpin.' : 'Pin mode for this channel'}
       >
-        <Pin size={14} className={isPinned ? 'fill-indigo-400' : ''} />
+        <Pin size={14} className={isPinned ? 'fill-indigo-400' : ''} aria-hidden="true" />
       </button>
       {isOpen && (
         <div

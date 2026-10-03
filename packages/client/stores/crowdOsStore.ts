@@ -52,7 +52,8 @@ import {
   CapabilitiesModule,
   ComposerMode,
   composerModeToRuntime,
-  runtimeToComposerMode
+  runtimeToComposerMode,
+  rightPanelView
 } from '../types/crowdOs';
 
 export interface ApprovalRequest {
@@ -303,7 +304,7 @@ interface CrowdOSState {
   selectedAgentId: string | null;
   selectedSandboxFile: string | null;
   filesystemRevision: number;
-  rightSidebarOpen: boolean;
+  rightPanelView: rightPanelView;
   leftSidebarCollapsed: boolean;
   settingsModalOpen: boolean;
   agentProfileModalOpen: boolean;
@@ -416,8 +417,7 @@ interface CrowdOSState {
   deleteRuntimeOverride: (id: string) => void;
 
   // Layout UI Toggles
-  toggleRightSidebar: () => void;
-  setRightSidebarOpen: (isOpen: boolean) => void;
+  setRightPanelView: (view: rightPanelView) => void;
   toggleLeftSidebar: () => void;
   setSettingsModalOpen: (open: boolean) => void;
   setWorkspaceSettingsTab: (tab: string) => void;
@@ -1503,7 +1503,7 @@ const initialSelectedMode: ComposerMode = (() => {
     selectedAgentId: null,
     selectedSandboxFile: null,
     filesystemRevision: 0,
-    rightSidebarOpen: true,
+    rightPanelView: 'roster' as rightPanelView,
     leftSidebarCollapsed: false,
     settingsModalOpen: false,
     agentProfileModalOpen: false,
@@ -3034,8 +3034,7 @@ const initialSelectedMode: ComposerMode = (() => {
     },
 
     // Sidebar & Modal Layout controls
-    toggleRightSidebar: () => set(s => ({ rightSidebarOpen: !s.rightSidebarOpen })),
-    setRightSidebarOpen: (isOpen) => set({ rightSidebarOpen: isOpen }),
+    setRightPanelView: (view) => set({ rightPanelView: view }),
     toggleLeftSidebar: () => set(s => ({ leftSidebarCollapsed: !s.leftSidebarCollapsed })),
     setSettingsModalOpen: (open) => set({ settingsModalOpen: open }),
     setWorkspaceSettingsTab: (tab) => set({ workspaceSettingsTab: tab }),

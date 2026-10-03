@@ -9,14 +9,14 @@ import AgentRow from './AgentRow';
 const FileExplorer = lazy(() => import('./FileExplorer'));
 
 export default function RightSidebar() {
-  const { agents, messages, activeChannelId, activeWorkspaceId, workspaces, openAgentProfileModal, rightSidebarOpen } = useCrowdOSStore(useShallow(s => ({
+  const { agents, messages, activeChannelId, activeWorkspaceId, workspaces, openAgentProfileModal, rightPanelView } = useCrowdOSStore(useShallow(s => ({
     agents: s.agents,
     messages: s.messages,
     activeChannelId: s.activeChannelId,
     activeWorkspaceId: s.activeWorkspaceId,
     workspaces: s.workspaces,
     openAgentProfileModal: s.openAgentProfileModal,
-    rightSidebarOpen: s.rightSidebarOpen,
+    rightPanelView: s.rightPanelView,
   })));
   const { totalTokensConsumed } = useCrowdOSStore(useShallow(s => ({ totalTokensConsumed: s.totalTokensConsumed })));
   const shouldReduceMotion = useReducedMotion();
@@ -163,7 +163,7 @@ export default function RightSidebar() {
 
   if (shouldReduceMotion) {
     // Reduced-motion: no AnimatePresence spring, plain divs preserve UX quality statically
-    if (!rightSidebarOpen) {
+    if (rightPanelView === 'repo') {
       return (
         <div className="w-[260px] flex flex-col h-full overflow-hidden shrink-0 border-l border-zinc-900 border-x-0">
           <Suspense fallback={<div className="p-4 text-xs text-zinc-500 animate-pulse">Loading repository…</div>}>
@@ -181,7 +181,7 @@ export default function RightSidebar() {
 
   return (
     <AnimatePresence mode="wait">
-      {!rightSidebarOpen ? (
+      {rightPanelView === 'repo' ? (
         <motion.div 
           key="file-explorer"
           initial={{ opacity: 0, x: 20 }}
@@ -216,9 +216,9 @@ export default function RightSidebar() {
 
       {/* Title — larger, calmer */}
       <div className="px-4 py-3.5 border-b border-zinc-900 flex items-center justify-between shrink-0 select-none">
-        <h2 className="text-[13px] font-medium text-zinc-300 flex items-center gap-2">
-          <span className="w-7 h-7 rounded-lg bg-zinc-900 border border-zinc-800 flex items-center justify-center">
-            <Network size={12} className="text-zinc-500" />
+        <h2 id="roster-heading" className="text-[13px] font-medium text-zinc-300 flex items-center gap-2">
+          <span className="w-7 h-7 rounded-lg bg-zinc-900 border border-zinc-800 flex items-center justify-center" aria-hidden="true">
+            <Network size={12} className="text-zinc-500" aria-hidden="true" />
           </span>
           Operations roster
         </h2>
@@ -285,8 +285,8 @@ export default function RightSidebar() {
 
         {agents.length === 0 && (
           <div className="text-center py-12 px-4">
-            <div className="w-12 h-12 rounded-2xl bg-zinc-900 border border-zinc-800 flex items-center justify-center mx-auto mb-3 text-zinc-600">
-              <Network size={18} />
+            <div className="w-12 h-12 rounded-lg bg-zinc-900 border border-zinc-800 flex items-center justify-center mx-auto mb-3 text-zinc-500" aria-hidden="true">
+              <Network size={18} aria-hidden="true" />
             </div>
             <p className="text-sm font-medium text-zinc-300">No agents yet</p>
             <p className="text-xs text-zinc-500 mt-1">Spawn your first agent in Settings → Agents Board.</p>
@@ -295,25 +295,29 @@ export default function RightSidebar() {
       </div>
 
       {/* Bottom Telemetry Dashboard — readable, airy */}
-      <div className="bg-[#09090b] border-t border-zinc-900 p-4 space-y-3.5 shrink-0 select-none">
+      <section aria-labelledby="telemetry-heading" className="bg-[#09090b] border-t border-zinc-900 p-4 space-y-3.5 shrink-0 select-none">
         <div className="flex items-center justify-between">
-          <h4 className="text-[13px] font-medium text-zinc-300 flex items-center gap-1.5">
-            <BarChart3 size={12} className="text-zinc-500" />
+          <h2 id="telemetry-heading" className="text-[13px] font-medium text-zinc-300 flex items-center gap-1.5">
+            <BarChart3 size={12} className="text-zinc-500" aria-hidden="true" />
             <span>{telemetryTab === 'channel' ? 'Channel telemetry' : 'Global telemetry'}</span>
-          </h4>
+          </h2>
           <div className="flex bg-zinc-900 rounded-lg p-1 border border-zinc-800" role="tablist" aria-label="Telemetry scope">
             <button
+              id="telemetry-tab-channel"
               onClick={() => setTelemetryTab('channel')}
               role="tab"
               aria-selected={telemetryTab === 'channel'}
+              aria-controls="telemetry-panel"
               className={`px-3 py-1 text-[11px] font-mono font-medium rounded-md transition-colors duration-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500/30 cursor-pointer ${telemetryTab === 'channel' ? 'bg-zinc-800 text-zinc-100 shadow-sm border border-zinc-700' : 'text-zinc-500 hover:text-zinc-300'}`}
             >
               Channel
             </button>
             <button
+              id="telemetry-tab-global"
               onClick={() => setTelemetryTab('global')}
               role="tab"
               aria-selected={telemetryTab === 'global'}
+              aria-controls="telemetry-panel"
               className={`px-3 py-1 text-[11px] font-mono font-medium rounded-md transition-colors duration-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500/30 cursor-pointer ${telemetryTab === 'global' ? 'bg-zinc-800 text-zinc-100 shadow-sm border border-zinc-700' : 'text-zinc-500 hover:text-zinc-300'}`}
             >
               Global
@@ -321,30 +325,33 @@ export default function RightSidebar() {
           </div>
         </div>
 
-        <div className="grid grid-cols-2 gap-2.5 text-left">
+        <div id="telemetry-panel" role="tabpanel" aria-labelledby={telemetryTab === 'channel' ? 'telemetry-tab-channel' : 'telemetry-tab-global'} className="grid grid-cols-2 gap-2.5 text-left">
           <div className="bg-zinc-900/70 p-3 rounded-xl border border-zinc-800 leading-tight">
             <div className="flex items-center gap-1.5 text-[11px] font-medium text-zinc-400">
-              <Database size={11} className="text-zinc-500" />
+              <Database size={11} className="text-zinc-500" aria-hidden="true" />
               <span>Tokens</span>
             </div>
             <div className="tnum text-[13px] font-semibold text-zinc-100 font-mono mt-1.5 tracking-tight">
               {ledgerStatus === 'loading' && telemetryTab === 'global' ? <span className="inline-block h-4 w-16 skeleton" /> : calculatedTokens.toLocaleString()}
             </div>
+            {ledgerStatus === 'offline' && telemetryTab === 'global' && (
+              <p className="mt-1.5 text-[10px] font-mono text-zinc-400">Ledger offline, showing local totals.</p>
+            )}
           </div>
 
           <div className="bg-zinc-900/70 p-3 rounded-xl border border-zinc-800 leading-tight">
             <div className="flex items-center gap-1.5 text-[11px] font-medium text-zinc-400">
-              <Coins size={11} className="text-emerald-500" />
+              <Coins size={11} className="text-zinc-500" aria-hidden="true" />
               <span>Est. cost</span>
             </div>
-            <div className="tnum text-[13px] font-semibold text-emerald-400 font-mono mt-1.5 tracking-tight">
+            <div className="tnum text-[13px] font-semibold text-emerald-300 font-mono mt-1.5 tracking-tight">
               ${calculatedBudgetSpent.toFixed(4)}
             </div>
           </div>
 
           <div className="bg-zinc-900/70 p-3 rounded-xl border border-zinc-800 leading-tight">
             <div className="flex items-center gap-1.5 text-[11px] font-medium text-zinc-400">
-              <Activity size={11} className="text-zinc-500" />
+              <Activity size={11} className="text-zinc-500" aria-hidden="true" />
               <span>Active</span>
             </div>
             <div className="tnum text-[13px] font-semibold text-zinc-100 font-mono mt-1.5">
@@ -354,7 +361,7 @@ export default function RightSidebar() {
 
           <div className="bg-zinc-900/70 p-3 rounded-xl border border-zinc-800 leading-tight">
             <div className="flex items-center gap-1.5 text-[11px] font-medium text-zinc-400">
-              <Network size={11} className="text-zinc-500" />
+              <Network size={11} className="text-zinc-500" aria-hidden="true" />
               <span>Channels</span>
             </div>
             <div className="tnum text-[13px] font-semibold text-zinc-100 font-mono mt-1.5">
@@ -362,7 +369,7 @@ export default function RightSidebar() {
             </div>
           </div>
         </div>
-      </div>
+      </section>
       </>
     );
   }

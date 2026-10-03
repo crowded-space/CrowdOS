@@ -365,9 +365,10 @@ export default function ModelCardsTab() {
                   disabled={isTesting}
                   onClick={() => testConnection(mod)}
                   className="px-2 py-1 bg-zinc-950 hover:bg-zinc-900 border border-zinc-800 text-zinc-300 hover:text-zinc-100 text-[10px] rounded flex items-center gap-1 transition cursor-pointer disabled:opacity-50 focus:outline-none"
-                  title="Test Handshake"
+                  title={`Test connection to ${mod.name}`}
+                  aria-label={`Test connection to ${mod.name}`}
                 >
-                  <RefreshCw size={10} className={isTesting ? 'animate-spin' : ''} />
+                  <RefreshCw size={10} className={isTesting ? 'animate-spin' : ''} aria-hidden="true" />
                   <span>{isTesting ? 'Testing...' : 'Test'}</span>
                 </button>
 
@@ -394,9 +395,10 @@ export default function ModelCardsTab() {
                     });
                   }}
                   className="p-1 px-1.5 bg-zinc-950 hover:bg-rose-950/40 text-rose-400 border border-zinc-800 rounded hover:border-rose-900 transition cursor-pointer focus:outline-none"
-                  title="De-register"
+                  title={`De-register model ${mod.name}`}
+                  aria-label={`De-register model ${mod.name}`}
                 >
-                  <Trash2 size={11.5} />
+                  <Trash2 size={11.5} aria-hidden="true" />
                 </button>
               </div>
             </div>

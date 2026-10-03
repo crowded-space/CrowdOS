@@ -11,6 +11,7 @@ interface MentionParserProps {
 const CODE_BLOCK_REGEX = /```(\w*)\r?\n([\s\S]*?)(?:```|$)/g;
 const INLINE_CODE_REGEX = /(`[^`]+`)/g;
 const INLINE_FORMAT = /\*\*([^*]+)\*\*|\*([^*]+)\*|~~([^~]+)~~/g;
+const DISPLAY_COPY_EM_DASH = /\s*\u2014\s*/g;
 
 const ROLE_NAMES = [
   'Level0', 'Level 0', 'L0', 'Omniscient', 'Omniscient Monitor',
@@ -73,6 +74,7 @@ function CodeSandboxBlock({ language, code }: { language: string; code: string }
             onClick={handleCopy}
             className="flex items-center gap-1 px-2 py-0.5 rounded bg-zinc-950 border border-zinc-800 hover:border-zinc-700 text-zinc-400 hover:text-zinc-200 transition cursor-pointer text-[10px] focus:outline-none"
             title="Copy code to clipboard"
+            aria-label={`Copy ${language || 'plaintext'} code to clipboard`}
           >
             {copied ? (
               <>
@@ -364,7 +366,7 @@ function renderInlineStyles(text: string, mentionRegex: RegExp): React.ReactNode
 
     return (
       <React.Fragment key={`fmt-${index}`}>
-        {renderFormattedText(part, index, mentionRegex)}
+        {renderFormattedText(part.replace(DISPLAY_COPY_EM_DASH, ', '), index, mentionRegex)}
       </React.Fragment>
     );
   });

@@ -16,6 +16,7 @@ import ConfirmDialog from '@/components/ui/ConfirmDialog';
 import AgentStudioModal from '@/components/studio/AgentStudioModal';
 import ScreenLockSettingsPanel from '../ScreenLockSettingsPanel';
 import AutostartToggle from '@/components/ui/AutostartToggle';
+import { useOverlayFocus } from '@/components/ui/use-overlay-focus';
 
 const ROLE_PERMISSIONS = [
   { id: 'administrator', label: 'Administrator', description: 'Grants all permissions and bypasses channel restrictions.' },
@@ -334,6 +335,11 @@ export default function WorkspaceSettingsModal() {
   const { showSuccess, showError, showInfo } = useToast();
   const [studioAgentId, setStudioAgentId] = useState<string | null>(null);
   const activeWS = workspaces.find(ws => ws.id === activeWorkspaceId);
+  const dialogRef = React.useRef<HTMLDivElement>(null);
+
+  useOverlayFocus(settingsModalOpen && !!activeWS, dialogRef, {
+    fallbackFocusSelector: '[aria-label="Open workspace menu"], [aria-label="Open settings"]',
+  });
 
   // Styled Confirm Modal State
   const [confirmModal, setConfirmModal] = useState<{
@@ -949,7 +955,7 @@ export default function WorkspaceSettingsModal() {
     <>
       <AnimatePresence>
         {settingsModalOpen && activeWS && (
-        <div role="dialog" aria-modal="true" aria-label="Workspace Settings" className="fixed inset-0 z-50 flex items-center justify-center p-4 md:p-10 select-none" id="workspace-settings-modal">
+        <div ref={dialogRef} role="dialog" aria-modal="true" aria-label="Workspace Settings" className="fixed inset-0 z-50 flex items-center justify-center p-4 md:p-10 select-none" id="workspace-settings-modal">
           {/* Black Translucent Backdrop */}
           <motion.div 
             initial={{ opacity: 0 }}
@@ -1031,10 +1037,11 @@ export default function WorkspaceSettingsModal() {
             </h2>
             <button
               onClick={() => setSettingsModalOpen(false)}
+              aria-label="Close settings panel"
               className="w-7 h-7 hover:bg-zinc-900 rounded-full flex items-center justify-center text-zinc-400 hover:text-zinc-100 transition focus:outline-none cursor-pointer"
-              title="Close Settings Panel"
+              title="Close settings panel"
             >
-              <X size={15} />
+              <X size={15} aria-hidden="true" />
             </button>
           </div>
 
@@ -1618,25 +1625,28 @@ export default function WorkspaceSettingsModal() {
                                 type="button"
                                 onClick={() => handleDuplicateAgent(ag)}
                                 className="text-zinc-400 hover:text-emerald-300 p-1 bg-zinc-950 hover:bg-emerald-900/40 rounded border border-zinc-900 hover:border-emerald-900 transition focus:outline-none cursor-pointer"
-                                title="Duplicate agent"
+                                title={`Duplicate agent ${ag.name}`}
+                                aria-label={`Duplicate agent ${ag.name}`}
                               >
-                                <Copy size={11} />
+                                <Copy size={11} aria-hidden="true" />
                               </button>
                               <button
                                 type="button"
                                 onClick={() => handleExportAgent(ag)}
                                 className="text-zinc-400 hover:text-cyan-300 p-1 bg-zinc-950 hover:bg-cyan-900/40 rounded border border-zinc-900 hover:border-cyan-900 transition focus:outline-none cursor-pointer"
-                                title="Export agent JSON"
+                                title={`Export ${ag.name} as JSON`}
+                                aria-label={`Export ${ag.name} as JSON`}
                               >
-                                <Download size={11} />
+                                <Download size={11} aria-hidden="true" />
                               </button>
                               <button
                                 type="button"
                                 onClick={() => startEditingAgent(ag)}
                                 className="text-zinc-400 hover:text-indigo-300 p-1 bg-zinc-950 hover:bg-indigo-900/40 rounded border border-zinc-900 hover:border-indigo-900 transition focus:outline-none cursor-pointer"
-                                title="Edit agent"
+                                title={`Edit agent ${ag.name}`}
+                                aria-label={`Edit agent ${ag.name}`}
                               >
-                                <Edit size={11} />
+                                <Edit size={11} aria-hidden="true" />
                               </button>
                               {ag.level > 0 && (
                                 <button
@@ -1653,9 +1663,10 @@ export default function WorkspaceSettingsModal() {
                                     });
                                   }}
                                   className="text-rose-400 hover:text-rose-300 p-1 bg-zinc-950 hover:bg-rose-950/40 rounded border border-zinc-900 hover:border-rose-900 transition focus:outline-none cursor-pointer"
-                                  title="Delete agent"
+                                  title={`Delete agent ${ag.name}`}
+                                  aria-label={`Delete agent ${ag.name}`}
                                 >
-                                  <Trash2 size={11} />
+                                  <Trash2 size={11} aria-hidden="true" />
                                 </button>
                               )}
                             </div>
@@ -1674,8 +1685,8 @@ export default function WorkspaceSettingsModal() {
                 <div className="w-1/3 border border-zinc-900 rounded-lg bg-zinc-950/40 flex flex-col">
                   <div className="p-3 border-b border-zinc-900 flex items-center justify-between">
                     <span className="font-medium text-zinc-300 text-[13px]">Roles</span>
-                    <button onClick={handleCreateRole} className="p-1 hover:bg-zinc-800 rounded outline-none text-zinc-400 hover:text-zinc-200">
-                      <Plus size={14} />
+                    <button onClick={handleCreateRole} aria-label="Create role" title="Create role" className="p-1 hover:bg-zinc-800 rounded outline-none text-zinc-400 hover:text-zinc-200">
+                      <Plus size={14} aria-hidden="true" />
                     </button>
                   </div>
                   <div className="flex-1 overflow-y-auto p-2 space-y-1">
@@ -1752,10 +1763,13 @@ export default function WorkspaceSettingsModal() {
                               <button
                                 key={color}
                                 onClick={() => updateRole(selectedRole.id, { color })}
+                                aria-label={`Role color ${color}`}
+                                title={`Role color ${color}`}
+                                aria-pressed={selectedRole.color === color}
                                 className={`w-8 h-8 rounded-full flex items-center justify-center border-2 transition ${selectedRole.color === color ? 'border-zinc-200 scale-110' : 'border-transparent hover:scale-110'}`}
                                 style={{ backgroundColor: color }}
                               >
-                                {selectedRole.color === color && <Check size={14} className="text-black" />}
+                                {selectedRole.color === color && <Check size={14} className="text-black" aria-hidden="true" />}
                               </button>
                             ))}
                           </div>
@@ -1782,6 +1796,8 @@ export default function WorkspaceSettingsModal() {
                                 <button
                                   onClick={() => togglePermission(perm.id)}
                                   disabled={disabled}
+                                  aria-label={`${perm.label} permission`}
+                                  aria-checked={isToggled}
                                   className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer items-center justify-center rounded-full transition-colors focus:outline-none ${isToggled ? 'bg-indigo-500' : 'bg-zinc-700'} ${disabled ? 'opacity-50 cursor-not-allowed' : ''}`}
                                   role="switch"
                                 >
@@ -2398,9 +2414,10 @@ export default function WorkspaceSettingsModal() {
                               <button
                                 onClick={() => startEditingSkill(skill)}
                                 className="p-1 text-zinc-550 hover:text-zinc-350 bg-zinc-950 hover:bg-zinc-900 rounded border border-zinc-900 transition focus:outline-none cursor-pointer"
-                                title="Edit Skill Card"
+                                title={`Edit skill ${skill.name}`}
+                                aria-label={`Edit skill ${skill.name}`}
                               >
-                                <Edit size={10.5} />
+                                <Edit size={10.5} aria-hidden="true" />
                               </button>
                               
                               <button
@@ -2416,9 +2433,10 @@ export default function WorkspaceSettingsModal() {
                                   });
                                 }}
                                 className="p-1 text-zinc-650 hover:text-rose-450 bg-zinc-950 hover:bg-[#1f0f15] rounded border border-zinc-900 transition focus:outline-none cursor-pointer"
-                                title="Delete Skill Card"
+                                title={`Delete skill ${skill.name}`}
+                                aria-label={`Delete skill ${skill.name}`}
                               >
-                                <Trash2 size={10.5} />
+                                <Trash2 size={10.5} aria-hidden="true" />
                               </button>
                             </div>
                           </div>
@@ -2663,9 +2681,10 @@ export default function WorkspaceSettingsModal() {
                               <button
                                 onClick={() => startEditingToolModule(toolMod)}
                                 className="p-1 text-zinc-550 hover:text-zinc-350 bg-zinc-950 hover:bg-zinc-900 rounded border border-zinc-900 transition focus:outline-none cursor-pointer"
-                                title="Edit Toolkit Schema"
+                                title={`Edit toolkit ${toolMod.name}`}
+                                aria-label={`Edit toolkit ${toolMod.name}`}
                               >
-                                <Edit size={10.5} />
+                                <Edit size={10.5} aria-hidden="true" />
                               </button>
                               
                               <button
@@ -2681,9 +2700,10 @@ export default function WorkspaceSettingsModal() {
                                   });
                                 }}
                                 className="p-1 text-zinc-650 hover:text-rose-450 bg-zinc-950 hover:bg-[#1f0f15] rounded border border-zinc-900 transition focus:outline-none cursor-pointer"
-                                title="Delete Toolkit Module"
+                                title={`Delete toolkit ${toolMod.name}`}
+                                aria-label={`Delete toolkit ${toolMod.name}`}
                               >
-                                <Trash2 size={10.5} />
+                                <Trash2 size={10.5} aria-hidden="true" />
                               </button>
                             </div>
                           </div>

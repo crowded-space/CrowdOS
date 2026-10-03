@@ -5,12 +5,19 @@ import { useCrowdOSStore } from '@/stores/crowdOsStore';
 import CrowIcon from '@/components/ui/CrowIcon';
 import { useToast } from '@/components/ui/ToastProvider';
 import ConfirmDialog from '@/components/ui/ConfirmDialog';
+import { useOverlayFocus } from '@/components/ui/use-overlay-focus';
 
 export default function WorkspaceDropdown() {
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const [leaveConfirmOpen, setLeaveConfirmOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
   const { showSuccess } = useToast();
+
+  useOverlayFocus(dropdownOpen, menuRef, {
+    fallbackFocusSelector: '[aria-label="Open workspace menu"]',
+  });
   
   const { 
     workspaces, 
@@ -45,6 +52,7 @@ export default function WorkspaceDropdown() {
   return (
     <div className="relative" ref={dropdownRef} id="workspace-dropdown">
       <button
+        ref={triggerRef}
         onClick={() => setDropdownOpen(!dropdownOpen)}
         aria-haspopup="menu"
         aria-expanded={dropdownOpen}
@@ -67,13 +75,14 @@ export default function WorkspaceDropdown() {
       <AnimatePresence>
       {dropdownOpen && (
         <motion.div 
+          ref={menuRef}
           id="workspace-dropdown-menu"
           role="menu"
           initial={{ opacity: 0, scale: 0.95, y: -10 }} 
           animate={{ opacity: 1, scale: 1, y: 0 }} 
           exit={{ opacity: 0, scale: 0.95, y: -10 }} 
           transition={{ duration: 0.15, ease: "easeOut" }}
-          className="absolute top-full left-2 right-2 mt-2 bg-[#141416] border border-zinc-800 rounded-2xl shadow-2xl z-50 p-2 space-y-1 origin-top"
+          className="absolute top-full left-2 right-2 mt-2 bg-[#141416] border border-zinc-800 rounded-lg shadow-2xl z-50 p-2 space-y-1 origin-top"
         >
           <button
             role="menuitem"
