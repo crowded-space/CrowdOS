@@ -1,17 +1,25 @@
 import React, { useCallback } from 'react';
-import { Hash } from 'lucide-react';
+import { Activity, Hash, ShieldAlert } from 'lucide-react';
 import type { Channel } from '@/types/crowdOs';
 
 interface Props {
   channel: Channel;
   isActive: boolean;
   onSelect: (id: string) => void;
+  draftPreview?: string;
+  approvalCount?: number;
+  isLive?: boolean;
+  liveRuntime?: string | null;
 }
 
-function ChannelButtonInner({ channel, isActive, onSelect }: Props) {
+function ChannelButtonInner({ channel, isActive, onSelect, draftPreview, approvalCount = 0, isLive = false, liveRuntime = null }: Props) {
   const handleClick = useCallback(() => onSelect(channel.id), [onSelect, channel.id]);
   const hasMention = channel.hasMention;
   const unreads = channel.unreadCount;
+  const pendingApprovals = Number.isFinite(approvalCount) ? Math.max(0, Math.floor(approvalCount as number)) : 0;
+  const showApproval = pendingApprovals > 0;
+  const showLive = isLive === true;
+  const liveText = liveRuntime ? `live \u00b7 ${liveRuntime}` : 'live';
   return (
     <button
       onClick={handleClick}
@@ -27,10 +35,35 @@ function ChannelButtonInner({ channel, isActive, onSelect }: Props) {
       )}
       <div className="flex items-center gap-2.5 min-w-0 truncate pl-1">
         <Hash size={16} className={`shrink-0 transition-colors ${isActive ? 'text-indigo-300' : 'text-zinc-500 group-hover:text-zinc-400'}`} />
-        <span className={`truncate ${isActive ? 'text-zinc-100 font-semibold' : ''}`}>{channel.name}</span>
+        <span className="min-w-0 flex-1">
+          <span className={`block truncate ${isActive ? 'text-zinc-100 font-semibold' : ''}`}>{channel.name}</span>
+          {draftPreview ? (
+            <span className="block truncate text-[11px] italic font-normal text-zinc-500" title={draftPreview}>{draftPreview}</span>
+          ) : null}
+        </span>
       </div>
       <div className="flex items-center gap-1.5 shrink-0 pl-2">
-        {hasMention && <span className="w-2 h-2 rounded-full bg-rose-500 shadow-[0_0_6px_rgba(239,68,68,0.5)] animate-pulse" />}
+        {showLive && (
+          <span
+            title={liveRuntime ? `Live run (${liveRuntime}) in #${channel.name}` : `Live run in #${channel.name}`}
+            className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-indigo-500/15 text-indigo-300 border border-indigo-500/25 text-[10px] font-mono font-semibold leading-none"
+          >
+            <Activity size={11} aria-hidden="true" />{liveText}
+          </span>
+        )}
+        {showApproval && (
+          <span
+            title={`${pendingApprovals} approval${pendingApprovals === 1 ? '' : 's'} waiting in #${channel.name}`}
+            className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-amber-500/15 text-amber-300 border border-amber-500/25 text-[10px] font-mono font-semibold leading-none"
+          >
+            <ShieldAlert size={11} aria-hidden="true" />{pendingApprovals > 1 ? `${pendingApprovals} approvals` : 'approval'}
+          </span>
+        )}
+        {hasMention && (
+          <span title={`Mention in #${channel.name}`} className="w-2 h-2 rounded-full bg-rose-500 shadow-[0_0_6px_rgba(239,68,68,0.5)] pulse-once motion-reduce:animate-none">
+            <span className="sr-only">mention</span>
+          </span>
+        )}
         {unreads > 0 && (
           <span className="tnum px-1.5 py-0.5 min-w-[20px] h-[19px] flex items-center justify-center text-center rounded-md bg-rose-500 text-[10px] font-mono font-semibold text-white leading-none">
             {unreads > 99 ? '99+' : unreads}

@@ -3,6 +3,8 @@ import { Copy, Check, ChevronDown, ChevronUp, Code2 } from 'lucide-react';
 import { useCrowdOSStore } from '@/stores/crowdOsStore';
 import { stripToolCalls } from '@crowdspace/shared';
 import { highlightCode } from '../code-highlight';
+import { RedactedText } from './RedactedText';
+import { countSecrets } from './secret-redaction';
 
 interface MentionParserProps {
   text: string;
@@ -53,6 +55,12 @@ function CodeSandboxBlock({ language, code }: { language: string; code: string }
   // One highlight pass over the visible slice; the gutter and the pre both
   // rely on inherited line-height (no per-line divs) so rows stay aligned.
   const highlighted = useMemo(() => highlightCode(shownCode, language), [shownCode, language]);
+  // Phase E redaction (display-only): secrets render through RedactedText
+  // (shown-as-redacted + click-reveal) instead of highlighted HTML so raw
+  // values never hit dangerouslySetInnerHTML. Copy keeps explicit raw
+  // behaviour (user action). Reveal buttons stay keyboard-reachable.
+  const secretCount = useMemo(() => countSecrets(code), [code]);
+  const shownHasSecrets = useMemo(() => countSecrets(shownCode) > 0, [shownCode]);
 
   const handleCopy = () => {
     navigator.clipboard.writeText(code);
@@ -68,6 +76,11 @@ function CodeSandboxBlock({ language, code }: { language: string; code: string }
           <Code2 size={12} className="text-indigo-400" />
           <span className="text-zinc-300 font-semibold">{language || 'plaintext'}</span>
           <span className="text-[9px] text-zinc-600">({lines.length} lines)</span>
+          {secretCount > 0 && (
+            <span className="text-[9px] font-mono text-amber-300 border border-amber-500/30 bg-amber-500/10 rounded px-1.5 py-0.5">
+              {secretCount} redacted
+            </span>
+          )}
         </div>
         <div className="flex items-center gap-2">
           <button
@@ -102,10 +115,16 @@ function CodeSandboxBlock({ language, code }: { language: string; code: string }
           </div>
 
           {/* Code Text */}
-          <pre
-            className="hljs pl-3 overflow-x-auto whitespace-pre font-mono flex-1 m-0"
-            dangerouslySetInnerHTML={{ __html: highlighted }}
-          />
+          {shownHasSecrets ? (
+            <pre className="pl-3 overflow-x-auto whitespace-pre-wrap break-words font-mono flex-1 m-0">
+              <RedactedText text={shownCode} mono />
+            </pre>
+          ) : (
+            <pre
+              className="hljs pl-3 overflow-x-auto whitespace-pre font-mono flex-1 m-0"
+              dangerouslySetInnerHTML={{ __html: highlighted }}
+            />
+          )}
         </div>
 
         {/* Collapsible toggle for long code */}
@@ -359,7 +378,7 @@ function renderInlineStyles(text: string, mentionRegex: RegExp): React.ReactNode
       const codeText = part.slice(1, -1);
       return (
         <code key={`code-${index}`} className="px-1.5 py-0.5 rounded bg-zinc-950 font-mono text-[11px] text-indigo-300 border border-zinc-850/60 mx-0.5 shadow-inner">
-          {codeText}
+          <RedactedText text={codeText} mono />
         </code>
       );
     }
@@ -414,7 +433,7 @@ function renderFormattedText(text: string, parentKey: number, mentionRegex: RegE
   }
 
   if (nodes.length === 0) {
-    return text;
+    return renderMentions(text, `${parentKey}-plain`, mentionRegex);
   }
 
   return <>{nodes}</>;
@@ -427,7 +446,7 @@ function renderMentions(text: string, keyPrefix: string, mentionRegex: RegExp): 
   const parts = text.split(localRegex);
 
   if (parts.length === 1) {
-    return text;
+    return <RedactedText text={text} />;
   }
 
   return parts.map((part, idx) => {
@@ -454,6 +473,6 @@ function renderMentions(text: string, keyPrefix: string, mentionRegex: RegExp): 
         </span>
       );
     }
-    return part;
+    return <RedactedText key={key} text={part} />;
   });
 }

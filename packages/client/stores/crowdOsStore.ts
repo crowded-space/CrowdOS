@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { socket, emitChannelJoin, emitChannelLeave, emitWorkspaceLeave } from '../src/config/socket';
+import { safeSet } from '../src/config/desktop-storage';
 import { stripToolCalls } from '@crowdspace/shared';
 import {
   encodeBeforeParam,
@@ -81,7 +82,81 @@ export interface ArtifactRow {
   patch: string | null;
   contentRef: string | null;
   createdAt: string;
+  // Phase C: server-provided payload extras (explanations live here when the
+  // run recorded them). Optional because older cached rows lack it.
+  metadata?: Record<string, unknown> | null;
 }
+
+// Phase D: jobs-slice row. Projected from the SAME run.status_changed
+// ingestion the header will use (never a second run model). runtime is the
+// server runtimeType (null = unknown, callers show "unknown", never guess).
+// step/tokens/cost stay null unless a real source provides them — the view
+// renders a dash, never a zero or an estimate. firstSeenAt exists so
+// elapsedMs is honest wall-clock observation between the first and latest
+// status event. No pauseRun: no server pause endpoint exists
+// (routes/runs.ts exposes only resume/compensations/get), so Stop + Retry
+// are the only actions.
+export interface jobRow {
+  runId: string;
+  channelId: string;
+  agentIds: string[];
+  runtime: string | null;
+  status: string;
+  step?: string | null;
+  elapsedMs?: number | null;
+  tokens?: number | null;
+  cost?: number | null;
+  firstSeenAt: string;
+  updatedAt: string;
+}
+// Phase D: inbox row. Derived, never a second model: approvals project from
+// approvalRequests, failures from messages with a failed or cancelled turn,
+// and mentions from channels whose hasMention flag is set. kind decides the
+// badge (approval amber, mention rose) with icon plus text, never color-only.
+// Deep-link target is channel-only via setActiveChannel; run and inbox
+// targets come later (recorded gap, never invented).
+export type inboxKind = 'approval' | 'failure' | 'mention';
+export interface inboxItem {
+  id: string;
+  kind: inboxKind;
+  title: string;
+  detail: string | null;
+  channelId: string | null;
+  runId: string | null;
+  approvalId: string | null;
+}
+
+// Phase E slice 1: per-channel composer draft. Text + mention ids + runtime +
+// mount snapshot only — attachment descriptors are EXCLUDED this slice (the
+// composer holds data-URL bulk in memory; persisting that bulk to
+// localStorage is a quota hazard, recorded as a gap for a later slice).
+// updatedAt marks the last local edit; the crowdos_drafts mirror is a
+// write-through cache, never the source of truth.
+export interface draftRow {
+  text: string;
+  mentionIds: string[];
+  runtime: string | null;
+  mountSnapshot: { path: string | null; source: string | null } | null;
+  updatedAt: string;
+}
+
+// Phase E slice 1: queued offline send. status is queued while waiting for
+// reconnect, failed only when the flush emit itself throws — never silent
+// loss: failed rows stay listed until the user retries or discards them.
+export type outboxStatus = 'queued' | 'failed';
+export interface outboxEntry {
+  id: string;
+  channelId: string;
+  content: string;
+  mentionIds: string[];
+  runtimeMode: string | null;
+  queuedAt: string;
+  status: outboxStatus;
+}
+
+// Phase E slice 1: follow-up scope while a run is active. 'current' targets
+// the in-flight run, 'next' the following turn. Default is 'next'.
+export type appliesTo = 'current' | 'next';
 
 const BACKEND_URL = '';
 
@@ -114,6 +189,160 @@ function schedulePersistSeqCursors(map: Record<string, number>) {
       else persistSeqCursors(map);
     } catch { persistSeqCursors(map); }
   }, 500);
+}
+
+// Phase D: jobs-mirror persistence. Resumable rows survive restart through
+// this localStorage mirror (same pattern as the other store slices); fresh
+// run.status_changed events overwrite stale rows on reconnect, and the cap
+// keeps the mirror bounded. No server endpoint is involved.
+const JOBS_MIRROR_KEY = 'crowdos_jobs_by_run';
+const JOBS_MIRROR_CAP = 200;
+
+function loadJobsByRun(): Record<string, jobRow> {
+  if (typeof localStorage === 'undefined') return {};
+  try {
+    const raw = localStorage.getItem(JOBS_MIRROR_KEY);
+    if (!raw) return {};
+    const parsed: unknown = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
+    const out: Record<string, jobRow> = {};
+    for (const [key, value] of Object.entries(parsed as Record<string, unknown>)) {
+      if (!value || typeof value !== 'object') continue;
+      const row = value as Partial<jobRow>;
+      if (typeof row.runId !== 'string' || !row.runId) continue;
+      if (typeof row.channelId !== 'string' || !row.channelId) continue;
+      out[key] = {
+        runId: row.runId,
+        channelId: row.channelId,
+        agentIds: Array.isArray(row.agentIds)
+          ? row.agentIds.filter((a): a is string => typeof a === 'string')
+          : [],
+        runtime: typeof row.runtime === 'string' ? row.runtime : null,
+        status: typeof row.status === 'string' ? row.status : 'unknown',
+        step: typeof row.step === 'string' ? row.step : null,
+        elapsedMs: typeof row.elapsedMs === 'number' ? row.elapsedMs : null,
+        tokens: typeof row.tokens === 'number' ? row.tokens : null,
+        cost: typeof row.cost === 'number' ? row.cost : null,
+        firstSeenAt: typeof row.firstSeenAt === 'string' ? row.firstSeenAt : new Date().toISOString(),
+        updatedAt: typeof row.updatedAt === 'string' ? row.updatedAt : new Date().toISOString(),
+      };
+    }
+    return out;
+  } catch { return {}; }
+}
+
+function persistJobsByRun(map: Record<string, jobRow>) {
+  if (typeof localStorage === 'undefined') return;
+  try {
+    const rows = Object.values(map)
+      .sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1))
+      .slice(0, JOBS_MIRROR_CAP);
+    const capped: Record<string, jobRow> = {};
+    for (const row of rows) capped[row.runId] = row;
+    localStorage.setItem(JOBS_MIRROR_KEY, JSON.stringify(capped));
+  } catch {}
+}
+
+// Phase E slice 1: drafts write-through mirror. Same localStorage pattern as
+// the other store slices; safeSet routes quota failures through the taxonomy
+// eviction path instead of throwing. Debounced by the setDraft caller.
+const DRAFTS_MIRROR_KEY = 'crowdos_drafts';
+
+function loadDraftByChannel(): Record<string, draftRow> {
+  if (typeof localStorage === 'undefined') return {};
+  try {
+    const raw = localStorage.getItem(DRAFTS_MIRROR_KEY);
+    if (!raw) return {};
+    const parsed: unknown = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
+    const out: Record<string, draftRow> = {};
+    for (const [key, value] of Object.entries(parsed as Record<string, unknown>)) {
+      if (!value || typeof value !== 'object') continue;
+      const row = value as Partial<draftRow>;
+      out[key] = {
+        text: typeof row.text === 'string' ? row.text : '',
+        mentionIds: Array.isArray(row.mentionIds)
+          ? row.mentionIds.filter((a): a is string => typeof a === 'string')
+          : [],
+        runtime: typeof row.runtime === 'string' ? row.runtime : null,
+        mountSnapshot:
+          row.mountSnapshot && typeof row.mountSnapshot === 'object'
+            ? {
+                path: typeof (row.mountSnapshot as { path?: unknown }).path === 'string'
+                  ? (row.mountSnapshot as { path: string }).path
+                  : null,
+                source: typeof (row.mountSnapshot as { source?: unknown }).source === 'string'
+                  ? (row.mountSnapshot as { source: string }).source
+                  : null,
+              }
+            : null,
+        updatedAt: typeof row.updatedAt === 'string' ? row.updatedAt : new Date().toISOString(),
+      };
+    }
+    return out;
+  } catch { return {}; }
+}
+
+function persistDraftByChannel(map: Record<string, draftRow>) {
+  if (typeof localStorage === 'undefined') return;
+  try {
+    safeSet(DRAFTS_MIRROR_KEY, JSON.stringify(map));
+  } catch {}
+}
+
+let _persistDraftTimer: ReturnType<typeof setTimeout> | null = null;
+function schedulePersistDraftByChannel(map: Record<string, draftRow>) {
+  if (typeof localStorage === 'undefined') return;
+  if (_persistDraftTimer) return;
+  _persistDraftTimer = setTimeout(() => {
+    _persistDraftTimer = null;
+    try {
+      const idle = (globalThis as any).requestIdleCallback as ((cb: () => void) => void) | undefined;
+      if (idle) idle(() => persistDraftByChannel(map));
+      else persistDraftByChannel(map);
+    } catch { persistDraftByChannel(map); }
+  }, 500);
+}
+
+// Phase E slice 1: outbox write-through mirror. Queued rows must survive
+// restart, so the mirror persists synchronously on every mutation (small
+// payloads only — content is already capped at 4000 chars by the composer).
+const OUTBOX_MIRROR_KEY = 'crowdos_outbox';
+
+function loadOutbox(): outboxEntry[] {
+  if (typeof localStorage === 'undefined') return [];
+  try {
+    const raw = localStorage.getItem(OUTBOX_MIRROR_KEY);
+    if (!raw) return [];
+    const parsed: unknown = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    const out: outboxEntry[] = [];
+    for (const value of parsed) {
+      if (!value || typeof value !== 'object') continue;
+      const row = value as Partial<outboxEntry>;
+      if (typeof row.id !== 'string' || !row.id) continue;
+      if (typeof row.channelId !== 'string' || !row.channelId) continue;
+      out.push({
+        id: row.id,
+        channelId: row.channelId,
+        content: typeof row.content === 'string' ? row.content : '',
+        mentionIds: Array.isArray(row.mentionIds)
+          ? row.mentionIds.filter((a): a is string => typeof a === 'string')
+          : [],
+        runtimeMode: typeof row.runtimeMode === 'string' ? row.runtimeMode : null,
+        queuedAt: typeof row.queuedAt === 'string' ? row.queuedAt : new Date().toISOString(),
+        status: row.status === 'failed' ? 'failed' : 'queued',
+      });
+    }
+    return out;
+  } catch { return []; }
+}
+
+function persistOutbox(rows: outboxEntry[]) {
+  if (typeof localStorage === 'undefined') return;
+  try {
+    safeSet(OUTBOX_MIRROR_KEY, JSON.stringify(rows));
+  } catch {}
 }
 
 function isChannelMutedLS(channelId: string): boolean {
@@ -303,6 +532,7 @@ interface CrowdOSState {
   activeChannelId: string | null;
   selectedAgentId: string | null;
   selectedSandboxFile: string | null;
+  selectedSandboxRoot: 'effective' | 'workspace-local' | null;
   filesystemRevision: number;
   rightPanelView: rightPanelView;
   leftSidebarCollapsed: boolean;
@@ -430,7 +660,7 @@ interface CrowdOSState {
   reorderCategory: (categoryId: string, direction: 'up' | 'down') => Promise<void>;
   reorderChannel: (channelId: string, direction: 'up' | 'down') => Promise<void>;
 
-  setSelectedSandboxFile: (file: string | null) => void;
+  setSelectedSandboxFile: (file: string | null, root?: 'effective' | 'workspace-local' | null) => void;
   incrementFilesystemRevision: () => void;
 
   // Tools Setup Toggle
@@ -467,6 +697,69 @@ interface CrowdOSState {
   fetchArtifacts: (runId: string) => Promise<void>;
   applyDiff: (artifactId: string) => Promise<void>;
   revertDiff: (artifactId: string) => Promise<void>;
+  // Phase C: one busy token shared by DiffViewer + CheckpointRow + drawer.
+  // Non-null means a diff mutation is in flight; all mutators disable on it.
+  diffBusy: string | null;
+  setDiffBusy: (busy: string | null) => void;
+  // Phase C: last diff-mutation failure, with cause. Cleared on next attempt.
+  diffError: string | null;
+  setDiffError: (message: string | null) => void;
+  clearDiffError: () => void;
+  // Phase C: run-wide apply / restore over the existing per-artifact
+  // transport (applyFileContent / deleteFile). Failures stop the sequence
+  // and land in diffError - never an unhandled rejection.
+  applyAllDiffs: (runId: string) => Promise<void>;
+  restoreRun: (runId: string) => Promise<void>;
+  // Phase C: confirmed-restore audit trail (runId -> time + files touched).
+  // The store is the source: no restore/audit endpoint exists server-side.
+  restoreAuditByRun: Record<string, { restoredAt: string; files: string[] }>;
+  // Phase C: runId -> server runtimeType from run.status_changed (real payload,
+  // e.g. coding | swarm). Unknown runs stay absent; callers hide, never guess.
+  runRuntimeByRun: Record<string, string>;
+
+  // Phase D: jobs slice, projected from the SAME run.status_changed ingestion
+  // the header will use (never a second run model). Runtime comes from
+  // runRuntimeByRun; step/tokens/cost stay null unless a real source provides
+  // them (artifacts carry no usage fields, so the view renders a dash, never
+  // a zero or an estimate). firstSeenAt is kept so elapsedMs is honest
+  // wall-clock observation between the first and latest status event. No
+  // pauseRun: no server pause endpoint exists (routes/runs.ts exposes only
+  // resume/compensations/get), so Stop (existing cancelRun transport) +
+  // Retry (existing POST resume) are the only actions.
+  jobsByRun: Record<string, jobRow>;
+  setJobsByRun: (runId: string, patch: Partial<jobRow>) => void;
+  stopRun: (runId: string) => void;
+  // Phase D: inbox Later flag, local-only (no server defer endpoint exists).
+  // Deferred approval ids hide from Pending but stay listed under Later.
+  inboxDeferred: Record<string, true>;
+  deferLater: (approvalId: string) => void;
+  undeferInbox: (approvalId: string) => void;
+  // Phase D: inboxItems DERIVED selector, not a stored slice. Projects live
+  // from approvalRequests plus message failures plus channel mentions, so the
+  // inbox can never drift into a second approval model.
+  inboxItems: () => inboxItem[];
+
+  // Phase E slice 1: per-channel drafts (store is source; crowdos_drafts is
+  // a debounced write-through mirror). Attachment descriptors excluded this
+  // slice (data-URL bulk quota hazard, recorded gap). No composer/sidebar
+  // wiring in this slice.
+  draftByChannel: Record<string, draftRow>;
+  setDraft: (channelId: string, patch: Partial<Omit<draftRow, 'updatedAt'>>) => void;
+  clearDraft: (channelId: string) => void;
+
+  // Phase E slice 1: offline outbox. queueSend appends a queued row;
+  // flushOutbox emits queued rows in queuedAt order after gap replay
+  // (called from the socket connect handler), idempotent by entry id.
+  // Emit failures mark the row failed — rows stay listed, never silent loss.
+  outbox: outboxEntry[];
+  queueSend: (entry: { channelId: string; content: string; mentionIds?: string[]; runtimeMode?: string | null }) => string;
+  flushOutbox: () => void;
+  removeOutboxEntry: (id: string) => void;
+
+  // Phase E slice 1: follow-up scope while a run is active. Default 'next'.
+  // Composer wiring comes in a later slice.
+  appliesTo: Record<string, appliesTo>;
+  setAppliesTo: (channelId: string, scope: appliesTo) => void;
 
   // UX-4 Edit/regenerate/retry
   editResend: (originalMessageId: string, newContent: string) => void;
@@ -544,6 +837,13 @@ const initialSelectedMode: ComposerMode = (() => {
   const parsedInstructionModules = storedInstructionModules ? JSON.parse(storedInstructionModules) : initialInstructionModules;
   const parsedModelModules = storedModelModules ? JSON.parse(storedModelModules) : initialModelModules;
   const parsedToolkitModules = storedToolkitModules ? JSON.parse(storedToolkitModules) : initialToolkitModules;
+  // Phase D: jobs mirror rehydration so resumable rows survive restart.
+  const parsedJobsByRun = loadJobsByRun();
+  // Phase E slice 1: drafts + outbox mirrors rehydrated so per-channel
+  // drafts and queued sends survive restart. Composer/sidebar wiring
+  // arrives in a later slice; the store is the source either way.
+  const parsedDraftByChannel = loadDraftByChannel();
+  const parsedOutbox = loadOutbox();
   // Resolve active channel — hash > persisted > first channel
   const currentWS = parsedWorkspaces.find((w: Workspace) => w.id === parsedActiveId);
   const storedChannelId = typeof localStorage !== 'undefined' ? localStorage.getItem('crowdos_active_channel') : null;
@@ -662,6 +962,13 @@ const initialSelectedMode: ComposerMode = (() => {
       emitChannelJoinDebounced(activeCh);
       wasDisconnected = false;
     }
+    // Phase E slice 1: outbox flush runs AFTER gap replay (wasDisconnected
+    // branch) so replayed history lands first; on a fresh connect the
+    // setActiveChannel refetch already covered history, so flush here too
+    // — otherwise restart-queued rows would wait a full disconnect cycle.
+    // flushOutbox dedupes by entry id within the flush and marks emit
+    // failures failed (never silent loss).
+    try { get().flushOutbox(); } catch {}
   });
 
   socket.on('disconnect', () => {
@@ -1390,12 +1697,60 @@ const initialSelectedMode: ComposerMode = (() => {
   socket.on('run.status_changed' as any, (raw: any) => {
     const { payload, seq } = unwrapEnvelope(raw);
     if (!payload) return;
+    // Phase C: record the server runtime for this run (real payload data).
+    // Message metadata carries only runId, so this map is the gate source.
+    const statusRunId = (payload as any).runId as string | undefined;
+    const statusRuntime = (payload as any).runtimeType as unknown;
+    if (statusRunId && typeof statusRuntime === 'string' && statusRuntime !== '') {
+      const rt = statusRuntime;
+      set((state: any) => ({
+        runRuntimeByRun: state.runRuntimeByRun[statusRunId] === rt
+          ? state.runRuntimeByRun
+          : { ...state.runRuntimeByRun, [statusRunId]: rt },
+      }));
+    }
     const channelId = payload.channelId as string | undefined;
     const agentId = payload.agentId as string | undefined;
     const status = (payload.status ?? payload.to) as string | undefined;
     if (typeof seq === 'number' && channelId) persistSeq(channelId, seq);
     if (!channelId || !status) return;
     const st = String(status).toLowerCase();
+    // Phase D: project the jobs slice from this SAME ingestion (never a
+    // second run model). step/tokens/cost stay null: no payload or artifact
+    // field carries them, so the view renders a dash, never a zero.
+    // elapsedMs is honest wall-clock observation between the first and
+    // latest event for the run.
+    if (statusRunId) {
+      const nowIso = new Date().toISOString();
+      const prevJob = get().jobsByRun[statusRunId] as jobRow | undefined;
+      const prevAgentIds = prevJob?.agentIds ?? [];
+      const nextAgentIds = agentId && !prevAgentIds.includes(agentId)
+        ? [...prevAgentIds, agentId]
+        : prevAgentIds;
+      const firstSeenAt = prevJob?.firstSeenAt ?? nowIso;
+      const seenMs = Date.parse(firstSeenAt);
+      const nowMs = Date.parse(nowIso);
+      const nextJob: jobRow = {
+        runId: statusRunId,
+        channelId,
+        agentIds: nextAgentIds,
+        runtime: (typeof statusRuntime === 'string' && statusRuntime !== '')
+          ? statusRuntime
+          : (prevJob?.runtime ?? get().runRuntimeByRun[statusRunId] ?? null),
+        status: String(status),
+        step: prevJob?.step ?? null,
+        elapsedMs: Number.isFinite(seenMs) && Number.isFinite(nowMs)
+          ? Math.max(0, nowMs - seenMs)
+          : null,
+        tokens: prevJob?.tokens ?? null,
+        cost: prevJob?.cost ?? null,
+        firstSeenAt,
+        updatedAt: nowIso,
+      };
+      const nextJobs = { ...get().jobsByRun, [statusRunId]: nextJob };
+      set({ jobsByRun: nextJobs });
+      persistJobsByRun(nextJobs);
+    }
     if (st === 'cancelled') {
       if (agentId) {
         if (streamParsers[agentId]) delete streamParsers[agentId];
@@ -1451,7 +1806,9 @@ const initialSelectedMode: ComposerMode = (() => {
       }
       if (typeof document !== 'undefined' && typeof Notification !== 'undefined') {
         try {
-          if (!isChannelMutedLS(channelId) && (document.hidden || (typeof document.hasFocus === 'function' && !document.hasFocus()))) {
+          // Phase D: mute-aware via the structured isChannelMuted map (same
+          // LS source as isChannelMutedLS, never raw LS reads at call sites).
+          if (!get().isChannelMuted(channelId) && (document.hidden || (typeof document.hasFocus === 'function' && !document.hasFocus()))) {
             if (Notification.permission === 'default') {
               Notification.requestPermission().catch(() => {});
             }
@@ -1459,7 +1816,19 @@ const initialSelectedMode: ComposerMode = (() => {
               const agentName = get().agents.find((a: Agent) => a.id === agentId)?.name || 'Agent';
               const title = st === 'completed' ? `Run completed: ${agentName}` : `Run failed: ${agentName}`;
               const body = `Channel #${channelId} • ${st}`;
-              try { new Notification(title, { body }); } catch {}
+              // Phase D: click routes to the run/channel deep-link
+              // (best-effort dynamic import, never breaks the shell).
+              // No native bridge: window.crowdos exposes invoke/on +
+              // pickDirectory only, no notify channel — recorded gap.
+              try {
+                const noteRunId = (payload as any).runId as string | undefined;
+                const note = new Notification(title, { body });
+                note.onclick = () => {
+                  try {
+                    void import('../src/config/deep-link').then((m) => m.applyDeepLink({ channelId, runId: noteRunId }));
+                  } catch {}
+                };
+              } catch {}
             }
           }
         } catch {}
@@ -1502,6 +1871,7 @@ const initialSelectedMode: ComposerMode = (() => {
     activeChannelId: initialChannelId,
     selectedAgentId: null,
     selectedSandboxFile: null,
+    selectedSandboxRoot: null,
     filesystemRevision: 0,
     rightPanelView: 'roster' as rightPanelView,
     leftSidebarCollapsed: false,
@@ -1528,6 +1898,26 @@ const initialSelectedMode: ComposerMode = (() => {
     // UX-2 Approval cards + UX-3 Diff review
     approvalRequests: [] as ApprovalRequest[],
     artifactsByRun: {} as Record<string, ArtifactRow[]>,
+    // Phase C: one busy token shared by every diff mutator (DiffViewer,
+    // CheckpointRow, drawer). Non-null means a mutation is in flight.
+    diffBusy: null,
+    // Phase C: last diff-mutation failure, cause included. Cleared on retry.
+    diffError: null,
+    // Phase C: confirmed-restore audit trail, keyed by run.
+    restoreAuditByRun: {},
+    // Phase C: runtime per run, from run.status_changed payloads.
+    runRuntimeByRun: {},
+
+    // Phase D: jobs slice, rehydrated from the local mirror so resumable rows
+    // survive restart. Fresh run.status_changed events overwrite stale rows.
+    jobsByRun: parsedJobsByRun,
+    inboxDeferred: {},
+
+    // Phase E slice 1: drafts + outbox + follow-up scope. Store is source;
+    // crowdos_drafts / crowdos_outbox mirrors are write-through caches.
+    draftByChannel: parsedDraftByChannel,
+    outbox: parsedOutbox,
+    appliesTo: {},
 
     cancelRun: (channelId: string, agentId?: string) => {
       const targetChannel = channelId || get().activeChannelId;
@@ -3252,7 +3642,11 @@ const initialSelectedMode: ComposerMode = (() => {
       set({ workspaces: updatedWorkspaces });
     },
 
-    setSelectedSandboxFile: (file) => set({ selectedSandboxFile: file }),
+    setSelectedSandboxFile: (file, root) =>
+      set((state) => ({
+        selectedSandboxFile: file,
+        selectedSandboxRoot: file === null ? null : (root ?? state.selectedSandboxRoot ?? 'effective'),
+      })),
     incrementFilesystemRevision: () => set(state => ({ filesystemRevision: state.filesystemRevision + 1 })),
 
     // Tool toggling status
@@ -3426,6 +3820,277 @@ const initialSelectedMode: ComposerMode = (() => {
         }
       }
       get().incrementFilesystemRevision();
+    },
+
+    setDiffBusy: (busy) => {
+      set({ diffBusy: busy } as any);
+    },
+
+    clearDiffError: () => {
+      set({ diffError: null } as any);
+    },
+    setDiffError: (message) => {
+      set({ diffError: message } as any);
+    },
+
+    applyAllDiffs: async (runId) => {
+      const token = 'apply-all:' + runId;
+      set({ diffBusy: token, diffError: null } as any);
+      try {
+        const rows = (get().artifactsByRun[runId] || []) as ArtifactRow[];
+        const diffs = rows.filter((a) => a.artifactType === 'diff' || a.patch);
+        for (const art of diffs) {
+          if (!art.path) continue;
+          await get().applyDiff(art.id);
+        }
+      } catch (err: any) {
+        set({ diffError: err?.message || 'Failed to apply all diffs' } as any);
+      } finally {
+        set({ diffBusy: null } as any);
+      }
+    },
+
+    restoreRun: async (runId) => {
+      const token = 'restore:' + runId;
+      set({ diffBusy: token, diffError: null } as any);
+      try {
+        const rows = (get().artifactsByRun[runId] || []) as ArtifactRow[];
+        const diffs = rows.filter((a) => a.artifactType === 'diff' || a.patch || a.path);
+        const files: string[] = [];
+        for (const art of diffs) {
+          if (!art.path) continue;
+          await get().revertDiff(art.id);
+          if (!files.includes(art.path)) files.push(art.path);
+        }
+        // Phase C audit path: a confirmed restore leaves a timestamped
+        // entry (run + files + time) that CheckpointRow renders back.
+        set((state: any) => ({
+          restoreAuditByRun: {
+            ...state.restoreAuditByRun,
+            [runId]: { restoredAt: new Date().toISOString(), files },
+          },
+        }));
+      } catch (err: any) {
+        set({ diffError: err?.message || 'Failed to restore run' } as any);
+      } finally {
+        set({ diffBusy: null } as any);
+      }
+    },
+
+    setJobsByRun: (runId, patch) => {
+      if (!runId) return;
+      const nowIso = new Date().toISOString();
+      const prev = get().jobsByRun[runId] as jobRow | undefined;
+      const firstSeenAt = prev?.firstSeenAt
+        ?? (typeof patch.firstSeenAt === 'string' ? patch.firstSeenAt : nowIso);
+      const merged: jobRow = {
+        runId,
+        channelId: patch.channelId ?? prev?.channelId ?? '',
+        agentIds: patch.agentIds ?? prev?.agentIds ?? [],
+        runtime: patch.runtime !== undefined ? patch.runtime : (prev?.runtime ?? null),
+        status: patch.status ?? prev?.status ?? 'unknown',
+        step: patch.step !== undefined ? patch.step : (prev?.step ?? null),
+        elapsedMs: patch.elapsedMs !== undefined ? patch.elapsedMs : (prev?.elapsedMs ?? null),
+        tokens: patch.tokens !== undefined ? patch.tokens : (prev?.tokens ?? null),
+        cost: patch.cost !== undefined ? patch.cost : (prev?.cost ?? null),
+        firstSeenAt,
+        updatedAt: nowIso,
+      };
+      // Channel-less rows are not renderable; skip rather than store them.
+      if (!merged.channelId) return;
+      const nextJobs = { ...get().jobsByRun, [runId]: merged };
+      set({ jobsByRun: nextJobs });
+      persistJobsByRun(nextJobs);
+    },
+
+    // Phase D: Stop reuses the existing cancelRun transport (socket
+    // user:cancel). No pauseRun: the server exposes no pause endpoint
+    // (routes/runs.ts has only resume/compensations/get), so Stop + Retry
+    // (existing POST /api/runs/:id/resume via retryRun) are the only actions.
+    stopRun: (runId) => {
+      const job = get().jobsByRun[runId] as jobRow | undefined;
+      const channelId = job?.channelId || get().activeChannelId;
+      if (!channelId) return;
+      const agentId = job && job.agentIds.length === 1 ? job.agentIds[0] : undefined;
+      get().cancelRun(channelId, agentId);
+    },
+
+    // Phase D: inbox Later flag, local-only (no server defer endpoint
+    // exists). Deferred approval ids hide from Pending but stay listed
+    // under Later; the flag survives re-renders as store state and is
+    // derived, never a second approval model.
+    deferLater: (approvalId) => {
+      if (!approvalId) return;
+      set((state: any) => ({
+        inboxDeferred: { ...state.inboxDeferred, [approvalId]: true as const },
+      }));
+    },
+
+    undeferInbox: (approvalId) => {
+      if (!approvalId) return;
+      set((state: any) => {
+        if (!state.inboxDeferred[approvalId]) return state;
+        const next = { ...state.inboxDeferred };
+        delete next[approvalId];
+        return { inboxDeferred: next };
+      });
+    },
+
+    // Phase E slice 1: per-channel draft setter. Merges the patch over the
+    // existing row, stamps updatedAt, and debounces the crowdos_drafts
+    // write-through mirror (same 500ms debounce shape as the seq-cursor
+    // mirror). No composer/sidebar wiring in this slice.
+    setDraft: (channelId, patch) => {
+      if (!channelId) return;
+      const prev = (get().draftByChannel[channelId] || {}) as Partial<draftRow>;
+      const next: Record<string, draftRow> = {
+        ...get().draftByChannel,
+        [channelId]: {
+          text: patch.text !== undefined ? patch.text : (prev.text ?? ''),
+          mentionIds: patch.mentionIds !== undefined
+            ? patch.mentionIds.filter((a): a is string => typeof a === 'string')
+            : (prev.mentionIds ?? []),
+          runtime: patch.runtime !== undefined ? patch.runtime : (prev.runtime ?? null),
+          mountSnapshot: patch.mountSnapshot !== undefined ? patch.mountSnapshot : (prev.mountSnapshot ?? null),
+          updatedAt: new Date().toISOString(),
+        },
+      };
+      set({ draftByChannel: next });
+      schedulePersistDraftByChannel(next);
+    },
+
+    clearDraft: (channelId) => {
+      if (!channelId) return;
+      if (!get().draftByChannel[channelId]) return;
+      const next = { ...get().draftByChannel };
+      delete next[channelId];
+      set({ draftByChannel: next });
+      schedulePersistDraftByChannel(next);
+    },
+
+    // Phase E slice 1: offline outbox. queueSend appends a queued row and
+    // persists synchronously (restart must not lose queued sends).
+    // flushOutbox emits queued rows in queuedAt order via the existing
+    // user:message transport; idempotent by entry id (replayed server
+    // history dedupes by message id on merge). Emit failures mark the row
+    // failed and persist — failed rows stay listed, never silent loss.
+    queueSend: (entry) => {
+      const id = `outbox-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`;
+      const row: outboxEntry = {
+        id,
+        channelId: entry.channelId,
+        content: entry.content,
+        mentionIds: Array.isArray(entry.mentionIds)
+          ? entry.mentionIds.filter((a): a is string => typeof a === 'string')
+          : [],
+        runtimeMode: typeof entry.runtimeMode === 'string' ? entry.runtimeMode : (entry.runtimeMode ?? null),
+        queuedAt: new Date().toISOString(),
+        status: 'queued',
+      };
+      const next = [...get().outbox, row];
+      set({ outbox: next });
+      persistOutbox(next);
+      return id;
+    },
+
+    flushOutbox: () => {
+      const pending = get().outbox.filter((e) => e.status === 'queued');
+      if (pending.length === 0) return;
+      const ordered = [...pending].sort((a, b) => (a.queuedAt < b.queuedAt ? -1 : 1));
+      const seen = new Set<string>();
+      for (const entry of ordered) {
+        if (seen.has(entry.id)) continue;
+        seen.add(entry.id);
+        try {
+          socket.emit('user:message' as any, {
+            channelId: entry.channelId,
+            content: entry.content,
+            mentions: entry.mentionIds,
+            mode: entry.runtimeMode,
+            runtimeMode: entry.runtimeMode,
+            outboxId: entry.id,
+          } as any);
+        } catch {
+          const next = get().outbox.map((e) =>
+            e.id === entry.id ? { ...e, status: 'failed' as outboxStatus } : e
+          );
+          set({ outbox: next });
+          persistOutbox(next);
+        }
+      }
+    },
+
+    removeOutboxEntry: (id) => {
+      if (!id) return;
+      const next = get().outbox.filter((e) => e.id !== id);
+      if (next.length === get().outbox.length) return;
+      set({ outbox: next });
+      persistOutbox(next);
+    },
+
+    // Phase E slice 1: follow-up scope setter. Default 'next' is applied
+    // by readers when the channel has no explicit entry.
+    setAppliesTo: (channelId, scope) => {
+      if (!channelId) return;
+      if (scope !== 'current' && scope !== 'next') return;
+      set((state: any) => ({
+        appliesTo: { ...state.appliesTo, [channelId]: scope },
+      }));
+    },
+
+    // Phase D: inboxItems DERIVED projector (not a stored slice).
+    // Approvals project live from approvalRequests (pending only, deferred
+    // hidden); failures from messages whose turnStatus is failed/cancelled;
+    // mentions from channels with hasMention set (top-level + categories).
+    // Deep-link target is channel-only via setActiveChannel; run/inbox
+    // targets come later (recorded gap, never invented).
+    inboxItems: () => {
+      const state = get();
+      const deferred = state.inboxDeferred as Record<string, true>;
+      const out: inboxItem[] = [];
+      for (const req of state.approvalRequests as ApprovalRequest[]) {
+        if (req.status !== 'pending') continue;
+        if (deferred[req.id]) continue;
+        out.push({
+          id: 'approval:' + req.id,
+          kind: 'approval',
+          title: req.tool + ' approval requested',
+          detail: req.riskClass,
+          channelId: req.channelId ?? null,
+          runId: req.runId,
+          approvalId: req.id,
+        });
+      }
+      for (const msg of state.messages as Message[]) {
+        const st = (msg as Message).turnStatus;
+        if (st !== 'failed' && st !== 'cancelled') continue;
+        out.push({
+          id: 'failure:' + msg.id,
+          kind: 'failure',
+          title: st === 'failed' ? 'Run failed' : 'Run cancelled',
+          detail: msg.content ? msg.content.slice(0, 120) : null,
+          channelId: msg.channelId,
+          runId: (msg.metadata as any)?.runId ?? null,
+          approvalId: null,
+        });
+      }
+      for (const ws of state.workspaces as Workspace[]) {
+        const top = (ws.channels || []) as Channel[];
+        const cats = (ws.categories || []).flatMap((c: Category) => c.channels || []) as Channel[];
+        for (const ch of [...top, ...cats]) {
+          if (!ch.hasMention) continue;
+          out.push({
+            id: 'mention:' + ch.id,
+            kind: 'mention',
+            title: 'Mention in #' + ch.name,
+            detail: null,
+            channelId: ch.id,
+            runId: null,
+            approvalId: null,
+          });
+        }
+      }
+      return out;
     },
 
     editResend: (originalMessageId, newContent) => {

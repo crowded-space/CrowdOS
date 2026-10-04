@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Pencil, Check, X } from 'lucide-react';
+import { Pencil, Check, X, History } from 'lucide-react';
 import MentionParser from './MentionParser';
 import AttachmentsView from './AttachmentsView';
 import { Attachment } from '@/types/crowdOs';
@@ -12,9 +12,12 @@ interface HumanMessageProps {
   timestamp: string;
   attachments?: Attachment[];
   mentions?: string[];
+  originalMessageId?: string;
+  editedFrom?: string;
+  editedAt?: string;
 }
 
-export default function HumanMessage({ id, authorName, content, timestamp, attachments, mentions }: HumanMessageProps) {
+export default function HumanMessage({ id, authorName, content, timestamp, attachments, mentions, originalMessageId, editedFrom, editedAt }: HumanMessageProps) {
   const timeStr = new Date(timestamp).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
   const editResend = useCrowdOSStore(s => s.editResend);
   const [editing, setEditing] = useState(false);
@@ -26,9 +29,28 @@ export default function HumanMessage({ id, authorName, content, timestamp, attac
     setEditing(false);
   }
 
+  // Provenance (UX S9): edit = new turn, never a silent rewrite. Render the
+  // edited-from link only when a real source id is present; otherwise render
+  // nothing (honest empty, never a dead link).
+  const editedSourceId = originalMessageId || editedFrom || undefined;
+  const showEditedFrom = typeof editedSourceId === 'string' && editedSourceId.length > 0;
+
+  function scrollToOriginal() {
+    if (!showEditedFrom) return;
+    const target = (editedSourceId as string);
+    const el = document.querySelector('[data-message-id="' + target + '"]')
+      || document.getElementById('grouped-msg-' + target)
+      || document.getElementById('message-' + target)
+      || document.getElementById(target);
+    if (el && typeof (el as HTMLElement).scrollIntoView === 'function') {
+      (el as HTMLElement).scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+  }
+
   return (
     <div 
       id={`human-message-${authorName}`}
+      data-message-id={id}
       className="group relative flex gap-3 p-3.5 sm:p-4 border-l-[3px] border-amber-500/90 bg-amber-500/[0.06] rounded-2xl rounded-l-[10px] hover:bg-amber-500/[0.08] transition border-y border-r border-amber-500/10"
     >
       <div className="flex-1 space-y-1.5 min-w-0">
@@ -42,6 +64,18 @@ export default function HumanMessage({ id, authorName, content, timestamp, attac
           <span className="text-[11px] text-zinc-500 font-mono ml-auto sm:ml-0">
             {timeStr}
           </span>
+          {showEditedFrom && (
+            <button
+              type="button"
+              onClick={scrollToOriginal}
+              title="Edited from an earlier message — jump to the original" 
+              aria-label="Edited from an earlier message — jump to the original"
+              className="inline-flex items-center gap-1 text-[10px] font-mono text-zinc-400 hover:text-amber-200 underline underline-offset-2 decoration-dotted cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-amber-500/30 rounded"
+            >
+              <History size={10} aria-hidden="true" />
+              <span>Edited from earlier message</span>
+            </button>
+          )}
         </div>
         {editing ? (
           <div className="space-y-2">

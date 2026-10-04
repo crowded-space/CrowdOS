@@ -342,13 +342,14 @@ const TreeView: React.FC<TreeViewProps> = ({
 export default function FileExplorer() {
   const {
     activeWorkspaceId, activeChannelId, agents,
-    selectedSandboxFile, setSelectedSandboxFile, filesystemRevision,
+    selectedSandboxFile, selectedSandboxRoot, setSelectedSandboxFile, filesystemRevision,
     incrementFilesystemRevision,
   } = useCrowdOSStore(useShallow((s) => ({
     activeWorkspaceId: s.activeWorkspaceId,
     activeChannelId: s.activeChannelId,
     agents: s.agents,
     selectedSandboxFile: s.selectedSandboxFile,
+    selectedSandboxRoot: s.selectedSandboxRoot,
     setSelectedSandboxFile: s.setSelectedSandboxFile,
     filesystemRevision: s.filesystemRevision,
     incrementFilesystemRevision: s.incrementFilesystemRevision,
@@ -549,8 +550,8 @@ export default function FileExplorer() {
             rows={repo.rows}
             childrenByPath={repo.childrenByPath}
             loadingPaths={repo.loadingPaths}
-            selectedPath={selectedSandboxFile}
-            onActivate={(entry) => setSelectedSandboxFile(entry.path)}
+            selectedPath={selectedSandboxRoot === 'workspace-local' ? null : selectedSandboxFile}
+            onActivate={(entry) => setSelectedSandboxFile(entry.path, 'effective')}
             onToggle={repo.toggle}
             ariaLabel="Repository files"
           />
@@ -558,8 +559,9 @@ export default function FileExplorer() {
       </div>
 
       {/* Zone A as a separate, labelled root — never folded into the tree above.
-          Read-only here: opening a file from it would need the viewer to carry
-          which root the path belongs to, and this panel only reports the zone. */}
+          Openable read-only: selection carries the workspace-local root so the
+          viewer reads the same directory the tree listed (never the effective
+          root), with an L0 badge plus a no-save guard. */}
       {l0Available && (
         <div className="shrink-0 border-t border-zinc-900">
           <button
@@ -596,8 +598,8 @@ export default function FileExplorer() {
                   rows={local.rows}
                   childrenByPath={local.childrenByPath}
                   loadingPaths={local.loadingPaths}
-                  selectedPath={null}
-                  onActivate={() => {}}
+                  selectedPath={selectedSandboxRoot === 'workspace-local' ? selectedSandboxFile : null}
+                  onActivate={(entry) => setSelectedSandboxFile(entry.path, 'workspace-local')}
                   onToggle={local.toggle}
                   ariaLabel="Workspace local files"
                 />

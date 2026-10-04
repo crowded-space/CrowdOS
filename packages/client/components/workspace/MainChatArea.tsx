@@ -5,8 +5,8 @@ import {
   Trash2, Send, PlusCircle, Smile,
   Paperclip, FileText, Image as ImageIcon, X,
   ChevronDown, ChevronUp,
-  Terminal, FileCode2, BellOff, ArrowDown, Sparkles, Square, Menu,
-  Maximize2, Minimize2
+  Terminal, FileCode2, ClipboardList, BarChart3, ArrowDown, Sparkles, Square, Menu,
+  Maximize2, Minimize2, FolderOpen, Telescope, CalendarDays
 } from 'lucide-react';
 import { useCrowdOSStore } from '@/stores/crowdOsStore';
 import MessageRouter from './messages/MessageRouter';
@@ -17,9 +17,71 @@ import { useToast } from '@/components/ui/ToastProvider';
 import ConfirmDialog from '@/components/ui/ConfirmDialog';
 import EmojiPickerPopover from './EmojiPickerPopover';
 import ModeSelector from './ModeSelector';
+import ComposerPreflight from './ComposerPreflight';
+import { overflowState, projectedSendLength, shortPath } from './composer-preflight-model';
+import { sourceHint, sourceLabel } from './explorer-model';
+import { StatusStrip } from './StatusStrip';
+import { loadOperatorProfile } from './operator-profile-model';
+import { apiClient } from '@/src/api/client';
 import ApprovalCard from './messages/ApprovalCard';
+import { RunCard } from './RunCard';
+import { RunHeader } from './RunHeader';
 import SandboxCodeViewer from './SandboxCodeViewer';
+import ThreadDrawer from './ThreadDrawer';
+import NotificationCenter, { useNotificationCenterBadge } from '@/components/ui/NotificationCenter';
 const DiffViewer = React.lazy(() => import('./DiffViewer'));
+const CheckpointRow = React.lazy(() => import('./CheckpointRow'));
+
+function dayKeyForTimestamp(ts: string | undefined | null): string | null {
+  if (!ts) return null;
+  const d = new Date(ts);
+  if (Number.isNaN(d.getTime())) return null;
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return y + '-' + m + '-' + day;
+}
+
+function formatDayDivider(ts: string): string {
+  const d = new Date(ts);
+  if (Number.isNaN(d.getTime())) return '';
+  const startOfDay = (x: Date) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
+  const diffDays = Math.round((startOfDay(new Date()) - startOfDay(d)) / 86400000);
+  if (diffDays === 0) return 'Today';
+  if (diffDays === 1) return 'Yesterday';
+  return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+}
+
+function DateDivider({ label }: { label: string }) {
+  return (
+    <div role="separator" aria-label={label} className="flex items-center gap-3 px-2 pt-2 select-none">
+      <span aria-hidden="true" className="h-px flex-1 bg-zinc-800/80" />
+      <span className="inline-flex items-center gap-1.5 text-[10px] font-mono uppercase tracking-wider text-zinc-500">
+        <CalendarDays size={11} aria-hidden="true" />
+        <span>{label}</span>
+      </span>
+      <span aria-hidden="true" className="h-px flex-1 bg-zinc-800/80" />
+    </div>
+  );
+}
+
+// Deliberately not rendered: the store keeps no honest unread anchor —
+// setActiveChannel zeroes unreadCount with no last-read message id, and
+// unreadCount is only a count, never a position. Rendering UnreadDivider
+// here would fabricate a marker, so date dividers are wired alone until a
+// real anchor exists.
+function UnreadDivider() {
+  return (
+    <div role="separator" aria-label="New messages" className="flex items-center gap-2 px-2 select-none">
+      <span aria-hidden="true" className="h-px flex-1 bg-indigo-500/40" />
+      <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded bg-indigo-500/10 border border-indigo-500/30 text-[10px] font-mono font-semibold text-indigo-300">
+        <Bell size={11} aria-hidden="true" />
+        <span>New messages</span>
+      </span>
+      <span aria-hidden="true" className="h-px flex-1 bg-rose-500/40" />
+    </div>
+  );
+}
 
 interface MainChatAreaProps {
   onOpenSearch?: () => void;
@@ -49,7 +111,15 @@ export default function MainChatArea({ onOpenSearch, onOpenSidebar }: MainChatAr
     cancelRun,
     cancellingByAgent,
     approvalRequests,
-    artifactsByRun
+    artifactsByRun,
+    jobsByRun,
+    draftByChannel,
+    setDraft,
+    clearDraft,
+    outbox,
+    queueSend,
+    appliesTo,
+    setAppliesTo
   } = useCrowdOSStore();
 
   const { showSuccess, showInfo, showError } = useToast();
@@ -126,6 +196,10 @@ export default function MainChatArea({ onOpenSearch, onOpenSidebar }: MainChatAr
   }, [sandboxView, showMentions, selectedSandboxFile]);
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
   const [confirmClearOpen, setConfirmClearOpen] = useState(false);
+  const [confirmOverflowOpen, setConfirmOverflowOpen] = useState(false);
+  const [openRunThreadId, setOpenRunThreadId] = useState<string | null>(null);
+  const [notificationCenterOpen, setNotificationCenterOpen] = useState(false);
+  const [mountScope, setMountScope] = useState<{ path: string | null; source: string | null }>({ path: null, source: null });
   const [mutedChannels, setMutedChannels] = useState<Record<string, boolean>>(() => {
     if (typeof localStorage === 'undefined') return {};
     try {
@@ -160,6 +234,39 @@ export default function MainChatArea({ onOpenSearch, onOpenSidebar }: MainChatAr
   const [isDragging, setIsDragging] = useState(false);
   const [selectedMentions, setSelectedMentions] = useState<Agent[]>([]);
   const [stickyMentionsByChannel, setStickyMentionsByChannel] = useState<Record<string, Agent[]>>({});
+
+  // Phase E: per-channel drafts. Load on channel switch; debounced save on
+  // change. Store is source; missing draft means empty composer (never a
+  // fabricated restore). Attachments stay local (data-URL bulk quota
+  // hazard); mount snapshot is display-only from Phase B mountScope.
+  const draftLoadedRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!activeChannelId) return;
+    const draft = draftByChannel[activeChannelId];
+    draftLoadedRef.current = activeChannelId;
+    setInputText(draft?.text ?? '');
+    if (draft?.mentionIds && draft.mentionIds.length > 0) {
+      const restored = agents.filter(a => draft.mentionIds!.includes(a.id));
+      setSelectedMentions(restored);
+    } else {
+      setSelectedMentions([]);
+    }
+    if (draft?.runtime === 'chat' || draft?.runtime === 'agentic' || draft?.runtime === 'coding' || draft?.runtime === 'research' || draft?.runtime === 'swarm' || draft?.runtime === 'auto') {
+      setMode(draft.runtime as any, activeChannelId);
+    }
+  }, [activeChannelId]);
+  useEffect(() => {
+    if (!activeChannelId || draftLoadedRef.current !== activeChannelId) return;
+    const timer = setTimeout(() => {
+      setDraft(activeChannelId, {
+        text: inputText,
+        mentionIds: selectedMentions.map(a => a.id),
+        runtime: selectedMode,
+        mountSnapshot: { path: mountScope.path, source: mountScope.source },
+      });
+    }, 500);
+    return () => clearTimeout(timer);
+  }, [inputText, selectedMentions, selectedMode, activeChannelId]);
 
   const endRef = useRef<HTMLDivElement>(null);
   const composerRef = useRef<HTMLTextAreaElement>(null);
@@ -276,8 +383,45 @@ export default function MainChatArea({ onOpenSearch, onOpenSidebar }: MainChatAr
     [messages, activeChannelId]
   );
 
+  // Phase E: active run per channel = latest non-terminal jobsByRun row in
+  // the active channel (SAME source as JobsView, never a second run model).
+  // Null hides the header: no active run means no header, never a forced one.
+  const activeRunId = useMemo(() => {
+    if (!activeChannelId) return null;
+    let latest: { runId: string; updatedAt: string } | null = null;
+    for (const job of Object.values(jobsByRun)) {
+      if (job.channelId !== activeChannelId) continue;
+      const st = String(job.status).toLowerCase();
+      if (st === 'completed' || st === 'failed' || st === 'cancelled') continue;
+      if (!latest || job.updatedAt > latest.updatedAt) latest = job;
+    }
+    return latest ? latest.runId : null;
+  }, [jobsByRun, activeChannelId]);
+
   // PERF-5: upward paging state (keyset cursor from store)
   const hasOlder = useCrowdOSStore(s => !!(activeChannelId && s.channelCursors[activeChannelId]));
+  // Phase B preflight: effective mount for the active channel. Read failures
+  // resolve to honest empty so the preflight hides the chip instead of
+  // inventing a path or blocking Send on a read error.
+  useEffect(() => {
+    let cancelled = false;
+    if (!activeChannelId) {
+      setMountScope({ path: null, source: null });
+      return;
+    }
+    setMountScope({ path: null, source: null });
+    void apiClient
+      .getWorkspaceRoot(activeWorkspaceId || 'default', activeChannelId, 'effective')
+      .then((scope) => {
+        if (!cancelled) setMountScope({ path: scope?.path ?? null, source: scope?.source ?? null });
+      })
+      .catch(() => {
+        if (!cancelled) setMountScope({ path: null, source: null });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeWorkspaceId, activeChannelId]);
   const isLoadingOlder = useCrowdOSStore(s => s.isLoadingOlder);
   const stickyMentions = activeChannelId ? (stickyMentionsByChannel[activeChannelId] || []) : [];
 
@@ -419,6 +563,29 @@ export default function MainChatArea({ onOpenSearch, onOpenSidebar }: MainChatAr
 
   const handleSend = () => {
     if (isSending) return;
+    // Phase E: offline queue. No connection means queue with will-send copy
+    // (flushOutbox emits after gap replay on reconnect); the composer keeps
+    // its text so nothing is silently lost.
+    if (typeof navigator !== 'undefined' && navigator.onLine === false && activeChannelId) {
+      queueSend({
+        channelId: activeChannelId,
+        content: inputText,
+        mentionIds: [...selectedMentions, ...((activeChannelId && stickyMentionsByChannel[activeChannelId]) || [])].map(a => a.id),
+        runtimeMode: selectedMode,
+      });
+      showInfo('Queued offline', 'Will send on reconnect.');
+      return;
+    }
+    // Overflow guard reads the PROJECTED send length (draft + mention prefix),
+    // not the raw draft: the textarea enforces maxLength while typing, so the
+    // prefix expansion is the only path past the cap. Confirm once via the
+    // existing ConfirmDialog, then send truncated like the legacy path.
+    const guardSticky = activeChannelId ? (stickyMentionsByChannel[activeChannelId] || []) : [];
+    const guardNames = [...selectedMentions, ...guardSticky].map((a) => a.name);
+    if (overflowState(projectedSendLength(inputText, guardNames), MAX_MESSAGE_LEN) === 'over' && !confirmOverflowOpen) {
+      setConfirmOverflowOpen(true);
+      return;
+    }
     const activeStickyMentions = activeChannelId ? (stickyMentionsByChannel[activeChannelId] || []) : [];
     if ((!inputText.trim() && attachments.length === 0 && selectedMentions.length === 0 && activeStickyMentions.length === 0) || !activeChannelId) return;
 
@@ -448,8 +615,8 @@ export default function MainChatArea({ onOpenSearch, onOpenSidebar }: MainChatAr
     addMessage({
       type: 'human',
       content: finalContent,
-      authorId: 'user-01',
-      authorName: 'Juan Hamzah',
+      authorId: 'local-operator',
+      authorName: loadOperatorProfile().name || 'Local operator',
       channelId: activeChannelId,
       attachments: attachments.length > 0 ? attachments : undefined,
       mentions: allMentions.length > 0 ? Array.from(new Set(allMentions.map(a => a.name))) : undefined,
@@ -461,6 +628,10 @@ export default function MainChatArea({ onOpenSearch, onOpenSidebar }: MainChatAr
     setAttachments([]);
     setSelectedMentions([]);
     setShowMentions(false);
+
+    // Phase E: a sent composer clears its persisted draft (store is source;
+    // the mirror write-through follows inside clearDraft).
+    if (activeChannelId) clearDraft(activeChannelId);
 
     // Return focus to the composer so rapid follow-up messages need zero clicks
     requestAnimationFrame(() => composerRef.current?.focus());
@@ -474,7 +645,33 @@ export default function MainChatArea({ onOpenSearch, onOpenSidebar }: MainChatAr
     requestAnimationFrame(() => composerRef.current?.focus());
   };
 
+  // Empty-hero capture cards: one-click deep-links to existing actions only.
+  // No new endpoints, no mock data; each card reuses a handler the chrome
+  // already owns (mention draft, mode switch, repo panel).
+  const l0Agent = agents.find(a => a.level === 0);
+  const handleAskL0 = () => {
+    if (l0Agent) handleQuickStart(l0Agent);
+  };
+  const handleRunResearch = () => {
+    if (activeChannelId) setMode('research', activeChannelId);
+    requestAnimationFrame(() => composerRef.current?.focus());
+  };
+  const handleReviewDiff = () => setRightPanelView('repo');
+  const handleMountFolder = () => setRightPanelView('repo');
+  const captureCardClass = 'flex items-start gap-2.5 p-3 min-h-[64px] rounded-xl bg-zinc-900 border border-zinc-800 hover:border-indigo-500/30 hover:bg-zinc-800/80 transition-colors duration-200 text-left text-zinc-200 cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500/30 active:scale-[0.98] shadow-sm disabled:cursor-not-allowed disabled:opacity-50 motion-reduce:transition-none motion-reduce:transform-none';
+
   const isChannelMuted = activeChannelId ? !!mutedChannels[activeChannelId] : false;
+
+  // Phase G: header badge over the persisted history journal (DND-gated).
+  const notificationBadge = useNotificationCenterBadge();
+  const unreadForBadge = notificationBadge.unreadCount;
+  const badgeLabel = notificationBadge.dndActive
+    ? notificationBadge.dndLabel + ', badge paused'
+    : unreadForBadge > 0
+      ? unreadForBadge > 99
+        ? '99+ unread notifications'
+        : unreadForBadge + ' unread notifications'
+      : 'No unread notifications';
 
   const toggleMuteChannel = () => {
     if (!activeChannelId) return;
@@ -499,6 +696,9 @@ export default function MainChatArea({ onOpenSearch, onOpenSidebar }: MainChatAr
   const canSend = !!(
     activeChannelId &&
     !isSending &&
+    // canSend intentionally does NOT include the overflow state: an over-limit
+    // draft must stay clickable so the guard can open the explicit confirm
+    // dialog. Blocking the button would hide the guard with no visible copy.
     (inputText.trim() ||
       attachments.length > 0 ||
       selectedMentions.length > 0 ||
@@ -584,12 +784,31 @@ export default function MainChatArea({ onOpenSearch, onOpenSidebar }: MainChatAr
     }
 
     const list: React.ReactNode[] = [];
+    let lastDividerDayKey: string | null = null;
     for (let i = 0; i < folded.length; i++) {
       const current = folded[i] as Folded;
       const prev = folded[i - 1] as Folded | undefined;
 
+      // Date divider on honest day change only: derived from the real
+      // message.timestamp via dayKeyForTimestamp/formatDayDivider.
+      // Orphan tool rows carry a fabricated client timestamp (flush at
+      // end stamps new Date()), so they never open a divider. No
+      // UnreadDivider here (no honest anchor — see note above it).
+      const isOrphanToolRow = current.id.startsWith('orphan-tool-');
+      const dayKey = dayKeyForTimestamp(current.timestamp);
+      if (!isOrphanToolRow && dayKey && dayKey !== lastDividerDayKey) {
+        lastDividerDayKey = dayKey;
+        const dividerLabel = formatDayDivider(current.timestamp);
+        if (dividerLabel) {
+          list.push(<DateDivider key={`day-${dayKey}`} label={dividerLabel} />);
+        }
+      }
+      const prevDayKey = prev ? dayKeyForTimestamp(prev.timestamp) : null;
+      const crossesDay = !!prev && !!dayKey && !!prevDayKey && dayKey !== prevDayKey;
+
       const isGroupable =
         prev &&
+        !crossesDay &&
         prev.authorId === current.authorId &&
         !current.id.startsWith('stream-') &&
         !current.metadata?.monologue &&
@@ -637,8 +856,13 @@ export default function MainChatArea({ onOpenSearch, onOpenSidebar }: MainChatAr
     return list;
   }, [currentMessages, agents]);
 
+  useEffect(() => {
+    setOpenRunThreadId(null);
+  }, [activeChannelId]);
+
   return (
-    <div id="main-chat-area" ref={chatRootRef} className="flex-1 bg-[#121214] flex flex-col h-full overflow-hidden relative">
+    <div className="flex-1 flex h-full overflow-hidden min-w-0">
+    <div id="main-chat-area" ref={chatRootRef} className="flex-1 bg-[#121214] flex flex-col h-full overflow-hidden relative min-w-0">
       {/* Top Channel Header Zone — thumb-friendly, safe */}
       <header className="min-h-[56px] border-b border-zinc-900/80 px-2.5 sm:px-4 flex items-center justify-between bg-[#121214]/95 backdrop-blur-xl shrink-0 select-none sticky top-0 z-10">
         <div className="flex items-center gap-2 sm:gap-3 min-w-0 flex-1">
@@ -705,24 +929,29 @@ export default function MainChatArea({ onOpenSearch, onOpenSidebar }: MainChatAr
             </button>
           )}
 
-          {/* Mute/Unmute Notifications Bell */}
+          {/* Notification center trigger (Phase G): opens history, not mute. Mute lives inside the center. */}
           <button
-            onClick={toggleMuteChannel}
-            aria-label={isChannelMuted ? 'Unmute channel' : 'Mute channel'}
-            aria-pressed={!!isChannelMuted}
-            className={`w-10 h-10 rounded-xl border flex items-center justify-center transition focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500/30 cursor-pointer hidden sm:flex active:scale-95 ${
-              isChannelMuted ? 'text-rose-400 bg-rose-500/10 border-rose-500/20 hover:bg-rose-500/15' : 'text-zinc-500 hover:text-zinc-300 bg-zinc-900/60 border-zinc-800/60 hover:bg-zinc-900'
-            }`}
-            title={isChannelMuted ? "Unmute Channel" : "Mute Channel Notifications"}
+            onClick={() => setNotificationCenterOpen(true)}
+            aria-label={notificationBadge.dndActive ? 'Notifications, ' + notificationBadge.dndLabel + ', badge paused' : badgeLabel}
+            title="Open notifications"
+            className="relative w-10 h-10 rounded-xl border flex items-center justify-center transition focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500/30 cursor-pointer hidden sm:flex active:scale-95 text-zinc-500 hover:text-zinc-300 bg-zinc-900/60 border-zinc-800/60 hover:bg-zinc-900"
           >
-            {isChannelMuted ? <BellOff size={16} /> : <Bell size={16} />}
+            <Bell size={16} aria-hidden="true" />
+            {!notificationBadge.dndActive && unreadForBadge > 0 && (
+              <span aria-hidden="true" className="absolute -top-1 -right-1 min-w-[18px] h-[18px] px-1 rounded-[4px] bg-indigo-500 text-white text-[10px] font-semibold flex items-center justify-center border border-indigo-400/50 tnum">
+                {unreadForBadge > 99 ? '99+' : String(unreadForBadge)}
+              </span>
+            )}
           </button>
 
-          {/* Desktop Right Sidebar Selector — segmented: roster vs repository panel */}
+
+          {/* Desktop Right Sidebar Selector — segmented: roster/repo/jobs/telemetry panel */}
           <div className="hidden xl:flex items-center bg-zinc-900 border border-zinc-800 rounded-xl p-1 ml-1 gap-1" role="tablist" aria-label="Right panel view">
             <button
+              id="right-panel-tab-roster"
               role="tab"
               aria-selected={rightPanelView === 'roster'}
+              aria-controls="right-panel-roster"
               onClick={() => setRightPanelView('roster')}
               aria-label="Show agent roster panel"
               className={`w-9 h-8 rounded-lg transition-colors cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500/30 flex items-center justify-center ${rightPanelView === 'roster' ? 'text-indigo-300 bg-indigo-500/15 border border-indigo-500/20' : 'text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800 border border-transparent active:bg-zinc-800'}`}
@@ -731,14 +960,40 @@ export default function MainChatArea({ onOpenSearch, onOpenSidebar }: MainChatAr
               <Users size={14} aria-hidden="true" />
             </button>
             <button
+              id="right-panel-tab-repo"
               role="tab"
               aria-selected={rightPanelView === 'repo'}
+              aria-controls="right-panel-repo"
               onClick={() => setRightPanelView('repo')}
               aria-label="Show repository panel"
               className={`w-9 h-8 rounded-lg transition-colors cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500/30 flex items-center justify-center ${rightPanelView === 'repo' ? 'text-indigo-300 bg-indigo-500/15 border border-indigo-500/20' : 'text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800 border border-transparent active:bg-zinc-800'}`}
               title="Show repository panel"
             >
               <Terminal size={14} aria-hidden="true" />
+            </button>
+            <button
+              id="right-panel-tab-jobs"
+              role="tab"
+              aria-selected={rightPanelView === 'jobs'}
+              aria-controls="right-panel-jobs"
+              onClick={() => setRightPanelView('jobs')}
+              aria-label="Show jobs panel"
+              className={`w-9 h-8 rounded-lg transition-colors cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500/30 flex items-center justify-center ${rightPanelView === 'jobs' ? 'text-indigo-300 bg-indigo-500/15 border border-indigo-500/20' : 'text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800 border border-transparent active:bg-zinc-800'}`}
+              title="Show jobs panel"
+            >
+              <ClipboardList size={14} aria-hidden="true" />
+            </button>
+            <button
+              id="right-panel-tab-telemetry"
+              role="tab"
+              aria-selected={rightPanelView === 'telemetry'}
+              aria-controls="right-panel-telemetry"
+              onClick={() => setRightPanelView('telemetry')}
+              aria-label="Show telemetry panel"
+              className={`w-9 h-8 rounded-lg transition-colors cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500/30 flex items-center justify-center ${rightPanelView === 'telemetry' ? 'text-indigo-300 bg-indigo-500/15 border border-indigo-500/20' : 'text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800 border border-transparent active:bg-zinc-800'}`}
+              title="Show telemetry panel"
+            >
+              <BarChart3 size={14} aria-hidden="true" />
             </button>
           </div>
         </div>
@@ -748,7 +1003,7 @@ export default function MainChatArea({ onOpenSearch, onOpenSidebar }: MainChatAr
       <ConfirmDialog
         open={confirmClearOpen}
         title="Clear Channel Audit Logs?"
-        description={`This action will clear all ${currentMessages.length} message logs in #${activeChannel?.name || 'this channel'}. This cannot be undone.`}
+        description={`This clears all ${currentMessages.length} messages in #${activeChannel?.name || 'this channel'} from this device view and the local mirror only. It does not delete server history: reopening the channel refetches /api/channels/:id/messages and cleared messages can return. Agent memory is untouched: history belongs to this session, memory belongs to each agent.`}
         confirmLabel="Clear Logs"
         isDanger={true}
         onConfirm={() => {
@@ -761,6 +1016,21 @@ export default function MainChatArea({ onOpenSearch, onOpenSidebar }: MainChatAr
         onCancel={() => setConfirmClearOpen(false)}
       />
 
+      {/* Phase B overflow confirm: projected send (draft + mention prefix) is over
+          the cap. Confirming sends with the legacy truncation; cancelling returns
+          to the composer with the draft intact. */}
+      <ConfirmDialog
+        open={confirmOverflowOpen}
+        title="Message exceeds the limit?"
+        description={`This send is projected past ${MAX_MESSAGE_LEN} characters once mention chips are prefixed. Confirming sends it truncated to ${MAX_MESSAGE_LEN} characters; cancelling keeps your draft intact.`}
+        confirmLabel="Send truncated"
+        onConfirm={() => {
+          setConfirmOverflowOpen(false);
+          handleSend();
+        }}
+        onCancel={() => setConfirmOverflowOpen(false)}
+      />
+
       {/* Message stream area — responsive padding, calm rhythm */}
       <div
         ref={scrollContainerRef}
@@ -769,6 +1039,11 @@ export default function MainChatArea({ onOpenSearch, onOpenSidebar }: MainChatAr
           selectedSandboxFile && sandboxView === 'full' ? 'py-0' : 'py-4 sm:py-6'
         } transition-[padding] duration-300 ease-[cubic-bezier(0.16,1,0.3,1)] space-y-3 sm:space-y-4 scrollbar-thin scroll-smooth overscroll-contain contain-paint select-text selection:bg-indigo-500/30 relative`}
       >
+        {activeRunId && (
+          <div className="sticky top-0 z-10">
+            <RunHeader runId={activeRunId} />
+          </div>
+        )}
         {reconnectDigest?.visible && (
           <div className="mx-auto max-w-xl flex items-center justify-between gap-3 px-3.5 py-2.5 rounded-xl bg-indigo-500/10 border border-indigo-500/20 text-xs font-sans text-indigo-200 shadow-sm">
             <span className="flex items-center gap-2 min-w-0">
@@ -798,9 +1073,20 @@ export default function MainChatArea({ onOpenSearch, onOpenSidebar }: MainChatAr
             return null;
           })();
           const diffArtifacts = latestRunId ? (artifactsByRun[latestRunId] || []).filter(a => a.artifactType === 'diff' || a.patch) : [];
+          // Phase C: the checkpoint gate reads the server runtime for the run
+          // (run.status_changed runtimeType, via runRuntimeByRun). Message
+          // metadata carries only the runId, never the runtime, so the gate
+          // hides instead of guessing when the runtime is unknown.
+          const latestRuntime = latestRunId ? (useCrowdOSStore.getState().runRuntimeByRun[latestRunId] ?? null) : null;
+          const showCheckpoint = latestRuntime === 'coding' || latestRuntime === 'swarm';
           if (diffArtifacts.length > 0 && latestRunId) {
             return (
-              <div className="mx-auto max-w-3xl w-full">
+              <div className="mx-auto max-w-3xl w-full space-y-2">
+                {showCheckpoint && (
+                  <React.Suspense fallback={<div className="p-3 text-xs text-zinc-500 animate-pulse">Loading checkpoint…</div>}>
+                    <CheckpointRow runId={latestRunId} runtime={latestRuntime as string} />
+                  </React.Suspense>
+                )}
                 <React.Suspense fallback={<div className="p-3 text-xs text-zinc-500 animate-pulse">Loading diffs…</div>}>
                   <DiffViewer runId={latestRunId} />
                 </React.Suspense>
@@ -808,6 +1094,25 @@ export default function MainChatArea({ onOpenSearch, onOpenSidebar }: MainChatAr
             );
           }
           return null;
+        })()}
+        {(() => {
+          const seen = new Set<string>();
+          const runIds: string[] = [];
+          for (const m of currentMessages) {
+            const rid = (m as any).metadata?.runId || (m as any).metadata?.run_id || (m as any).runId;
+            if (typeof rid === 'string' && rid && !seen.has(rid)) {
+              seen.add(rid);
+              runIds.push(rid);
+            }
+          }
+          if (runIds.length === 0) return null;
+          return (
+            <div className="mx-auto max-w-3xl w-full space-y-2">
+              {runIds.map((rid) => (
+                <RunCard key={rid} runId={rid} onOpenThread={(id) => setOpenRunThreadId(id)} onOpenDiff={() => setRightPanelView('repo')} />
+              ))}
+            </div>
+          );
         })()}
         {renderedMessages.length > 0 ? (
           renderedMessages
@@ -843,6 +1148,63 @@ export default function MainChatArea({ onOpenSearch, onOpenSidebar }: MainChatAr
                 ))}
               </div>
             )}
+
+            {/* Capture cards: one-click deep-links to existing actions only (no new endpoints) */}
+            <div className="relative grid grid-cols-1 min-[480px]:grid-cols-2 gap-2 mt-6 w-full max-w-md" role="group" aria-label="Suggested next actions">
+              <button
+                type="button"
+                onClick={handleAskL0}
+                disabled={!l0Agent}
+                aria-label={l0Agent ? 'Ask ' + l0Agent.name : 'Ask L0 (no L0 agent available)'}
+                title={l0Agent ? 'Draft @' + l0Agent.name + ' in the composer' : 'No L0 agent in this workspace yet'}
+                className={captureCardClass}
+              >
+                <Sparkles size={16} className="mt-0.5 shrink-0 text-amber-400" aria-hidden="true" />
+                <span className="min-w-0">
+                  <span className="block text-[13px] font-medium text-zinc-100">Ask L0</span>
+                  <span className="block text-[11px] text-zinc-500 truncate">{l0Agent ? '@' + l0Agent.name + ' in composer' : 'No L0 agent yet'}</span>
+                </span>
+              </button>
+              <button
+                type="button"
+                onClick={handleRunResearch}
+                aria-label="Run research in research mode"
+                title="Switch the composer to research mode"
+                className={captureCardClass}
+              >
+                <Telescope size={16} className="mt-0.5 shrink-0 text-fuchsia-400" aria-hidden="true" />
+                <span className="min-w-0">
+                  <span className="block text-[13px] font-medium text-zinc-100">Run research</span>
+                  <span className="block text-[11px] text-zinc-500">Research mode in composer</span>
+                </span>
+              </button>
+              <button
+                type="button"
+                onClick={handleReviewDiff}
+                aria-label="Review diffs in the repo panel"
+                title="Open the repo panel where diffs surface"
+                className={captureCardClass}
+              >
+                <FileCode2 size={16} className="mt-0.5 shrink-0 text-violet-400" aria-hidden="true" />
+                <span className="min-w-0">
+                  <span className="block text-[13px] font-medium text-zinc-100">Review diff</span>
+                  <span className="block text-[11px] text-zinc-500">Diffs in the repo panel</span>
+                </span>
+              </button>
+              <button
+                type="button"
+                onClick={handleMountFolder}
+                aria-label="Mount a folder from the repo panel"
+                title="Open the repo panel folder mount entry"
+                className={captureCardClass}
+              >
+                <FolderOpen size={16} className="mt-0.5 shrink-0 text-emerald-400" aria-hidden="true" />
+                <span className="min-w-0">
+                  <span className="block text-[13px] font-medium text-zinc-100">Mount folder</span>
+                  <span className="block text-[11px] text-zinc-500">Folder mount in repo panel</span>
+                </span>
+              </button>
+            </div>
 
             {isSwarmActive && (
               <div className="relative flex items-center gap-2 mt-6 px-3 py-1.5 rounded-md bg-emerald-500/10 border border-emerald-500/20 text-[11px] font-mono text-emerald-400">
@@ -1120,6 +1482,56 @@ export default function MainChatArea({ onOpenSearch, onOpenSidebar }: MainChatAr
             </div>
           )}
 
+          {/* Phase D strip (presentational, props only): runtime + mount +
+              cost/context + elapsed, directly above the preflight line and
+              the textarea. No store slice on purpose: the composer
+              already owns mountScope/mode, so props are the single source.
+              Mount/tooltips reuse the preflight + explorer view-models. */}
+          <StatusStrip
+            runtime={selectedMode}
+            pinned={isPinned}
+            mount={shortPath(mountScope.path) !== '' ? {
+              shortPath: shortPath(mountScope.path),
+              sourceLabel: sourceLabel(mountScope.source),
+              sourceHint: sourceHint(mountScope.source),
+              onOpen: () => setRightPanelView('repo'),
+            } : null}
+            contextPct={null}
+            onContextOpen={() => setRightPanelView('telemetry')}
+            tokens={null}
+            runCost={null}
+            onCostOpen={() => setRightPanelView('telemetry')}
+            elapsedMs={null}
+            runStartedAt={null}
+          />
+          {/* Phase B preflight line: status above the textarea, wired to Send. */}
+          <ComposerPreflight
+            mode={selectedMode}
+            resolvedTo={null}
+            pinnedAgents={stickyMentions.map((ag) => ({
+              agent: ag,
+              onRemove: (id: string) => {
+                if (activeChannelId) {
+                  setStickyMentionsByChannel((prev) => ({
+                    ...prev,
+                    [activeChannelId]: (prev[activeChannelId] || []).filter((m) => m.id !== id),
+                  }));
+                }
+              },
+            }))}
+            mount={{
+              path: mountScope.path,
+              source: mountScope.source,
+              onOpen: () => setRightPanelView('repo'),
+            }}
+            charCount={projectedSendLength(inputText, [...selectedMentions, ...stickyMentions].map((a) => a.name))}
+            maxChars={MAX_MESSAGE_LEN}
+            onOverflowConfirm={() => setConfirmOverflowOpen(true)}
+            contextPct={null}
+            contextBreakdown={null}
+            scope={null}
+            costHint={null}
+          />
           <textarea
             ref={composerRef}
             rows={1}
@@ -1140,6 +1552,26 @@ export default function MainChatArea({ onOpenSearch, onOpenSidebar }: MainChatAr
               <span className={`text-[10px] font-mono ${inputText.length > 3800 ? 'text-rose-400' : inputText.length > 3200 ? 'text-amber-400' : 'text-zinc-500'}`}>
                 {inputText.length}/{MAX_MESSAGE_LEN}
               </span>
+            </div>
+          )}
+
+          {/* Phase E: follow-up scope while a run is active. Queue-don't-lock:
+              the composer stays usable during runs; this chooses whether the
+              next send applies to the current run or starts the next turn. */}
+          {isSending && activeChannelId && (
+            <div className="flex items-center gap-1.5 px-4 pb-1.5" role="group" aria-label="Follow-up scope">
+              <span className="text-[10px] font-mono text-zinc-500">Applies to</span>
+              {(['current', 'next'] as const).map(scope => (
+                <button
+                  key={scope}
+                  type="button"
+                  onClick={() => setAppliesTo(activeChannelId, scope)}
+                  aria-pressed={(appliesTo[activeChannelId] ?? 'next') === scope}
+                  className={`px-2 py-1 text-[10px] font-mono rounded-md border transition cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500/30 ${(appliesTo[activeChannelId] ?? 'next') === scope ? 'bg-indigo-500/15 border-indigo-500/30 text-indigo-200' : 'bg-zinc-900 border-zinc-800 text-zinc-400 hover:text-zinc-200'}`}
+                >
+                  {scope === 'current' ? 'Current run' : 'Next turn'}
+                </button>
+              ))}
             </div>
           )}
 
@@ -1242,6 +1674,23 @@ export default function MainChatArea({ onOpenSearch, onOpenSidebar }: MainChatAr
           </div>
         </div>
       </div>
+    </div>
+    <NotificationCenter
+      open={notificationCenterOpen}
+      onClose={() => setNotificationCenterOpen(false)}
+      channelId={activeChannelId}
+      channelName={activeChannel?.name ?? null}
+      isChannelMuted={isChannelMuted}
+      onToggleMute={toggleMuteChannel}
+    />
+    {openRunThreadId && (
+      <ThreadDrawer
+        channelId={activeChannelId}
+        runId={openRunThreadId}
+        open
+        onClose={() => setOpenRunThreadId(null)}
+      />
+    )}
     </div>
   );
 }

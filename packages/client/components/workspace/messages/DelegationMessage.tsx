@@ -1,4 +1,4 @@
-import { GitFork, ArrowRight, Database, DollarSign } from 'lucide-react';
+import { GitFork, ArrowRight, Database, DollarSign, Coins } from 'lucide-react';
 import { DelegationInfo } from '@/types/crowdOs';
 import { useCrowdOSStore } from '@/stores/crowdOsStore';
 
@@ -10,8 +10,13 @@ interface DelegationMessageProps {
 export default function DelegationMessage({ delegationInfo, timestamp }: DelegationMessageProps) {
   if (!delegationInfo) return null;
 
-  const { openAgentProfileModal } = useCrowdOSStore();
+  const { openAgentProfileModal, setRightPanelView } = useCrowdOSStore();
   const { fromAgentId, fromAgentName, toAgentId, toAgentName, task, status, tokens, cost } = delegationInfo;
+  const hasTokens = typeof tokens === 'number' && Number.isFinite(tokens);
+  const tokensText = hasTokens ? tokens.toLocaleString() + ' tokens' : '\u2014';
+  const hasCost = typeof cost === 'number' && Number.isFinite(cost);
+  const costText = hasCost ? '$' + cost.toFixed(4) : '\u2014';
+  const openTelemetry = () => setRightPanelView('telemetry');
   const timeStr = new Date(timestamp).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
 
   const statusStyles = {
@@ -68,12 +73,25 @@ export default function DelegationMessage({ delegationInfo, timestamp }: Delegat
         <div className="flex items-center gap-3 text-zinc-400">
           <span className="flex items-center gap-1">
             <Database size={11} className="text-zinc-500" />
-            <span>{tokens.toLocaleString()} tokens</span>
+            <span>{tokensText}</span>
           </span>
-          <span className="flex items-center gap-0.5">
-            <DollarSign size={11} className="text-emerald-500" />
-            <span>${cost.toFixed(4)}</span>
-          </span>
+          {hasCost ? (
+            <button
+              type="button"
+              onClick={openTelemetry}
+              title="Open telemetry panel"
+              aria-label={'Open telemetry panel: delegation cost ' + costText}
+              className="flex items-center gap-0.5 rounded hover:text-emerald-300 hover:underline hover:underline-offset-2 transition motion-reduce:transition-none cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500/30"
+            >
+              <DollarSign size={11} className="text-emerald-500" aria-hidden="true" />
+              <span>{costText}</span>
+            </button>
+          ) : (
+            <span className="flex items-center gap-0.5" title="No ledger row for this delegation yet" aria-label="Delegation cost unavailable">
+              <DollarSign size={11} className="text-emerald-500" aria-hidden="true" />
+              <span>—</span>
+            </span>
+          )}
         </div>
         <span className={`px-2 py-0.5 rounded border text-[10px] font-medium ${statusStyles[status]}`}>
           {status}

@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Sparkles, MessageCircle, Bot, Terminal, Telescope, Network, Pin, Check, ChevronDown } from 'lucide-react';
 import type { ComposerMode } from '../../types/crowdOs';
+import { COMPOSER_MODE_META } from '../../types/crowdOs';
 
 export interface ModeSelectorProps {
   value: ComposerMode;
@@ -8,6 +9,8 @@ export interface ModeSelectorProps {
   isPinned: boolean;
   onTogglePin: () => void;
   disabled?: boolean;
+  /** Honest Auto slot: the runtime the Router would pick. Null hides it. */
+  autoResolvedTo?: string | null;
 }
 
 interface ModeOption {
@@ -29,12 +32,13 @@ const MODE_OPTIONS: ModeOption[] = [
   { id: 'swarm', label: 'Swarm', description: 'Large data · L3 worker delegation', icon: Network, accentColor: 'text-rose-400' }
 ];
 
-export default function ModeSelector({ value, onChange, isPinned, onTogglePin, disabled = false }: ModeSelectorProps) {
+export default function ModeSelector({ value, onChange, isPinned, onTogglePin, disabled = false, autoResolvedTo = null }: ModeSelectorProps) {
   const [isOpen, setIsOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
   const currentOption = MODE_OPTIONS.find((opt) => opt.id === value) || MODE_OPTIONS[0];
   const CurrentIcon = currentOption.icon;
+  const resolvedHint = typeof autoResolvedTo === 'string' && autoResolvedTo.trim() !== '' ? autoResolvedTo.trim() : '';
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -125,6 +129,8 @@ export default function ModeSelector({ value, onChange, isPinned, onTogglePin, d
           {MODE_OPTIONS.map((opt) => {
             const Icon = opt.icon;
             const isSelected = opt.id === value;
+            const meta = COMPOSER_MODE_META[opt.id];
+            const autoHint = opt.id === 'auto' && resolvedHint !== '' ? 'Would route to ' + resolvedHint : null;
             return (
               <button
                 key={opt.id}
@@ -144,7 +150,8 @@ export default function ModeSelector({ value, onChange, isPinned, onTogglePin, d
                   <Icon size={15} className={opt.accentColor} />
                   <div>
                     <div className="font-medium leading-none text-[12px]">{opt.label}</div>
-                    <div className="text-[10px] text-zinc-400 mt-0.5">{opt.description}</div>
+                    <div className="text-[10px] text-zinc-400 mt-0.5">{autoHint ?? meta.latency}</div>
+                    <div className="text-[10px] text-zinc-500 mt-0.5">{meta.cost} - {meta.scope}</div>
                   </div>
                 </div>
                 {isSelected && <Check size={14} className="text-indigo-400 shrink-0" />}

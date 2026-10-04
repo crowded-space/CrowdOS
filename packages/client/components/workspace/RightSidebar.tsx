@@ -7,9 +7,27 @@ import { useShallow } from 'zustand/react/shallow';
 import { BarChart3, Database, Coins, Activity, Network } from 'lucide-react';
 import AgentRow from './AgentRow';
 const FileExplorer = lazy(() => import('./FileExplorer'));
+import { JobsView } from './JobsView';
+import { OperationsInbox } from './OperationsInbox';
+
+// Terminal run states mirror JobsView/RunHeader (server run-state-machine).
+// Terminal rows render a static snapshot and hide Stop; only non-terminal
+// rows tick elapsed and offer Stop via the existing stopRun transport.
+// No pauseRun exists: routes/runs.ts exposes only resume/compensations/get.
+const TERMINAL_ROSTER_RUN_STATUSES = new Set(['completed', 'failed', 'cancelled']);
+
+// Roster excludes the Owl/librarian heartbeat indexing service: it is not
+// conversational (UX_GUIDELINE.md S1/S13) so it never appears as a chat
+// target. No owl-species rows exist client-side today; this filter keeps
+// that invariant if one ever arrives (exclusion reported in docs).
+function isServiceAgentRow(ag: { species?: string; name?: string }): boolean {
+  const species = String(ag.species ?? '').toLowerCase();
+  const name = String(ag.name ?? '').toLowerCase();
+  return species === 'owl' || species === 'librarian' || name === 'owl' || name === 'librarian';
+}
 
 export default function RightSidebar() {
-  const { agents, messages, activeChannelId, activeWorkspaceId, workspaces, openAgentProfileModal, rightPanelView } = useCrowdOSStore(useShallow(s => ({
+  const { agents, messages, activeChannelId, activeWorkspaceId, workspaces, openAgentProfileModal, rightPanelView, jobsByRun, stopRun, cancellingByAgent } = useCrowdOSStore(useShallow(s => ({
     agents: s.agents,
     messages: s.messages,
     activeChannelId: s.activeChannelId,
@@ -17,6 +35,9 @@ export default function RightSidebar() {
     workspaces: s.workspaces,
     openAgentProfileModal: s.openAgentProfileModal,
     rightPanelView: s.rightPanelView,
+    jobsByRun: s.jobsByRun,
+    stopRun: s.stopRun,
+    cancellingByAgent: s.cancellingByAgent,
   })));
   const { totalTokensConsumed } = useCrowdOSStore(useShallow(s => ({ totalTokensConsumed: s.totalTokensConsumed })));
   const shouldReduceMotion = useReducedMotion();
@@ -149,14 +170,59 @@ export default function RightSidebar() {
   }, [messages, telemetryTab, activeChannelId, agents, workspaces, activeWorkspaceId, totalTokensConsumed, ledger]);
 
 
-  // Filter agents into corporate tiers
-  const tierL0 = agents.filter(ag => ag.level === 0);
-  const tierL1 = agents.filter(ag => ag.level === 1);
-  const tierL2 = agents.filter(ag => ag.level === 2);
-  const tierL3 = agents.filter(ag => ag.level === 3);
+  // Filter agents into corporate tiers (service rows excluded via helper).
+  const visibleAgents = useMemo(() => agents.filter(ag => !isServiceAgentRow(ag)), [agents]);
+  const tierL0 = visibleAgents.filter(ag => ag.level === 0);
+  const tierL1 = visibleAgents.filter(ag => ag.level === 1);
+  const tierL2 = visibleAgents.filter(ag => ag.level === 2);
+  const tierL3 = visibleAgents.filter(ag => ag.level === 3);
 
   // Group level tags — hoisted to AgentRow component (memoized)
   const handleOpenAgent = useCallback((id: string) => openAgentProfileModal(id), [openAgentProfileModal]);
+  const handleStopRun = useCallback((runId: string) => stopRun(runId), [stopRun]);
+
+  // Presence-site run lookup: latest non-terminal job naming this agent wins,
+  // else the latest job of any status (static snapshot, Stop hidden). Reads
+  // the SAME jobsByRun projection JobsView/RunHeader use (run.status_changed),
+  // never a second run model; elapsed is honest wall-clock observation and
+  // cost renders a dash until a real source provides it (job.cost is null
+  // today). Owl/librarian species are roster-filtered, never chat targets.
+  const presenceByAgent = useMemo(() => {
+    const jobs = Object.values(jobsByRun ?? {}).sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1));
+    const byAgent = new Map<string, { runId: string; elapsedMs: number | null; cost: number | null; liveSince: string | null; live: boolean; stopping: boolean; canStop: boolean }>();
+    const cancellingKeys = Object.keys(cancellingByAgent ?? {});
+    for (const job of jobs) {
+      const terminal = TERMINAL_ROSTER_RUN_STATUSES.has(String(job.status).toLowerCase());
+      const stopping = cancellingKeys.some(k => k.startsWith(job.channelId + ':'));
+      for (const agentId of job.agentIds) {
+        const prev = byAgent.get(agentId);
+        // Jobs sorted newest-first: first live job wins; a terminal job only
+        // fills the slot when no live job named this agent.
+        if (!prev) {
+          byAgent.set(agentId, {
+            runId: job.runId,
+            elapsedMs: job.elapsedMs ?? null,
+            cost: job.cost ?? null,
+            liveSince: job.firstSeenAt ?? null,
+            live: !terminal,
+            stopping,
+            canStop: !terminal,
+          });
+        } else if (!prev.live && !terminal) {
+          byAgent.set(agentId, {
+            runId: job.runId,
+            elapsedMs: job.elapsedMs ?? null,
+            cost: job.cost ?? null,
+            liveSince: job.firstSeenAt ?? null,
+            live: true,
+            stopping,
+            canStop: true,
+          });
+        }
+      }
+    }
+    return byAgent;
+  }, [jobsByRun, cancellingByAgent]);
 
   // Respect reduced-motion: disable AnimatePresence spring when user prefers reduced motion
   const MotionDiv: any = shouldReduceMotion ? 'div' : motion.div;
@@ -165,15 +231,32 @@ export default function RightSidebar() {
     // Reduced-motion: no AnimatePresence spring, plain divs preserve UX quality statically
     if (rightPanelView === 'repo') {
       return (
-        <div className="w-[260px] flex flex-col h-full overflow-hidden shrink-0 border-l border-zinc-900 border-x-0">
+        <div id="right-panel-repo" role="tabpanel" aria-labelledby="right-panel-tab-repo" className="w-[260px] flex flex-col h-full overflow-hidden shrink-0 border-l border-zinc-900 border-x-0">
           <Suspense fallback={<div className="p-4 text-xs text-zinc-500 animate-pulse">Loading repository…</div>}>
             <FileExplorer />
           </Suspense>
         </div>
       );
     }
+    if (rightPanelView === 'jobs') {
+      return (
+        <div id="right-panel-jobs" role="tabpanel" aria-labelledby="right-panel-tab-jobs" className="w-[260px] bg-[#0c0c0e]/95 border-l border-zinc-900 flex flex-col h-full overflow-hidden select-none shrink-0">
+          <OperationsInbox />
+          <Suspense fallback={<div className="p-4 text-xs text-zinc-500 animate-pulse">Loading jobs...</div>}>
+            <JobsView />
+          </Suspense>
+        </div>
+      );
+    }
+    if (rightPanelView === 'telemetry') {
+      return (
+        <div id="right-panel-telemetry" role="tabpanel" aria-labelledby="right-panel-tab-telemetry" className="w-[260px] bg-[#0c0c0e]/95 border-l border-zinc-900 flex flex-col h-full overflow-hidden select-none shrink-0">
+          {renderTelemetry()}
+        </div>
+      );
+    }
     return (
-      <div id="right-sidebar" className="w-[260px] bg-[#0c0c0e]/95 border-l border-zinc-900 flex flex-col h-full overflow-hidden select-none shrink-0">
+      <div id="right-panel-roster" role="tabpanel" aria-labelledby="right-panel-tab-roster" className="w-[260px] bg-[#0c0c0e]/95 border-l border-zinc-900 flex flex-col h-full overflow-hidden select-none shrink-0">
         {renderRoster()}
       </div>
     );
@@ -188,20 +271,56 @@ export default function RightSidebar() {
           animate={{ opacity: 1, x: 0 }}
           exit={{ opacity: 0, x: -20 }}
           transition={{ duration: 0.15 }}
+          id="right-panel-repo"
+          role="tabpanel"
+          aria-labelledby="right-panel-tab-repo"
           className="w-[260px] flex flex-col h-full overflow-hidden shrink-0 border-l border-zinc-900 border-x-0"
         >
           <Suspense fallback={<div className="p-4 text-xs text-zinc-500 animate-pulse">Loading repository…</div>}>
             <FileExplorer />
           </Suspense>
         </motion.div>
+      ) : rightPanelView === 'jobs' ? (
+        <motion.div
+          key="jobs-view"
+          initial={{ opacity: 0, x: 20 }}
+          animate={{ opacity: 1, x: 0 }}
+          exit={{ opacity: 0, x: -20 }}
+          transition={{ duration: 0.15 }}
+          id="right-panel-jobs"
+          role="tabpanel"
+          aria-labelledby="right-panel-tab-jobs"
+          className="w-[260px] bg-[#0c0c0e]/95 border-l border-zinc-900 flex flex-col h-full overflow-hidden select-none shrink-0"
+        >
+          <OperationsInbox />
+          <Suspense fallback={<div className="p-4 text-xs text-zinc-500 animate-pulse">Loading jobs...</div>}>
+            <JobsView />
+          </Suspense>
+        </motion.div>
+      ) : rightPanelView === 'telemetry' ? (
+        <motion.div
+          key="telemetry-view"
+          initial={{ opacity: 0, x: 20 }}
+          animate={{ opacity: 1, x: 0 }}
+          exit={{ opacity: 0, x: -20 }}
+          transition={{ duration: 0.15 }}
+          id="right-panel-telemetry"
+          role="tabpanel"
+          aria-labelledby="right-panel-tab-telemetry"
+          className="w-[260px] bg-[#0c0c0e]/95 border-l border-zinc-900 flex flex-col h-full overflow-hidden select-none shrink-0"
+        >
+          {renderTelemetry()}
+        </motion.div>
       ) : (
-        <motion.div 
+        <motion.div
           key="roster-view"
           initial={{ opacity: 0, x: 20 }}
           animate={{ opacity: 1, x: 0 }}
           exit={{ opacity: 0, x: -20 }}
           transition={{ duration: 0.15 }}
-          id="right-sidebar"
+          id="right-panel-roster"
+          role="tabpanel"
+          aria-labelledby="right-panel-tab-roster"
           className="w-[260px] bg-[#0c0c0e]/95 border-l border-zinc-900 flex flex-col h-full overflow-hidden select-none shrink-0"
         >
           {renderRoster()}
@@ -222,7 +341,7 @@ export default function RightSidebar() {
           </span>
           Operations roster
         </h2>
-        <span className="tnum text-[11px] font-mono text-zinc-400 bg-zinc-900 border border-zinc-800 px-2 py-1 rounded-md">{agents.length}</span>
+        <span className="tnum text-[11px] font-mono text-zinc-400 bg-zinc-900 border border-zinc-800 px-2 py-1 rounded-md">{visibleAgents.length}</span>
       </div>
 
       {/* Roster Area — airy spacing, progressive disclosure */}
@@ -236,7 +355,24 @@ export default function RightSidebar() {
               <span className="tnum ml-auto text-[10px] font-mono font-medium bg-cyan-500/10 border border-cyan-500/20 text-cyan-300 px-1.5 py-0.5 rounded">{tierL0.length}</span>
             </h3>
             <div className="space-y-1">
-              {tierL0.map(ag => <AgentRow key={ag.id} {...ag} onOpen={handleOpenAgent} />)}
+              {tierL0.map(ag => {
+                const presence = presenceByAgent.get(ag.id);
+                return (
+                  <AgentRow
+                    key={ag.id}
+                    {...ag}
+                    onOpen={handleOpenAgent}
+                    runId={presence?.runId ?? null}
+                    elapsedMs={presence?.elapsedMs ?? null}
+                    cost={presence?.cost ?? null}
+                    liveSince={presence?.liveSince ?? null}
+                    live={presence?.live ?? false}
+                    stopping={presence?.stopping ?? false}
+                    canStop={presence?.canStop ?? false}
+                    onStop={handleStopRun}
+                  />
+                );
+              })}
             </div>
           </div>
         )}
@@ -250,7 +386,24 @@ export default function RightSidebar() {
               <span className="tnum ml-auto text-[10px] font-mono font-medium bg-rose-500/10 border border-rose-500/20 text-rose-300 px-1.5 py-0.5 rounded">{tierL1.length}</span>
             </h3>
             <div className="space-y-1">
-              {tierL1.map(ag => <AgentRow key={ag.id} {...ag} onOpen={handleOpenAgent} />)}
+              {tierL1.map(ag => {
+                const presence = presenceByAgent.get(ag.id);
+                return (
+                  <AgentRow
+                    key={ag.id}
+                    {...ag}
+                    onOpen={handleOpenAgent}
+                    runId={presence?.runId ?? null}
+                    elapsedMs={presence?.elapsedMs ?? null}
+                    cost={presence?.cost ?? null}
+                    liveSince={presence?.liveSince ?? null}
+                    live={presence?.live ?? false}
+                    stopping={presence?.stopping ?? false}
+                    canStop={presence?.canStop ?? false}
+                    onStop={handleStopRun}
+                  />
+                );
+              })}
             </div>
           </div>
         )}
@@ -264,7 +417,24 @@ export default function RightSidebar() {
               <span className="tnum ml-auto text-[10px] font-mono font-medium bg-indigo-500/10 border border-indigo-500/20 text-indigo-300 px-1.5 py-0.5 rounded">{tierL2.length}</span>
             </h3>
             <div className="space-y-1">
-              {tierL2.map(ag => <AgentRow key={ag.id} {...ag} onOpen={handleOpenAgent} />)}
+              {tierL2.map(ag => {
+                const presence = presenceByAgent.get(ag.id);
+                return (
+                  <AgentRow
+                    key={ag.id}
+                    {...ag}
+                    onOpen={handleOpenAgent}
+                    runId={presence?.runId ?? null}
+                    elapsedMs={presence?.elapsedMs ?? null}
+                    cost={presence?.cost ?? null}
+                    liveSince={presence?.liveSince ?? null}
+                    live={presence?.live ?? false}
+                    stopping={presence?.stopping ?? false}
+                    canStop={presence?.canStop ?? false}
+                    onStop={handleStopRun}
+                  />
+                );
+              })}
             </div>
           </div>
         )}
@@ -278,12 +448,29 @@ export default function RightSidebar() {
               <span className="tnum ml-auto text-[10px] font-mono font-medium bg-emerald-500/10 border border-emerald-500/20 text-emerald-300 px-1.5 py-0.5 rounded">{tierL3.length}</span>
             </h3>
             <div className="space-y-1">
-              {tierL3.map(ag => <AgentRow key={ag.id} {...ag} onOpen={handleOpenAgent} />)}
+              {tierL3.map(ag => {
+                const presence = presenceByAgent.get(ag.id);
+                return (
+                  <AgentRow
+                    key={ag.id}
+                    {...ag}
+                    onOpen={handleOpenAgent}
+                    runId={presence?.runId ?? null}
+                    elapsedMs={presence?.elapsedMs ?? null}
+                    cost={presence?.cost ?? null}
+                    liveSince={presence?.liveSince ?? null}
+                    live={presence?.live ?? false}
+                    stopping={presence?.stopping ?? false}
+                    canStop={presence?.canStop ?? false}
+                    onStop={handleStopRun}
+                  />
+                );
+              })}
             </div>
           </div>
         )}
 
-        {agents.length === 0 && (
+        {visibleAgents.length === 0 && (
           <div className="text-center py-12 px-4">
             <div className="w-12 h-12 rounded-lg bg-zinc-900 border border-zinc-800 flex items-center justify-center mx-auto mb-3 text-zinc-500" aria-hidden="true">
               <Network size={18} aria-hidden="true" />
@@ -294,8 +481,25 @@ export default function RightSidebar() {
         )}
       </div>
 
-      {/* Bottom Telemetry Dashboard — readable, airy */}
-      <section aria-labelledby="telemetry-heading" className="bg-[#09090b] border-t border-zinc-900 p-4 space-y-3.5 shrink-0 select-none">
+      </>
+    );
+  }
+
+  function renderTelemetry() {
+    return (
+      <>
+      {/* Title — telemetry graduated from roster footer to its own view */}
+      <div className="px-4 py-3.5 border-b border-zinc-900 flex items-center justify-between shrink-0 select-none">
+        <h2 id="right-panel-telemetry-heading" className="text-[13px] font-medium text-zinc-300 flex items-center gap-2">
+          <span className="w-7 h-7 rounded-lg bg-zinc-900 border border-zinc-800 flex items-center justify-center" aria-hidden="true">
+            <BarChart3 size={12} className="text-zinc-500" aria-hidden="true" />
+          </span>
+          Telemetry
+        </h2>
+      </div>
+
+      {/* Graduated telemetry — Channel/Global tablist moved out of the roster footer; 30s ledger poll + offline honesty intact */}
+      <section aria-labelledby="telemetry-heading" className="bg-[#09090b] p-4 space-y-3.5 flex-1 overflow-y-auto scrollbar-thin overscroll-contain select-none">
         <div className="flex items-center justify-between">
           <h2 id="telemetry-heading" className="text-[13px] font-medium text-zinc-300 flex items-center gap-1.5">
             <BarChart3 size={12} className="text-zinc-500" aria-hidden="true" />

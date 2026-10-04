@@ -46,7 +46,7 @@ export function ApprovalCard({ approval }: { approval: ApprovalRequest }) {
   return (
     <div
       id={`approval-${approval.id}`}
-      className="max-w-xl mx-auto border border-amber-500/25 bg-amber-500/[0.04] rounded-xl my-3 overflow-hidden shadow-md"
+      className={isPending ? "max-w-xl mx-auto border border-amber-500/25 bg-amber-500/[0.04] rounded-xl my-3 overflow-hidden shadow-md animate-pulse-slow motion-reduce:animate-none" : "max-w-xl mx-auto border border-amber-500/25 bg-amber-500/[0.04] rounded-xl my-3 overflow-hidden shadow-md"}
     >
       <div className="flex items-center justify-between px-3.5 py-2.5 border-b border-amber-500/15 bg-amber-500/[0.06]">
         <div className="flex items-center gap-2 text-amber-300 text-[12px] font-semibold">

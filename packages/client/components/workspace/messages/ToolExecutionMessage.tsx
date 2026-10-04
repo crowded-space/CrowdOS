@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { Settings, ChevronDown, ChevronUp, Cpu, Timer, Copy, Check } from 'lucide-react';
 import { ToolExecution } from '@/types/crowdOs';
+import { RedactedText } from './RedactedText';
 
 interface ToolExecutionMessageProps {
   toolExecution?: ToolExecution;
@@ -132,8 +133,9 @@ export default function ToolExecutionMessage({ toolExecution, timestamp, inline 
               </button>
             </div>
             <pre className="p-2.5 rounded bg-zinc-900/60 font-mono text-[10px] overflow-x-auto max-h-40 scrollbar-thin text-zinc-300 pointer-events-auto leading-relaxed">
-              {input}
+              <RedactedText text={input} mono />
             </pre>
+            <pre className="hidden">x</pre>
           </div>
 
           {(output || isWorking) && (
@@ -155,7 +157,7 @@ export default function ToolExecutionMessage({ toolExecution, timestamp, inline 
               <pre className={`p-2.5 rounded font-mono text-[10px] overflow-x-auto max-h-60 scrollbar-thin border border-zinc-900 pointer-events-auto leading-normal ${
                 isWorking ? 'bg-zinc-900/40 text-amber-300/80 animate-pulse' : isSuccess ? 'bg-zinc-900 text-teal-300/95' : 'bg-zinc-900 text-rose-350'
               }`}>
-                {isWorking ? 'Executing in virtual sandbox container...' : output}
+                {isWorking ? 'Executing in virtual sandbox container...' : (output ? <RedactedText text={output} mono /> : null)}
               </pre>
             </div>
           )}

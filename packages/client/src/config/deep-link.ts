@@ -9,9 +9,17 @@
 // Electron preload bridge (`crowdos:deep-link` with `{ url }` payload)
 // and applies them through the same visibility checks as handlePopState.
 
+/** Right-panel target a deep-link can request. `inbox` renders in the
+ * jobs branch (OperationsInbox above JobsView), so apply maps it to
+ * `jobs`; the parsed value keeps `inbox` so callers stay honest. */
+export type deepLinkView = 'jobs' | 'inbox' | 'telemetry';
+
 export interface DeepLinkParsed {
   workspaceId?: string;
   channelId?: string;
+  runId?: string;
+  inboxId?: string;
+  view?: deepLinkView;
 }
 
 function stripQuotes(s: string): string {
@@ -50,6 +58,27 @@ function parseHashBody(hash: string): DeepLinkParsed | null {
     if (m && m[1]) return { channelId: decodeId(m[1]) };
     return null;
   }
+  // Phase D: run/inbox/view targets (additive; channel shapes above unchanged).
+  // #run=<id> -> { runId }; #inbox=<id> -> { inboxId, view: 'inbox' };
+  // #view=jobs|inbox|telemetry -> { view }.
+  if (body.includes('run=')) {
+    const m = body.match(/run=([^&/]+)/);
+    if (m && m[1]) return { runId: decodeId(m[1]) };
+    return null;
+  }
+  if (body.includes('inbox=')) {
+    const m = body.match(/inbox=([^&/]+)/);
+    if (m && m[1]) return { inboxId: decodeId(m[1]), view: 'inbox' };
+    return null;
+  }
+  if (body.includes('view=')) {
+    const m = body.match(/view=([^&/]+)/);
+    if (m && m[1]) {
+      const v = decodeId(m[1]).toLowerCase();
+      if (v === 'jobs' || v === 'inbox' || v === 'telemetry') return { view: v };
+    }
+    return null;
+  }
   const parts = body.split('/').map((p) => decodeId(p.trim())).filter(Boolean);
   if (parts.length === 0) return null;
   if (parts.length === 1) return { channelId: parts[0] };
@@ -80,6 +109,25 @@ function parseCrowdosScheme(url: string): DeepLinkParsed | null {
     if (!channelId) return null;
     return { channelId };
   }
+  // Phase D: run/inbox/view targets (additive; w/c shapes above unchanged).
+  // run|r -> { runId }; inbox -> { inboxId (+view) } or bare { view: 'inbox' };
+  // jobs|telemetry -> { view }. No new endpoints; apply maps inbox->jobs.
+  if (head === 'run' || head === 'r') {
+    const runId = parts[1];
+    if (!runId) return null;
+    return { runId };
+  }
+  if (head === 'inbox') {
+    const inboxId = parts[1];
+    if (inboxId) return { inboxId, view: 'inbox' };
+    return { view: 'inbox' };
+  }
+  if (head === 'jobs') {
+    return { view: 'jobs' };
+  }
+  if (head === 'telemetry') {
+    return { view: 'telemetry' };
+  }
   // Fallback: bare crowdos://<channel> or crowdos://<workspace>/<channel>
   if (parts.length === 1) return { channelId: parts[0] };
   return { workspaceId: parts[0], channelId: parts[parts.length - 1] };
@@ -91,6 +139,10 @@ function parseCrowdosScheme(url: string): DeepLinkParsed | null {
  * - crowdos://w/<workspaceId>/<channelId?>
  * - crowdos://c/<channelId>
  * - #/<workspace>/<channel> / #<channel> (hash forms)
+ * Phase D (additive):
+ * - crowdos://run/<runId> (alias r), crowdos://inbox/<inboxId?>,
+ *   crowdos://jobs, crowdos://telemetry
+ * - #run=<id>, #inbox=<id>, #view=jobs|inbox|telemetry
  */
 export function parseDeepLink(url: string): DeepLinkParsed | null {
   if (typeof url !== 'string') return null;
@@ -118,7 +170,9 @@ export async function applyDeepLink(parsed: DeepLinkParsed | null | undefined): 
   if (!parsed) return;
   const workspaceId = parsed.workspaceId;
   const channelId = parsed.channelId;
-  if (!workspaceId && !channelId) return;
+  const runId = parsed.runId;
+  const view = parsed.view;
+  if (!workspaceId && !channelId && !runId && !view && !parsed.inboxId) return;
   try {
     // Dynamic import avoids a static cycle with the store.
     const { useCrowdOSStore } = await import('../../stores/crowdOsStore');
@@ -127,7 +181,7 @@ export async function applyDeepLink(parsed: DeepLinkParsed | null | undefined): 
       const exists = state.workspaces.some((w) => w.id === workspaceId);
       if (exists) {
         await state.enterWorkspace(workspaceId);
-        return;
+        // Phase D: fall through so channel/view/run still apply post-enter.
       }
     }
     if (channelId && channelId !== useCrowdOSStore.getState().activeChannelId) {
@@ -140,6 +194,15 @@ export async function applyDeepLink(parsed: DeepLinkParsed | null | undefined): 
       if (visibleIds.has(channelId)) {
         await cur.setActiveChannel(channelId);
       }
+    }
+    // Phase D: view targets (inbox renders in the jobs branch; run diffs
+    // load via the existing fetchArtifacts transport, best-effort).
+    if (view) {
+      const target = view === 'inbox' ? 'jobs' : view;
+      try { useCrowdOSStore.getState().setRightPanelView(target as 'jobs' | 'telemetry'); } catch {}
+    }
+    if (runId) {
+      try { await useCrowdOSStore.getState().fetchArtifacts(runId); } catch {}
     }
   } catch {
     // Best-effort: deep-links must never break the shell.

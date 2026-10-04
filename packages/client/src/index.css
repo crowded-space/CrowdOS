@@ -175,11 +175,29 @@ button:focus:not(:focus-visible), a:focus:not(:focus-visible) {
   .skeleton::after { animation: none; }
 }
 
+/* Motion budget (single-pulse rule): during a swarm at most one surface
+   pulses — the approval card until decided. The channel mention dot uses
+   .pulse-once (one 1.2s pulse on arrival, then static). Roster rows tick
+   elapsed time without pulsing. Toasts fade, never pulse, max 3 stacked.
+   prefers-reduced-motion collapses all of these to static. */
+@keyframes pulse-once {
+  0% { opacity: 1; }
+  50% { opacity: 0.35; }
+  100% { opacity: 1; }
+}
+.pulse-once { animation: pulse-once 1.2s ease-in-out 1 forwards; }
+@media (prefers-reduced-motion: reduce) {
+  .pulse-once { animation: none; }
+}
+
 @keyframes pulse-slow {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.55; }
 }
 .animate-pulse-slow { animation: pulse-slow 3s ease-in-out infinite; }
+@media (prefers-reduced-motion: reduce) {
+  .animate-pulse-slow { animation: none; }
+}
 
 /* Respect reduced motion */
 @media (prefers-reduced-motion: reduce) {

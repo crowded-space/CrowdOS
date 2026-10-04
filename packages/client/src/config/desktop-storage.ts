@@ -25,6 +25,8 @@
 // | 17 | crowdos_toolkit_modules          | unknown  | module cache, refetchable                                    |
 // | 18 | crowdos_constraints_modules      | unknown  | module cache, refetchable                                    |
 // | 19 | crowdos_capabilities_modules     | unknown  | module cache, refetchable                                    |
+// | 20 | crowdos_drafts                   | cursor   | Phase E slice 1 per-channel drafts (text+mentions+runtime+mount) |
+// | 21 | crowdos_outbox                   | cursor   | Phase E slice 1 queued offline sends, restart-survival        |
 // | —  | theme/sidebar keys               | ui-pref* | none found in grep; reserved — append here if added later    |
 //
 // Classification: `ui-pref` = tiny prefs that stay in localStorage and are
@@ -61,6 +63,8 @@ export const MUTE_KEY_PREFIX = 'crowdos_mute_';
 export const CURSOR_KEYS: readonly string[] = [
   'crowdos_seq_cursors',
   'crowdos_messages',
+  'crowdos_drafts',
+  'crowdos_outbox',
 ];
 
 function hasLocalStorage(): boolean {

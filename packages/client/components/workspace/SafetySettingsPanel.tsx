@@ -53,6 +53,22 @@ export default function SafetySettingsPanel({ targetType, targetId }: Props) {
       <div className="flex items-center gap-2 text-xs font-semibold text-zinc-200"><Shield size={14} className="text-amber-400" /> FS safety: {targetType}</div>
       <p className="text-[11px] text-zinc-500">Choose which FS operations require approval before execution. Agent will show warning and wait for: <span className="text-zinc-300">Always Allow</span> / <span className="text-zinc-300">Allow on Channel</span> / <span className="text-zinc-300">Allow on Workspace</span> / <span className="text-zinc-300">Session</span>.</p>
 
+      {/* Retention banner (surfacing only): this panel sets FS approval policy.
+          It runs no retention engine and no DLP scanner, and it never deletes
+          server history, scans content, or exports audit data. Static, no motion. */}
+      <div role="note" aria-label="Retention and data handling" className="flex items-start gap-2 rounded-lg border border-amber-500/25 bg-amber-500/5 px-2.5 py-2">
+        <AlertTriangle size={13} className="mt-0.5 shrink-0 text-amber-400" aria-hidden="true" />
+        <div className="min-w-0">
+          <p className="text-[11px] font-semibold text-amber-200">No automatic retention or DLP scanning here</p>
+          <ul className="mt-1 space-y-1 text-[11px] leading-snug text-zinc-400">
+            <li>History belongs to the session/channel: clearing a channel removes the local view and local mirror only — the server copy can return on refetch.</li>
+            <li>Memory belongs to each agent: clearing history never clears agent memory.</li>
+            <li>File restores revert to the checkpoint snapshot with a timestamped note; they do not restore cleared history.</li>
+            <li>{targetType === 'channel' ? 'Channel scope: this covers only this channel\'s session history; other channels keep their own.' : 'Workspace scope: each channel keeps its own session history; this panel does not merge them.'}</li>
+          </ul>
+        </div>
+      </div>
+
       <div className="space-y-2">
         <div className="text-[11px] font-semibold text-zinc-400">Require approval for</div>
         {(['write','delete','execute'] as const).map((op) => (

@@ -512,6 +512,46 @@ export const apiClient = {
     );
   },
 
+  /** The raw mount record for one category — mirrors getChannelMount. */
+  async getCategoryMount(categoryId: string): Promise<MountInfoDto> {
+    return fetchJsonOrThrow<MountInfoDto>(
+      `${BACKEND_URL}/api/categories/${encodeURIComponent(categoryId)}/mount`,
+      { method: 'GET' },
+      'Failed to read the category mount'
+    );
+  },
+
+  /** The raw mount record for one workspace — mirrors getChannelMount. */
+  async getWorkspaceMount(workspaceId: string): Promise<MountInfoDto> {
+    return fetchJsonOrThrow<MountInfoDto>(
+      `${BACKEND_URL}/api/workspaces/${encodeURIComponent(workspaceId)}/mount`,
+      { method: 'GET' },
+      'Failed to read the workspace mount'
+    );
+  },
+
+  /** Which root the panel actually lists for this (workspace, channel) pair. */
+  async getEffectiveMount(workspaceId: string, channelId?: string | null): Promise<MountScopeDto> {
+    const params = new URLSearchParams({ workspaceId });
+    if (channelId) params.set('channelId', channelId);
+    return fetchJsonOrThrow<MountScopeDto>(
+      `${BACKEND_URL}/api/workspace/mount?${params.toString()}`,
+      { method: 'GET' },
+      'Failed to read the effective mount'
+    );
+  },
+
+  /** The mount jail: host roots a mount path may live under. */
+  async getAllowedRoots(workspaceId?: string | null): Promise<string[]> {
+    const qs = workspaceId ? `?workspaceId=${encodeURIComponent(workspaceId)}` : '';
+    const data = await fetchJsonOrThrow<{ roots: string[] }>(
+      `${BACKEND_URL}/api/fs/allowed-roots${qs}`,
+      { method: 'GET' },
+      'Failed to read the allowed mount roots'
+    );
+    return data.roots;
+  },
+
   /** Attach or clear a mount at any of the three levels (§16). null clears it. */
   async setMount(
     target: 'channel' | 'category' | 'workspace',

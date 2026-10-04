@@ -82,6 +82,12 @@ export interface Message {
   turnStatus?: AgentTurnStatus;
   metadata?: Record<string, any>;
   attachments?: Attachment[];
+  // Provenance (UX S9): edit = new turn, never a silent rewrite. Links render
+  // only when a real source id is present; otherwise the UI shows no link.
+  originalMessageId?: string;
+  editedFrom?: string;
+  editedAt?: string;
+  regeneratedFrom?: string;
 }
 
 export type ProviderType = 'google' | 'openai' | 'anthropic' | 'ollama' | 'custom';
@@ -239,14 +245,27 @@ export interface Tool {
 // the Router, never chosen by the user.
 export type ComposerMode = 'auto' | 'chat' | 'agentic' | 'coding' | 'research' | 'swarm'
 
-export const COMPOSER_MODE_META: Record<ComposerMode, { label: string; hint: string }> = {
-  auto: { label: 'Auto', hint: 'Router decides' },
-  chat: { label: 'Chat', hint: 'Fast conversational' },
-  agentic: { label: 'Agentic', hint: 'Tool-capable agent' },
-  coding: { label: 'Coding', hint: 'Code + Pi tools' },
-  research: { label: 'Research', hint: 'Deep research' },
-  swarm: { label: 'Swarm', hint: 'Large data · L3 worker delegation' },
+// Phase B: qualitative UI copy only - never measured budgets. No numbers live
+// here so the ModeSelector cannot show fake latency or cost figures.
+export const COMPOSER_MODE_META: Record<ComposerMode, { label: string; hint: string; latency: string; cost: string; scope: string }> = {
+  auto: { label: 'Auto', hint: 'Router decides', latency: 'Varies with the routed runtime', cost: 'Varies with the routed runtime', scope: 'Router picks the tool scope' },
+  chat: { label: 'Chat', hint: 'Fast conversational', latency: 'Built for quick replies', cost: 'No tool spend', scope: 'Conversation only' },
+  agentic: { label: 'Agentic', hint: 'Tool-capable agent', latency: 'Slower while tools run', cost: 'Grows with tool calls', scope: 'Agent tool set' },
+  coding: { label: 'Coding', hint: 'Code + Pi tools', latency: 'Slower on large edits', cost: 'Grows with execution', scope: 'Repo files and commands' },
+  research: { label: 'Research', hint: 'Deep research', latency: 'Slowest, multi-step reads', cost: 'Grows with sources read', scope: 'Read-only research' },
+  swarm: { label: 'Swarm', hint: 'Large data, L3 worker delegation', latency: 'Slowest, delegated work', cost: 'Grows with worker runs', scope: 'L3 worker delegation' },
 };
+
+// Phase B preflight vocabulary (UX_GUIDELINE.md section 5.2). Each renders
+// honest empty when its source is unknown - the preflight hides the segment
+// instead of inventing a value.
+export type contextBreakdown = {
+  history?: number;
+  files?: number;
+  memory?: number;
+};
+export type writeScope = 'read' | 'write' | 'command';
+export type preflightOverflow = 'ok' | 'warn' | 'over';
 
 /**
  * §22 runtime names. These are what the SERVER stores and validates —
@@ -293,7 +312,7 @@ export function runtimeToComposerMode(runtime: string | null | undefined): Compo
   return RUNTIME_TO_COMPOSER_MODE[runtime as RuntimeType] ?? 'auto';
 }
 
-export type rightPanelView = 'roster' | 'repo';
+export type rightPanelView = 'roster' | 'repo' | 'jobs' | 'telemetry';
 
 export interface Role {
   id: string;

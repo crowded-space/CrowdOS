@@ -25,6 +25,9 @@ export function MessageRouter({ message, agentLevel = 3, toolExecutions }: Messa
           timestamp={message.timestamp} 
           attachments={message.attachments}
           mentions={message.mentions}
+          originalMessageId={message.originalMessageId ?? (message.metadata as any)?.originalMessageId}
+          editedFrom={message.editedFrom ?? (message.metadata as any)?.editedFrom}
+          editedAt={message.editedAt ?? (message.metadata as any)?.editedAt}
         />
       );
       
@@ -43,6 +46,7 @@ export function MessageRouter({ message, agentLevel = 3, toolExecutions }: Messa
           turnSteps={message.turnSteps}
           turnStatus={message.turnStatus}
           toolExecutions={toolExecutions}
+          regeneratedFrom={message.regeneratedFrom ?? (message.metadata as any)?.regenerateFrom ?? (message.metadata as any)?.regeneratedFrom}
         />
       );
       

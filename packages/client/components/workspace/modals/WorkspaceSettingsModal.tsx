@@ -1,10 +1,10 @@
 import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
-  X, Laptop, Users, Shield, ShieldAlert, Cpu, Hammer, Hash, BarChart3, 
+  X, Laptop, Users, Shield, ShieldAlert, Cpu, Hammer, Hash, FolderOpen, BarChart3,
   Trash2, Plus, ArrowRight, UserCheck, Play, ToggleLeft, ToggleRight, Radio,
   Layers, Brain, Wrench, Edit, Save, RotateCcw, FileCode, GripVertical, Check,
-  Copy, Download, Upload, Coins, Lock
+  Copy, Download, Upload, Coins, Lock, ScrollText, HardDrive
 } from 'lucide-react';
 import { useCrowdOSStore } from '@/stores/crowdOsStore';
 import { AgentLevel, AgentStatus } from '@/types/crowdOs';
@@ -17,6 +17,10 @@ import AgentStudioModal from '@/components/studio/AgentStudioModal';
 import ScreenLockSettingsPanel from '../ScreenLockSettingsPanel';
 import AutostartToggle from '@/components/ui/AutostartToggle';
 import { useOverlayFocus } from '@/components/ui/use-overlay-focus';
+import MountsInspector from '../MountsInspector';
+import DiagnosticsTab from '../settings/DiagnosticsTab';
+import AuditTab from '../settings/AuditTab';
+import StorageTab from '../settings/StorageTab';
 
 const ROLE_PERMISSIONS = [
   { id: 'administrator', label: 'Administrator', description: 'Grants all permissions and bypasses channel restrictions.' },
@@ -947,6 +951,10 @@ export default function WorkspaceSettingsModal() {
     { id: 'model_cards', label: 'Model Modules', icon: Cpu },
     { id: 'skills_manager', label: 'Skills Manager', icon: Brain },
     { id: 'channels', label: 'Category & Channels', icon: Hash },
+    { id: 'mounts', label: 'Mounts', icon: FolderOpen },
+    { id: 'storage', label: 'Storage', icon: HardDrive },
+    { id: 'diagnostics', label: 'Diagnostics', icon: BarChart3 },
+    { id: 'audit', label: 'Audit', icon: ScrollText },
     { id: 'safety', label: 'Safety Policies', icon: ShieldAlert },
     { id: 'screen_lock', label: 'Screen Lock', icon: Lock }
   ];
@@ -2765,6 +2773,22 @@ export default function WorkspaceSettingsModal() {
                   <p className="text-zinc-500">Configure corporate permission policies, budget bounds, and emergency cutoff overrides.</p>
                 </div>
 
+                {/* Retention banner (surfacing only): this tab edits budgets and
+                    execution policy. It runs no retention engine and no DLP scanner,
+                    and it never deletes server history, scans content, or exports
+                    audit data. Static, no motion, live-region safe (role=note). */}
+                <div role="note" aria-label="Retention and data handling" className="flex items-start gap-2 rounded-lg border border-amber-500/25 bg-amber-500/5 px-3 py-2.5">
+                  <ShieldAlert size={14} className="mt-0.5 shrink-0 text-amber-400" aria-hidden="true" />
+                  <div className="min-w-0">
+                    <p className="text-[11px] font-semibold text-amber-200">No automatic retention or DLP scanning here</p>
+                    <ul className="mt-1 space-y-1 text-[11px] leading-snug text-zinc-400">
+                      <li>Channel history belongs to the session: clearing a channel removes the local view and local mirror only — the server copy can return when the channel is reopened.</li>
+                      <li>Agent memory belongs to each agent: clearing history never clears agent memory.</li>
+                      <li>File restores revert to the checkpoint snapshot with a timestamped note; they do not restore cleared history. No audit export in this view.</li>
+                    </ul>
+                  </div>
+                </div>
+
                 <div className="space-y-4">
                   {/* Token Budgets & Safety Caps */}
                   <div className="space-y-4 bg-zinc-950/40 border border-zinc-900 p-4 rounded-lg">
@@ -3036,6 +3060,22 @@ export default function WorkspaceSettingsModal() {
                   <AutostartToggle />
                 </div>
               </div>
+            )}
+
+            {workspaceSettingsTab === 'mounts' && (
+              <MountsInspector />
+            )}
+
+            {workspaceSettingsTab === 'storage' && (
+              <StorageTab />
+            )}
+
+            {workspaceSettingsTab === 'diagnostics' && (
+              <DiagnosticsTab />
+            )}
+
+            {workspaceSettingsTab === 'audit' && (
+              <AuditTab />
             )}
           </motion.div>
         </AnimatePresence>

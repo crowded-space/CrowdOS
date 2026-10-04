@@ -10,6 +10,8 @@ import WorkspacePortal from '@/components/portal/WorkspacePortal';
 import WorkspaceSidebar from '@/components/workspace/WorkspaceSidebar';
 import MainChatArea from '@/components/workspace/MainChatArea';
 import RightSidebar from '@/components/workspace/RightSidebar';
+import BottomDrawer from '@/components/workspace/BottomDrawer';
+import OperationsSheet from '@/components/workspace/OperationsSheet';
 import { ToastProvider } from '@/components/ui/ToastProvider';
 import ErrorBoundary from '@/components/ui/ErrorBoundary';
 import LockScreen from '@/components/lockscreen/LockScreen';
@@ -21,6 +23,7 @@ import { useScreenLockStore, SCREENLOCK_IDLE_MS } from '@/stores/screenLockStore
 const AgentProfileModal = lazy(() => import('@/components/workspace/modals/AgentProfileModal'));
 const WorkspaceSettingsModal = lazy(() => import('@/components/workspace/modals/WorkspaceSettingsModal'));
 const OmniSearchModal = lazy(() => import('@/components/workspace/modals/OmniSearchModal'));
+const QuickAsk = lazy(() => import('@/components/workspace/QuickAsk'));
 
 function SpinnerFallback() {
   return (
@@ -38,17 +41,20 @@ export default function App() {
     dbDegraded,
     fetchWorkspaces,
     setSettingsModalOpen,
-    setWorkspaceSettingsTab
+    setWorkspaceSettingsTab,
+    queuedOutboxCount
   } = useCrowdOSStore(useShallow(s => ({
     activeWorkspaceId: s.activeWorkspaceId,
     dbDegraded: (s.workspaces.find(w => w.id === s.activeWorkspaceId)?.database?.configured) === false,
     fetchWorkspaces: s.fetchWorkspaces,
     setSettingsModalOpen: s.setSettingsModalOpen,
     setWorkspaceSettingsTab: s.setWorkspaceSettingsTab,
+    queuedOutboxCount: s.outbox.filter(e => e.status === 'queued').length,
   })));
 
   const [searchOpen, setSearchOpen] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [quickAskOpen, setQuickAskOpen] = useState(false);
   const locked = useScreenLockStore(s => s.locked);
 
   const stableFetchWorkspaces = useCallback(() => { void fetchWorkspaces(); }, [fetchWorkspaces]);
@@ -59,6 +65,16 @@ export default function App() {
   useEffect(() => {
     stableFetchWorkspaces();
   }, [stableFetchWorkspaces]);
+  // Phase G capture tier: palette verbs summon QuickAsk via a window event
+  // so the registry (which owns no React state) can open a real UI action.
+  useEffect(() => {
+    const openQuickAsk = () => {
+      setSearchOpen(false);
+      setQuickAskOpen(true);
+    };
+    window.addEventListener('crowdos:quick-ask-open', openQuickAsk);
+    return () => window.removeEventListener('crowdos:quick-ask-open', openQuickAsk);
+  }, []);
 
   // ponytail: interval + focus/mouse/key wiring; per-workspace idle tracker.
   useEffect(() => {
@@ -128,6 +144,14 @@ export default function App() {
         setSidebarOpen(false);
         return;
       }
+      // Phase G capture tier: global summon on Ctrl/Cmd+Shift+K. Explicit
+      // Shift guard so Ctrl/Cmd+K keeps opening the palette untouched.
+      if ((e.metaKey || e.ctrlKey) && e.shiftKey && (e.key === 'k' || e.key === 'K')) {
+        e.preventDefault();
+        setSearchOpen(false);
+        setQuickAskOpen((prev) => !prev);
+        return;
+      }
       if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
         e.preventDefault();
         setSearchOpen(prev => !prev);
@@ -160,7 +184,7 @@ export default function App() {
           Skip to chat
         </a>
         <div className="grain-overlay" aria-hidden />
-        <OfflineBanner dbDegraded={dbDegraded} onOpenDatabaseSettings={openDatabaseSettings} />
+        <OfflineBanner dbDegraded={dbDegraded} onOpenDatabaseSettings={openDatabaseSettings} queuedCount={queuedOutboxCount} />
 
         {/* 3-Panel Content Area */}
         <div className="flex-1 flex overflow-hidden w-full relative isolate">
@@ -195,10 +219,28 @@ export default function App() {
                 onOpenSidebar={() => setSidebarOpen(true)}
               />
             </ErrorBoundary>
+            {/* Bottom artifact drawer: stable named slot below the center chat.
+                Inside the center column so the shell row keeps nav / chat /
+                roster order; the dock stays default. */}
+            <div data-slot="bottom-drawer" className="shrink-0 flex flex-col min-h-0">
+              <ErrorBoundary fallback={<div className="p-4 text-xs text-zinc-500">Drawer failed to load</div>}>
+                <BottomDrawer />
+              </ErrorBoundary>
+            </div>
+            {/* Narrow-width ops sheet: Jobs / Approvals / Repo tabs for
+                viewports where the right ops panel is hidden (below xl).
+                The trigger bar always renders here, so ops are never fully
+                hidden; xl:hidden keeps the desktop roster as the single ops
+                surface at xl+. */}
+            <div data-slot="ops-sheet" className="shrink-0 flex flex-col min-h-0 xl:hidden">
+              <ErrorBoundary fallback={<div className="p-4 text-xs text-zinc-500">Ops failed to load</div>}>
+                <OperationsSheet />
+              </ErrorBoundary>
+            </div>
           </main>
 
           {/* Keep narrow and tablet widths for the chat; the roster is desktop-only. */}
-          <aside aria-label="Operations roster and telemetry" className="hidden xl:flex shrink-0 h-full">
+          <aside aria-label="Operations panel: roster, repository, jobs, and telemetry" className="hidden xl:flex shrink-0 h-full">
             <ErrorBoundary fallback={<div className="p-4 text-xs text-zinc-500">Roster failed to load</div>}>
               <RightSidebar />
             </ErrorBoundary>
@@ -211,6 +253,7 @@ export default function App() {
           <AgentProfileModal />
           <WorkspaceSettingsModal />
           <OmniSearchModal open={searchOpen} onClose={() => setSearchOpen(false)} />
+          <QuickAsk open={quickAskOpen} onClose={() => setQuickAskOpen(false)} />
         </Suspense>
         {locked && <LockScreen />}
 

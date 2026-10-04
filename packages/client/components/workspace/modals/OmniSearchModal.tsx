@@ -3,10 +3,17 @@ import { motion, AnimatePresence } from 'motion/react';
 import { Search, Hash, Users, Hammer, MessageSquare, X, ArrowRight } from 'lucide-react';
 import { useCrowdOSStore } from '@/stores/crowdOsStore';
 import { useOverlayFocus } from '@/components/ui/use-overlay-focus';
+import { buildVerbs, filterVerbs, recordVerbUse, type paletteVerb } from './palette-verbs';
 
 interface OmniSearchModalProps {
   open: boolean;
   onClose: () => void;
+}
+
+function verbRiskClass(risk: string): string {
+  if (risk === 'destructive') return 'bg-rose-500/15 text-rose-300 border-rose-500/20';
+  if (risk === 'confirm') return 'bg-amber-500/15 text-amber-300 border-amber-500/30';
+  return 'bg-zinc-800 text-zinc-300 border-zinc-700';
 }
 
 export default function OmniSearchModal({ open, onClose }: OmniSearchModalProps) {
@@ -28,6 +35,8 @@ export default function OmniSearchModal({ open, onClose }: OmniSearchModalProps)
   const [isSearchingServer, setIsSearchingServer] = useState(false);
   const dialogRef = useRef<HTMLDivElement>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
+  const [tab, setTab] = useState<'search' | 'commands'>('search');
+  const [activeVerbIndex, setActiveVerbIndex] = useState(0);
 
   useOverlayFocus(open, dialogRef, {
     initialFocusRef: searchInputRef,
@@ -63,6 +72,15 @@ export default function OmniSearchModal({ open, onClose }: OmniSearchModalProps)
     if (open) {
       setQuery('');
       setServerResults(null);
+    }
+  }, [open]);
+
+  // Dual-mode: reset to Search tab + first verb on every open so the
+  // palette opens in a known state (Ctrl/Cmd+K reaches both tabs).
+  useEffect(() => {
+    if (open) {
+      setTab('search');
+      setActiveVerbIndex(0);
     }
   }, [open]);
 
@@ -176,6 +194,29 @@ export default function OmniSearchModal({ open, onClose }: OmniSearchModalProps)
     return merged.slice(0, 10);
   }, [query, messages, serverResults]);
 
+  // Commands tab: 14 palette verbs, fuzzy subsequence scored by
+  // filterVerbs (subsequence scorer, no dependency) with recent-first
+  // ordering from the crowdos_palette_recent mirror (cap 10). The Search
+  // tab keeps its own 200ms server debounce; verbs are local-only.
+  const allVerbs = useMemo(() => buildVerbs(), []);
+  const filteredVerbs = useMemo(() => filterVerbs(query, allVerbs), [query, allVerbs]);
+  const activeVerb = filteredVerbs.length > 0
+    ? filteredVerbs[Math.min(activeVerbIndex, filteredVerbs.length - 1)]
+    : null;
+
+  // Reset the active verb when the filtered set changes (tab or query) so
+  // aria-activedescendant never points at a stale row.
+  useEffect(() => {
+    setActiveVerbIndex(0);
+  }, [query, tab]);
+
+  function runVerb(verb: paletteVerb | null) {
+    if (!verb) return;
+    recordVerbUse(verb.id);
+    onClose();
+    void Promise.resolve().then(() => verb.run());
+  }
+
   return (
     <AnimatePresence>
       {open && (
@@ -205,8 +246,20 @@ export default function OmniSearchModal({ open, onClose }: OmniSearchModalProps)
                 type="text"
                 autoFocus
                 value={query}
-                onChange={(e) => setQuery(e.target.value)}
-                placeholder="Search channels, agents, history…"
+                onChange={(e) => { setQuery(e.target.value); }}
+                onKeyDown={(e) => {
+                  if (tab !== 'commands') return;
+                  if (e.key === 'ArrowDown') { e.preventDefault(); setActiveVerbIndex((i) => Math.min(i + 1, filteredVerbs.length - 1)); }
+                  else if (e.key === 'ArrowUp') { e.preventDefault(); setActiveVerbIndex((i) => Math.max(i - 1, 0)); }
+                  else if (e.key === 'Home') { e.preventDefault(); setActiveVerbIndex(0); }
+                  else if (e.key === 'End') { e.preventDefault(); setActiveVerbIndex(filteredVerbs.length - 1); }
+                  else if (e.key === 'Enter') { e.preventDefault(); runVerb(activeVerb); }
+                }}
+                role={tab === 'commands' ? 'combobox' : undefined}
+                aria-expanded={tab === 'commands' ? true : undefined}
+                aria-activedescendant={tab === 'commands' && activeVerb ? `palette-verb-${activeVerb.id}` : undefined}
+                aria-controls={tab === 'commands' ? 'palette-verb-list' : undefined}
+                placeholder={tab === 'commands' ? 'Type a command…' : 'Search channels, agents, history…'}
                 className="w-full bg-transparent border-none text-[15px] sm:text-sm text-zinc-100 placeholder-zinc-500 focus:outline-none focus:ring-0 py-1"
               />
               <button
@@ -220,7 +273,36 @@ export default function OmniSearchModal({ open, onClose }: OmniSearchModalProps)
 
             {/* Results List — generous touch targets, calm hierarchy */}
             <div className="flex-1 overflow-y-auto p-3 sm:p-3.5 space-y-5 scrollbar-thin overscroll-contain">
+              {/* Dual mode: Search + Commands tabs (role=tablist). Search is
+                  the existing entity/message results untouched below; Commands
+                  lists the 14 palette verbs. Ctrl/Cmd+K reaches both tabs. */}
+              <div role="tablist" aria-label="Palette mode" className="flex items-center gap-1 bg-zinc-900 border border-zinc-800 rounded-xl p-1">
+                <button
+                  type="button"
+                  role="tab"
+                  id="palette-tab-search"
+                  aria-selected={tab === 'search'}
+                  aria-controls="palette-panel-search"
+                  onClick={() => setTab('search')}
+                  className={`flex-1 px-3 py-2 min-h-[36px] rounded-lg text-xs font-sans font-semibold transition cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500/30 ${tab === 'search' ? 'bg-zinc-800 text-zinc-100 border border-zinc-700' : 'text-zinc-500 hover:text-zinc-300'}`}
+                >
+                  Search
+                </button>
+                <button
+                  type="button"
+                  role="tab"
+                  id="palette-tab-commands"
+                  aria-selected={tab === 'commands'}
+                  aria-controls="palette-panel-commands"
+                  onClick={() => setTab('commands')}
+                  className={`flex-1 px-3 py-2 min-h-[36px] rounded-lg text-xs font-sans font-semibold transition cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500/30 ${tab === 'commands' ? 'bg-zinc-800 text-zinc-100 border border-zinc-700' : 'text-zinc-500 hover:text-zinc-300'}`}
+                >
+                  Commands
+                </button>
+              </div>
               {/* Channels Section */}
+              {tab === 'search' && (
+              <div id="palette-panel-search" role="tabpanel" aria-labelledby="palette-tab-search" className="space-y-5">
               {filteredChannels.length > 0 && (
                 <div className="space-y-1.5">
                   <div className="text-[13px] font-medium text-zinc-400 px-2 py-1 flex items-center gap-2">
@@ -323,9 +405,61 @@ export default function OmniSearchModal({ open, onClose }: OmniSearchModalProps)
                 </div>
               )}
 
-              {query.trim() && filteredChannels.length === 0 && filteredAgents.length === 0 && filteredMessages.length === 0 && (
+              {query.trim() && filteredChannels.length === 0 && filteredAgents.length === 0 && filteredTools.length === 0 && filteredMessages.length === 0 && (
                 <div className="text-center py-8 text-zinc-500 text-xs font-sans">
-                  No matching entities or logs found for "{query}".
+                  No matching entities or logs found for &quot;{query}&quot;.
+                </div>
+              )}
+              </div>
+              )}
+              {tab === 'commands' && (
+                <div id="palette-panel-commands" role="tabpanel" aria-labelledby="palette-tab-commands" className="space-y-1">
+                  <div className="text-[13px] font-medium text-zinc-400 px-2 py-1">
+                    Commands ({filteredVerbs.length})
+                  </div>
+                  {filteredVerbs.length === 0 && (
+                    <div className="text-center py-8 text-zinc-500 text-xs font-sans">
+                      No matching commands for &quot;{query}&quot;.
+                    </div>
+                  )}
+                  {filteredVerbs.length > 0 && (
+                    <div
+                      id="palette-verb-list"
+                      role="listbox"
+                      aria-label="Palette commands"
+                      className="space-y-1"
+                    >
+                      {filteredVerbs.map((verb, idx) => {
+                        const optionId = `palette-verb-${verb.id}`;
+                        const selected = activeVerb ? verb.id === activeVerb.id : idx === 0;
+                        return (
+                          <button
+                            key={verb.id}
+                            type="button"
+                            id={optionId}
+                            role="option"
+                            aria-selected={selected}
+                            onMouseEnter={() => setActiveVerbIndex(idx)}
+                            onClick={() => runVerb(verb)}
+                            className={`w-full flex items-center justify-between gap-2 px-2.5 py-2.5 min-h-[44px] rounded-xl text-xs font-sans text-left transition select-none cursor-pointer focus:outline-none active:scale-[0.99] ${selected ? 'bg-indigo-600 text-white shadow-md' : 'text-zinc-300 hover:bg-zinc-800 active:bg-zinc-800'}`}
+                          >
+                            <span className="min-w-0">
+                              <span className={`block truncate font-semibold ${selected ? 'text-white' : 'text-zinc-200'}`}>{verb.title}</span>
+                              <span className={`mt-0.5 flex items-center gap-1.5 text-[10px] font-mono ${selected ? 'text-white/80' : 'text-zinc-500'}`}>
+                                <span>{verb.scope}</span>
+                                <span aria-hidden="true">·</span>
+                                <span className={`px-1.5 py-0.5 rounded border ${verbRiskClass(verb.risk)}`}>{verb.risk}</span>
+                                {verb.shortcut && (
+                                  <span className="ml-1 rounded border border-zinc-700 bg-zinc-900 px-1.5 py-0.5">{verb.shortcut}</span>
+                                )}
+                              </span>
+                            </span>
+                            <span className={`shrink-0 text-[11px] ${selected ? 'text-white/90' : 'text-indigo-400'}`}>Run →</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
                 </div>
               )}
             </div>

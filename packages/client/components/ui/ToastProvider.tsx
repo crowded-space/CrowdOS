@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useState, useCallback } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { CheckCircle2, AlertCircle, Info, X } from 'lucide-react';
+import { appendNotificationHistory } from './notification-history-model';
 
 export type ToastType = 'success' | 'error' | 'info';
 
@@ -20,6 +21,13 @@ interface ToastContextType {
 
 const ToastContext = createContext<ToastContextType | null>(null);
 
+// Phase D toasts: max 3 stacked (drop oldest beyond 3). Quiet
+// (success/info) renders role=status aria-live=polite with auto-dismiss;
+// assertive (error) renders role=alert and persists until dismissed so
+// need-me events survive.
+const TOAST_MAX = 3;
+const TOAST_QUIET_DISMISS_MS = 4000;
+
 export function ToastProvider({ children }: { children: React.ReactNode }) {
   const [toasts, setToasts] = useState<ToastItem[]>([]);
 
@@ -29,18 +37,41 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
 
   const toast = useCallback((title: string, options?: { description?: string; type?: ToastType }) => {
     const id = `toast-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
+    const type = options?.type || 'info';
     const newToast: ToastItem = {
       id,
       title,
       description: options?.description,
-      type: options?.type || 'info'
+      type,
     };
 
-    setToasts(prev => [...prev, newToast]);
+    setToasts(prev => [...prev, newToast].slice(-TOAST_MAX));
 
-    setTimeout(() => {
-      removeToast(id);
-    }, 4000);
+    // Phase G: every toast persists to the history journal (kind toast,
+    // errors assertive) so the notification center can review real rows.
+    // Best-effort: storage failure must never break the live stack.
+    try {
+      appendNotificationHistory({
+        id,
+        kind: 'toast',
+        title,
+        detail: options?.description ?? null,
+        channelId: null,
+        runId: null,
+        approvalId: null,
+        receivedAt: new Date().toISOString(),
+        assertive: type === 'error',
+      });
+    } catch {
+      // Ignore: the live toast still renders.
+    }
+
+    // Quiet toasts auto-dismiss; assertive errors persist until dismissed.
+    if (type !== 'error') {
+      setTimeout(() => {
+        removeToast(id);
+      }, TOAST_QUIET_DISMISS_MS);
+    }
   }, [removeToast]);
 
   const showSuccess = useCallback((title: string, description?: string) => {
@@ -64,6 +95,8 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
           {toasts.map(t => (
             <motion.div
               key={t.id}
+              role={t.type === 'error' ? 'alert' : 'status'}
+              aria-live={t.type === 'error' ? 'assertive' : 'polite'}
               initial={{ opacity: 0, y: 20, scale: 0.95 }}
               animate={{ opacity: 1, y: 0, scale: 1 }}
               exit={{ opacity: 0, y: 10, scale: 0.95 }}

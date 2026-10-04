@@ -1,11 +1,14 @@
-import { useState, useCallback } from 'react';
-import { Hash, ChevronRight, ChevronDown, Plus, Settings2, Database } from 'lucide-react';
+import { useState, useCallback, useMemo } from 'react';
+import { Clock, Hash, ChevronRight, ChevronDown, Plus, Search, Settings2, Star, Database } from 'lucide-react';
+import type { Channel } from '@/types/crowdOs';
+import { safeGet, safeSet } from '@/src/config/desktop-storage';
 import { useCrowdOSStore } from '@/stores/crowdOsStore';
 import { useShallow } from 'zustand/react/shallow';
 import WorkspaceDropdown from './WorkspaceDropdown';
 import InlineChannelModal from './modals/InlineChannelModal';
 import ChannelButton from './ChannelButton';
 import ThemeToggle from '@/components/ui/ThemeToggle';
+import { loadOperatorProfile, saveOperatorProfile, OPERATOR_DEFAULT_NAME } from './operator-profile-model';
 
 interface WorkspaceSidebarProps {
   onClose?: () => void;
@@ -23,6 +26,11 @@ export default function WorkspaceSidebar({ onClose }: WorkspaceSidebarProps) {
     isDatabaseOffline,
     databaseErrorMessage,
     fetchWorkspaces,
+    draftByChannel,
+    approvalRequests,
+    inboxDeferred,
+    jobsByRun,
+    runRuntimeByRun,
   } = useCrowdOSStore(useShallow(s => ({
     workspaces: s.workspaces,
     activeWorkspaceId: s.activeWorkspaceId,
@@ -34,10 +42,36 @@ export default function WorkspaceSidebar({ onClose }: WorkspaceSidebarProps) {
     isDatabaseOffline: s.isDatabaseOffline,
     databaseErrorMessage: s.databaseErrorMessage,
     fetchWorkspaces: s.fetchWorkspaces,
+    draftByChannel: s.draftByChannel,
+    approvalRequests: s.approvalRequests,
+    inboxDeferred: s.inboxDeferred,
+    jobsByRun: s.jobsByRun,
+    runRuntimeByRun: s.runRuntimeByRun,
   })));
 
   const [createModalOpen, setCreateModalOpen] = useState(false);
   const [selectedCatId, setSelectedCatId] = useState<string | null>(null);
+
+  const [filter, setFilter] = useState('');
+  const [operatorProfile, setOperatorProfile] = useState(() => loadOperatorProfile());
+  const [operatorEditing, setOperatorEditing] = useState(false);
+  const [operatorName, setOperatorName] = useState(operatorProfile.name);
+  const [operatorEmail, setOperatorEmail] = useState(operatorProfile.email);
+  const operatorInitials = useMemo(() => {
+    const parts = operatorProfile.name.trim().split(/\s+/).filter(Boolean);
+    if (parts.length === 0) return 'LO';
+    if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+    return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+  }, [operatorProfile.name]);
+  const [favoriteIds, setFavoriteIds] = useState<string[]>(() => {
+    try {
+      const raw = safeGet('crowdos_sidebar_favorites');
+      if (!raw) return [];
+      const parsed: unknown = JSON.parse(raw);
+      if (!Array.isArray(parsed)) return [];
+      return parsed.filter((v): v is string => typeof v === 'string');
+    } catch { return []; }
+  });
 
   const activeWS = workspaces.find(ws => ws.id === activeWorkspaceId);
 
@@ -45,6 +79,113 @@ export default function WorkspaceSidebar({ onClose }: WorkspaceSidebarProps) {
     setActiveChannel(channelId);
     onClose?.();
   }, [onClose, setActiveChannel]);
+
+  // Favorites are a local-only overlay (crowdos_sidebar_favorites). Toggling
+  // a star never touches the shared workspace tree, only localStorage.
+  const toggleFavorite = useCallback((channelId: string) => {
+    setFavoriteIds(prev => {
+      const next = prev.includes(channelId)
+        ? prev.filter(id => id !== channelId)
+        : [...prev, channelId];
+      try { safeSet('crowdos_sidebar_favorites', JSON.stringify(next)); } catch {}
+      return next;
+    });
+  }, []);
+
+  const allChannels: Channel[] = useMemo(() => {
+    if (!activeWS) return [];
+    return [...(activeWS.channels || []), ...activeWS.categories.flatMap(c => c.channels || [])];
+  }, [activeWS]);
+
+  // Approval counts per channel from live approvalRequests (pending,
+  // non-deferred only). Requests without a channelId cannot map to a row
+  // and are omitted, never guessed.
+  const approvalCountByChannel: Record<string, number> = useMemo(() => {
+    const counts: Record<string, number> = {};
+    for (const req of approvalRequests || []) {
+      if (req.status !== 'pending') continue;
+      if ((inboxDeferred || {})[req.id]) continue;
+      const cid = req.channelId ?? null;
+      if (!cid) continue;
+      counts[cid] = (counts[cid] ?? 0) + 1;
+    }
+    return counts;
+  }, [approvalRequests, inboxDeferred]);
+
+  // Live-run state per channel from the shared jobsByRun projection (the
+  // same model JobsView renders). Terminal rows (completed/failed/
+  // cancelled) are not live; channels with no live row render no badge.
+  const liveByChannel: Record<string, { runtime: string | null }> = useMemo(() => {
+    const live: Record<string, { runtime: string | null }> = {};
+    const rows = Object.values(jobsByRun || {});
+    for (const job of rows) {
+      const st = String(job.status || '').toLowerCase();
+      if (st === 'completed' || st === 'failed' || st === 'cancelled') continue;
+      if (!job.channelId) continue;
+      if (live[job.channelId]) continue;
+      live[job.channelId] = { runtime: job.runtime ?? (runRuntimeByRun || {})[job.runId] ?? null };
+    }
+    return live;
+  }, [jobsByRun, runRuntimeByRun]);
+
+  const normalizedFilter = filter.trim().toLowerCase();
+  const matchesFilter = useCallback((ch: Channel) => {
+    if (!normalizedFilter) return true;
+    return ch.name.toLowerCase().includes(normalizedFilter);
+  }, [normalizedFilter]);
+
+  // Favorites resolve against the live tree, so deleted channels drop out.
+  const favoriteChannels = useMemo(
+    () => allChannels.filter(ch => favoriteIds.includes(ch.id)),
+    [allChannels, favoriteIds],
+  );
+
+  // Recents from honest activity signals only: unread, mention, draft, or
+  // the active channel. There is no visit-history source, so nothing here
+  // claims recency beyond live activity.
+  const recentChannels = useMemo(() => {
+    const scored = allChannels.map(ch => {
+      let score = 0;
+      if (ch.hasMention) score += 3;
+      if (ch.unreadCount > 0) score += 2;
+      if (draftByChannel[ch.id]?.text) score += 1;
+      if (ch.id === activeChannelId) score += 1;
+      return { ch, score };
+    }).filter(s => s.score > 0);
+    scored.sort((a, b) => b.score - a.score || a.ch.name.localeCompare(b.ch.name));
+    return scored.slice(0, 5).map(s => s.ch);
+  }, [allChannels, draftByChannel, activeChannelId]);
+
+  // One row renderer for every channel list (personal + shared). Badges
+  // come from the shared projections; the star toggles only local
+  // favorites and never mutates the shared tree.
+  const renderChannelRow = useCallback((channel: Channel) => {
+    const isFav = favoriteIds.includes(channel.id);
+    return (
+      <div key={channel.id} className="flex items-center gap-1">
+        <div className="min-w-0 flex-1">
+          <ChannelButton
+            channel={channel}
+            isActive={channel.id === activeChannelId}
+            onSelect={handleSelectChannel}
+            draftPreview={draftByChannel[channel.id]?.text || undefined}
+            approvalCount={approvalCountByChannel[channel.id] ?? 0}
+            isLive={Boolean(liveByChannel[channel.id])}
+            liveRuntime={liveByChannel[channel.id]?.runtime ?? null}
+          />
+        </div>
+        <button
+          onClick={() => toggleFavorite(channel.id)}
+          aria-pressed={isFav}
+          aria-label={`${isFav ? 'Remove' : 'Add'} #${channel.name} ${isFav ? 'from' : 'to'} favorites`}
+          title={isFav ? 'Remove from favorites' : 'Add to favorites'}
+          className="w-7 h-7 shrink-0 rounded-lg border border-transparent hover:border-zinc-800 text-zinc-600 hover:text-amber-300 transition focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500/30 cursor-pointer flex items-center justify-center active:scale-95"
+        >
+          <Star size={13} aria-hidden="true" className={isFav ? 'fill-amber-400 text-amber-400' : ''} />
+        </button>
+      </div>
+    );
+  }, [favoriteIds, activeChannelId, handleSelectChannel, draftByChannel, approvalCountByChannel, liveByChannel, toggleFavorite]);
 
   const isLoading = !activeWS;
 
@@ -83,13 +224,59 @@ export default function WorkspaceSidebar({ onClose }: WorkspaceSidebarProps) {
           </div>
         ) : (
           <>
+            {/* Channel filter */}
+            <div className="px-1">
+              <label htmlFor="sidebar-channel-filter" className="sr-only">Filter channels</label>
+              <div className="relative">
+                <Search size={13} aria-hidden="true" className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-zinc-600" />
+                <input
+                  id="sidebar-channel-filter"
+                  type="text"
+                  value={filter}
+                  onChange={(e) => setFilter(e.target.value)}
+                  placeholder="Filter channels"
+                  autoComplete="off"
+                  className="w-full min-h-[36px] rounded-xl border border-zinc-800/60 bg-zinc-900/40 py-2 pl-8 pr-2 text-[12.5px] text-zinc-200 placeholder:text-zinc-600 focus:border-zinc-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500/30"
+                />
+              </div>
+            </div>
+
+            {/* Personal navigation overlay: local-only favorites + recent
+                activity. Read-only over the shared tree, never mutates it. */}
+            {(favoriteChannels.filter(matchesFilter).length > 0 || recentChannels.filter(matchesFilter).length > 0) && (
+              <section aria-label="Personal navigation" className="space-y-3">
+                {favoriteChannels.filter(matchesFilter).length > 0 && (
+                  <div className="space-y-1">
+                    <h3 className="flex items-center gap-1.5 px-1 text-[11px] font-semibold uppercase tracking-wider text-zinc-500">
+                      <Star size={11} aria-hidden="true" />
+                      <span>Favorites</span>
+                    </h3>
+                    <div role="group" aria-label="Favorite channels" className="space-y-1">
+                      {favoriteChannels.filter(matchesFilter).map(renderChannelRow)}
+                    </div>
+                  </div>
+                )}
+                {recentChannels.filter(matchesFilter).length > 0 && (
+                  <div className="space-y-1">
+                    <h3 className="flex items-center gap-1.5 px-1 text-[11px] font-semibold uppercase tracking-wider text-zinc-500">
+                      <Clock size={11} aria-hidden="true" />
+                      <span>Recent activity</span>
+                    </h3>
+                    <p className="px-1 text-[10.5px] leading-snug text-zinc-600">From unread, mentions, drafts, and the open channel.</p>
+                    <div role="group" aria-label="Recently active channels" className="space-y-1">
+                      {recentChannels.filter(matchesFilter).map(renderChannelRow)}
+                    </div>
+                  </div>
+                )}
+                <div className="h-px bg-zinc-900/60 mx-1" aria-hidden="true" />
+              </section>
+            )}
+
             {/* Top-Level Channels */}
-            {activeWS?.channels && activeWS.channels.length > 0 && (
+            {activeWS?.channels && activeWS.channels.filter(matchesFilter).length > 0 && (
               <div className="space-y-1">
-                {activeWS.channels.map(channel => (
-                  <ChannelButton key={channel.id} channel={channel} isActive={channel.id===activeChannelId} onSelect={handleSelectChannel} />
-                ))}
-                <div className="h-px bg-zinc-900/60 my-3 mx-1" />
+                {activeWS.channels.filter(matchesFilter).map(renderChannelRow)}
+                <div className="h-px bg-zinc-900/60 my-3 mx-1" aria-hidden="true" />
               </div>
             )}
 
@@ -125,19 +312,24 @@ export default function WorkspaceSidebar({ onClose }: WorkspaceSidebarProps) {
                 {/* Collapsible channels list */}
                 {!category.collapsed && (
                   <div className="space-y-1 animate-fade-in">
-                    {category.channels.length === 0 ? (
-                      <div className="px-3 py-2 text-[11px] text-zinc-600 font-mono">No channels</div>
+                    {category.channels.filter(matchesFilter).length === 0 ? (
+                      <div className="px-3 py-2 text-[11px] text-zinc-600 font-mono" role="status">{normalizedFilter ? 'No matching channels' : 'No channels'}</div>
                     ) : (
-                      category.channels.map(channel => (
-                        <ChannelButton key={channel.id} channel={channel} isActive={channel.id===activeChannelId} onSelect={handleSelectChannel} />
-                      ))
+                      category.channels.filter(matchesFilter).map(renderChannelRow)
                     )}
                   </div>
                 )}
               </div>
             ))}
 
-            {activeWS?.categories.length === 0 && (!activeWS?.channels || activeWS.channels.length === 0) && (
+            {normalizedFilter && allChannels.filter(matchesFilter).length === 0 && (
+              <div className="text-center py-8 px-4" role="status">
+                <p className="text-xs font-medium text-zinc-300">No channels match &ldquo;{filter.trim()}&rdquo;</p>
+                <p className="text-[11px] text-zinc-500 mt-1">Clear the filter to see the full list.</p>
+              </div>
+            )}
+
+            {!normalizedFilter && activeWS?.categories.length === 0 && (!activeWS?.channels || activeWS.channels.length === 0) && (
               <div className="text-center py-10 px-4" role="status">
                 <div className="w-10 h-10 rounded-xl bg-zinc-900 border border-zinc-800 flex items-center justify-center mx-auto mb-3 text-zinc-500" aria-hidden="true">
                   <Hash size={16} aria-hidden="true" />
@@ -164,16 +356,82 @@ export default function WorkspaceSidebar({ onClose }: WorkspaceSidebarProps) {
       <div className="bg-[#09090b] border-t border-zinc-900 p-2 flex items-center justify-between gap-1 select-none shrink-0" id="sidebar-user-section">
         <div className="flex items-center gap-1 min-w-0">
           <div className="relative w-9 h-9 rounded-xl bg-amber-500/12 border border-amber-500/20 text-amber-400 flex items-center justify-center text-[11px] shrink-0 font-bold">
-            JH
+            {operatorInitials}
             <span className="absolute -bottom-0.5 -right-0.5 w-3 h-3 rounded-full bg-emerald-500 border-2 border-[#09090b]" />
           </div>
           <div className="min-w-0 leading-tight">
+            {operatorEditing ? (
+              <div className="space-y-1">
+                <label htmlFor="operator-name-input" className="sr-only">Operator name</label>
+                <input
+                  id="operator-name-input"
+                  type="text"
+                  value={operatorName}
+                  onChange={(e) => setOperatorName(e.target.value)}
+                  placeholder="Local operator"
+                  maxLength={80}
+                  autoComplete="off"
+                  className="w-full min-h-[32px] rounded-lg border border-zinc-800 bg-zinc-900/60 px-2 py-1 text-[12px] text-zinc-100 placeholder:text-zinc-600 focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500/30"
+                />
+                <label htmlFor="operator-email-input" className="sr-only">Operator email</label>
+                <input
+                  id="operator-email-input"
+                  type="email"
+                  value={operatorEmail}
+                  onChange={(e) => setOperatorEmail(e.target.value)}
+                  placeholder="email (optional)"
+                  maxLength={120}
+                  autoComplete="off"
+                  className="w-full min-h-[32px] rounded-lg border border-zinc-800 bg-zinc-900/60 px-2 py-1 text-[12px] text-zinc-100 placeholder:text-zinc-600 focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500/30"
+                />
+                <div className="flex items-center gap-1 pt-0.5">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const next = { name: operatorName.trim() || OPERATOR_DEFAULT_NAME, email: operatorEmail.trim() };
+                      saveOperatorProfile(next);
+                      setOperatorProfile(loadOperatorProfile());
+                      setOperatorEditing(false);
+                    }}
+                    className="px-2 py-1 text-[11px] font-semibold rounded-md bg-indigo-600 hover:bg-indigo-500 text-white transition focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500/30 cursor-pointer"
+                  >
+                    Save
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setOperatorName(operatorProfile.name);
+                      setOperatorEmail(operatorProfile.email);
+                      setOperatorEditing(false);
+                    }}
+                    className="px-2 py-1 text-[11px] font-semibold rounded-md bg-zinc-900 hover:bg-zinc-800 text-zinc-300 border border-zinc-800 transition focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500/30 cursor-pointer"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <>
             <div className="text-[13px] font-semibold text-zinc-100 truncate tracking-[-0.01em]">
-              Juan Hamzah
+              {operatorProfile.name}
             </div>
             <div className="text-[11px] text-zinc-500 truncate font-mono">
-              juanhamzah@gmail.com
+              {operatorProfile.email ? operatorProfile.email : 'Single-user shell'}
             </div>
+            <button
+              type="button"
+              onClick={() => {
+                setOperatorName(operatorProfile.name);
+                setOperatorEmail(operatorProfile.email);
+                setOperatorEditing(true);
+              }}
+              aria-label="Edit operator profile"
+              className="mt-0.5 px-1.5 py-0.5 text-[10.5px] font-semibold rounded-md text-zinc-500 hover:text-zinc-200 hover:bg-zinc-900 border border-transparent hover:border-zinc-800 transition focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500/30 cursor-pointer"
+            >
+              Edit
+            </button>
+              </>
+            )}
           </div>
         </div>
 

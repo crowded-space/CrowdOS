@@ -1,7 +1,6 @@
 import { useEffect, useState, useCallback } from 'react';
 import {
   Folder,
-  FolderOpen,
   HardDrive,
   Check,
   X,
@@ -15,6 +14,7 @@ import {
 } from 'lucide-react';
 import { apiClient } from '@/src/api/client';
 import { canPickDirectoryNative, pickDirectoryNative } from './desktop-bridge';
+import ConfirmDialog from '@/components/ui/ConfirmDialog';
 
 interface Props {
   targetType: 'channel' | 'category' | 'workspace';
@@ -48,6 +48,9 @@ export default function FolderMountPicker({ targetType, targetId, workspaceId, i
   const [entries, setEntries] = useState<BrowseEntry[]>([]);
   const [allowedRoots, setAllowedRoots] = useState<string[]>([]);
   const [browserLoading, setBrowserLoading] = useState(false);
+  // Phase C: clearing a mount is destructive-scoped, so it confirms with the
+  // resulting effective change (what the target inherits after clearing).
+  const [confirmClearOpen, setConfirmClearOpen] = useState(false);
 
   useEffect(() => {
     setPath(initialPath ?? '');
@@ -132,7 +135,7 @@ export default function FolderMountPicker({ targetType, targetId, workspaceId, i
     } finally {
       setBrowserLoading(false);
     }
-  }, []);
+  }, [workspaceId]);
 
   useEffect(() => {
     if (browserOpen && !browsingPath) {
@@ -163,7 +166,7 @@ export default function FolderMountPicker({ targetType, targetId, workspaceId, i
       >
         {pickingNative ? (
           <>
-            <Loader2 size={13} className="animate-spin" />
+            <Loader2 size={13} className="motion-safe:animate-spin" />
             <span>Waiting for OS Dialog...</span>
           </>
         ) : (
@@ -199,7 +202,7 @@ export default function FolderMountPicker({ targetType, targetId, workspaceId, i
             disabled={saving || pickingNative}
             className="px-3 py-2 bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 text-zinc-200 rounded-lg text-xs font-semibold disabled:opacity-50 flex items-center gap-1 cursor-pointer"
           >
-            {saving ? <Loader2 size={12} className="animate-spin" /> : <Check size={12} />} Save
+            {saving ? <Loader2 size={12} className="motion-safe:animate-spin" /> : <Check size={12} />} Save
           </button>
         </div>
         {path && (
@@ -259,7 +262,7 @@ export default function FolderMountPicker({ targetType, targetId, workspaceId, i
               title="Refresh directory"
               aria-label="Refresh directory"
             >
-              <RefreshCw size={11} className={browserLoading ? 'animate-spin' : ''} aria-hidden="true" />
+              <RefreshCw size={11} className={browserLoading ? 'motion-safe:animate-spin' : ''} aria-hidden="true" />
             </button>
           </div>
 
@@ -267,7 +270,7 @@ export default function FolderMountPicker({ targetType, targetId, workspaceId, i
           <div className="max-h-44 overflow-y-auto space-y-0.5 scrollbar-thin pr-1">
             {browserLoading ? (
               <div className="py-4 flex items-center justify-center gap-2 text-zinc-500 text-xs font-mono">
-                <Loader2 size={12} className="animate-spin" /> Loading directories...
+                <Loader2 size={12} className="motion-safe:animate-spin" /> Loading directories...
               </div>
             ) : entries.filter((e) => e.isDirectory).length === 0 ? (
               <div className="py-3 text-center text-zinc-600 text-[11px] font-mono">
@@ -311,13 +314,30 @@ export default function FolderMountPicker({ targetType, targetId, workspaceId, i
       {/* Clear mount action */}
       <div className="flex gap-2">
         <button
-          onClick={handleClear}
+          onClick={() => setConfirmClearOpen(true)}
           disabled={saving || pickingNative}
           className="flex-1 py-1.5 bg-zinc-900 border border-zinc-800 hover:bg-zinc-800 text-zinc-400 hover:text-zinc-200 rounded-lg text-xs flex items-center justify-center gap-1 cursor-pointer transition disabled:opacity-50"
         >
           <X size={11} /> {targetType === 'workspace' ? 'Reset to default workspace sandbox' : 'Clear mount (inherit)'}
         </button>
       </div>
+
+      <ConfirmDialog
+        open={confirmClearOpen}
+        title={targetType === 'workspace' ? 'Reset workspace mount?' : 'Clear mount?'}
+        description={
+          targetType === 'workspace'
+            ? `This resets the workspace mount${path ? ` (currently ${path})` : ''} to the default workspace sandbox. Channels without their own mount resolve here next.`
+            : targetType === 'category'
+              ? `This clears this category mount${path ? ` (currently ${path})` : ''}. Channels in this category fall back to the workspace mount next.`
+              : `This clears this channel mount${path ? ` (currently ${path})` : ''}. This channel inherits its category or workspace mount next.`
+        }
+        confirmLabel={targetType === 'workspace' ? 'Reset to sandbox' : 'Clear mount'}
+        cancelLabel="Cancel"
+        isDanger={true}
+        onConfirm={() => { setConfirmClearOpen(false); void handleClear(); }}
+        onCancel={() => setConfirmClearOpen(false)}
+      />
 
       {error && (
         <div className="flex items-center gap-1.5 text-[11px] text-rose-400 bg-rose-500/10 border border-rose-500/20 rounded-lg px-2.5 py-1.5">

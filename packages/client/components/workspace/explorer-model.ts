@@ -158,6 +158,23 @@ export function hasL0Agent(agents: Array<{ level?: number; isOmniscient?: boolea
   return agents.some((agent) => agent.level === 0 || agent.isOmniscient === true);
 }
 
+/**
+ * Which filesystem root a selected path belongs to. The viewer must thread
+ * this through the existing content transport — a Zone A path read through
+ * the effective root would resolve a different directory under the same path.
+ */
+export type sandboxRoot = 'effective' | 'workspace-local';
+
+/** True for Zone A paths, which the viewer renders read-only (L0 badge + no-save guard). */
+export function isWorkspaceLocalRoot(root: sandboxRoot | string | null | undefined): boolean {
+  return root === 'workspace-local';
+}
+
+/** Short human label naming which root an open path belongs to. */
+export function sandboxRootLabel(root: sandboxRoot | string | null | undefined): string {
+  return root === 'workspace-local' ? 'Workspace Local' : 'Repository';
+}
+
 export function parentPathOf(path: string): string {
   const trimmed = path.replace(/[\\/]+$/, '');
   const cut = Math.max(trimmed.lastIndexOf('/'), trimmed.lastIndexOf('\\'));

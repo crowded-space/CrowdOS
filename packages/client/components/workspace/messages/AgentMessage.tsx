@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo } from 'react';
-import { Brain, Sparkles, AlertCircle, Wrench, ChevronDown, ChevronUp, Square, RotateCcw, RefreshCw } from 'lucide-react';
+import { Brain, Sparkles, AlertCircle, Wrench, ChevronDown, ChevronUp, Square, RotateCcw, RefreshCw, History } from 'lucide-react';
 import MentionParser from './MentionParser';
 import AttachmentsView from './AttachmentsView';
 import ToolExecutionMessage from './ToolExecutionMessage';
@@ -19,6 +19,9 @@ interface AgentMessageProps {
   turnSteps?: AgentTurnStep[];
   turnStatus?: AgentTurnStatus;
   toolExecutions?: ToolExecution[];
+  // Provenance (UX S9): regenerated responses link back only when a real
+  // source id is present; otherwise no link renders (honest empty).
+  regeneratedFrom?: string;
 }
 
 export default function AgentMessage({
@@ -33,7 +36,8 @@ export default function AgentMessage({
   attachments,
   turnSteps,
   turnStatus,
-  toolExecutions
+  toolExecutions,
+  regeneratedFrom
 }: AgentMessageProps) {
   const isStreaming = id?.startsWith('stream-');
   const isCancelled = turnStatus === 'cancelled' || (metadata as any)?.cancelled === true || (metadata as any)?.status === 'cancelled';
@@ -85,10 +89,31 @@ export default function AgentMessage({
   }[level] || { label: 'L3 Worker', border: 'border-zinc-700', badgeBg: 'bg-zinc-800 text-zinc-300 border-zinc-700' };
 
   const hasMonologue = !!metadata?.monologue;
+  // Provenance (UX S9): a regenerated reply links back only when a real
+  // source id is present; otherwise no link renders (honest empty, never a
+  // dead link). Regenerate reuses the same context; Retry starts a fresh run.
+  const regeneratedSource = regeneratedFrom
+    || (metadata as any)?.regenerateFrom
+    || (metadata as any)?.regeneratedFrom
+    || undefined;
+  const showRegeneratedFrom = typeof regeneratedSource === 'string' && regeneratedSource.length > 0;
+
+  function scrollToSource() {
+    if (!showRegeneratedFrom) return;
+    const target = regeneratedSource as string;
+    const el = document.querySelector('[data-message-id="' + target + '"]')
+      || document.getElementById('grouped-msg-' + target)
+      || document.getElementById('message-' + target)
+      || document.getElementById(target);
+    if (el && typeof (el as HTMLElement).scrollIntoView === 'function') {
+      (el as HTMLElement).scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+  }
 
   return (
     <div 
       id={`agent-message-${authorId}`}
+      data-message-id={id}
       className={`group relative flex gap-2 p-3.5 sm:p-4 bg-[#1A1A1E] border rounded-lg hover:bg-[#1E1E22] transition-colors ${
         isCancelled ? 'border-amber-500/40 opacity-95' : isStreaming ? 'border-indigo-500/30' : 'border-zinc-800/70'
       }`}
@@ -130,6 +155,18 @@ export default function AgentMessage({
               <span className="text-[10px] font-mono font-medium px-1.5 py-0.5 rounded bg-zinc-900 border border-zinc-800 text-zinc-400">
                 {runtimeLabel}
               </span>
+            )}
+            {showRegeneratedFrom && (
+              <button
+                type="button"
+                onClick={scrollToSource}
+                title="Regenerated from an earlier reply — same context, jump to the source"
+                aria-label="Regenerated from an earlier reply — same context, jump to the source"
+                className="inline-flex items-center gap-1 text-[10px] font-mono text-zinc-400 hover:text-indigo-300 underline underline-offset-2 decoration-dotted cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500/30 rounded"
+              >
+                <History size={10} aria-hidden="true" />
+                <span>Regenerated — same context</span>
+              </button>
             )}
           </div>
 
@@ -279,7 +316,7 @@ export default function AgentMessage({
               }}
               className="px-3 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-500 text-white text-xs font-semibold flex items-center gap-1.5 transition cursor-pointer"
             >
-              <RefreshCw size={12} /> Retry
+              <RefreshCw size={12} aria-hidden="true" /> Retry — fresh run
             </button>
           </div>
         )}
@@ -291,8 +328,8 @@ export default function AgentMessage({
             <button
               onClick={() => id && regenerate(id)}
               className="w-7 h-7 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-300 flex items-center justify-center transition cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500/30"
-              title="Regenerate"
-              aria-label="Regenerate response"
+              title="Regenerate — same context"
+              aria-label="Regenerate response with the same context"
             >
               <RotateCcw size={12} aria-hidden="true" />
             </button>
@@ -304,8 +341,8 @@ export default function AgentMessage({
                 if (runId) void retryRun(runId);
               }}
               className="w-7 h-7 rounded-lg bg-amber-600 hover:bg-amber-500 text-white flex items-center justify-center transition cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500/30"
-              title="Retry failed run"
-              aria-label="Retry failed run"
+              title="Retry — fresh run"
+              aria-label="Retry failed run as a fresh run"
             >
               <RefreshCw size={12} aria-hidden="true" />
             </button>
