@@ -1,7 +1,4 @@
 import path from "node:path";
-import { getDb } from "../shared/config/database.js";
-import { agents } from "../db/schema.js";
-import { eq } from "drizzle-orm";
 import { Guard } from "./safety/guard.js";
 import { toolRegistry, resolveToolRoot } from "./tool-registry.js";
 import { skillsGate } from "../skills/skills-gate.js";
@@ -327,26 +324,54 @@ export class ToolExecutor {
     const __span = __tracing ? __tracing.startSpan("tool", { runId: __runId, channelId: __channelId, agentId, attributes: { tool: toolId } }) : null;
 
     try {
-      const db = getDb();
-      // 1. Fetch Agent Identity. Tenant routing: a tool call carries the run's
-      // workspace, and a workspace-record database holds the agent row — the
-      // ambient handle (global pool / ALS) cannot see it. Prefer the workspace
-      // handle; fall back to ambient when the workspace is local-only
-      // (NO_DATABASE) or the handle errors, preserving the legacy behavior.
+      // 1. Fetch Agent Identity. Tenant routing: prefer the workspace
+      // handle when one resolves (split-DB tenant scope binds it and the
+      // ambient handle cannot see workspace-record rows); fall back to the
+      // ambient handle, then to the owning gate so Local-only tool calls
+      // never require a database handle up front.
       const ctxWorkspaceId = (partialCtx as unknown as { workspaceId?: string })?.workspaceId;
-      let agentDb = db;
+      let agent: { id: string; name: string; authorityLevel: number; isOmniscient?: boolean } | null = null;
+      let agentDb: unknown = null;
       if (ctxWorkspaceId) {
         try {
           const { getWorkspaceDb } = await import("../workspace/workspace-gate.js");
           const resolved = await getWorkspaceDb(ctxWorkspaceId);
           if (resolved?.db) agentDb = resolved.db;
         } catch {
-          // local-only workspace or resolution failure: ambient handle
+          // local-only workspace or resolution failure: ambient, then gate
         }
       }
-      const agent = await agentDb.query.agents.findFirst({
-        where: eq(agents.id, agentId),
-      });
+      if (!agentDb) {
+        try {
+          const { getDb } = await import("../shared/config/database.js");
+          agentDb = getDb();
+        } catch {
+          agentDb = null;
+        }
+      }
+      if (agentDb) {
+        try {
+          const { eq: eqAgent } = await import("drizzle-orm");
+          const { agents: agentsTable } = await import("../db/schema.js");
+          const row = await (agentDb as any).query.agents.findFirst({
+            where: eqAgent(agentsTable.id, agentId),
+          });
+          if (row) {
+            agent = {
+              id: row.id,
+              name: row.name,
+              authorityLevel: row.authorityLevel as number,
+              isOmniscient: (row as { isOmniscient?: boolean }).isOmniscient,
+            };
+          }
+        } catch {
+          agent = null;
+        }
+      }
+      if (!agent) {
+        const { agentGate } = await import("../agents/agent-gate.js");
+        agent = await agentGate.getById(agentId, agentDb as any, ctxWorkspaceId);
+      }
 
       if (!agent) {
         throw new Error(`Agent not found with id: ${agentId}`);
@@ -355,10 +380,15 @@ export class ToolExecutor {
       // 2. Authorize Tool (Resolves direct grants + active skill tools + universal tools)
       // SK-002: authorize inside the SAME workspace handle the agent row
       // came from. Ambient authz disagreed with tenant identity in split-DB.
+      // Local-only calls pass no handle, and resolution degrades through
+      // the owning gates without requiring a database.
       const { runWithDb } = await import("../shared/config/database.js");
-      const allowedTools = await (runWithDb as (db: unknown, fn: () => Promise<string[]>) => Promise<string[]>)(agentDb, () =>
-        skillsGate.getResolvedToolsForAgent(agentId),
-      );
+      const { skillsGate } = await import("../skills/skills-gate.js");
+      const allowedTools = agentDb
+        ? await (runWithDb as (db: unknown, fn: () => Promise<string[]>) => Promise<string[]>)(agentDb, () =>
+          skillsGate.getResolvedToolsForAgent(agentId, ctxWorkspaceId),
+        )
+        : await skillsGate.getResolvedToolsForAgent(agentId, ctxWorkspaceId);
       // SK-008: fallback list is the shared constant (was a 5-id copy
       // missing lock_in/lock_out).
       const { UNIVERSAL_TOOL_IDS } = await import("./tools-gate.js");

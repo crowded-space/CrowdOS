@@ -75,14 +75,16 @@ export class SkillService {
     // reader's scope (workers/sockets run outside ALS; handles rotate) —
     // suffix-match across all scopes; extra misses beat stale authz for the
     // 30s TTL window.
-    if (agentId) {
-      const suffix = `:${agentId}`;
-      this.agentSkillsCache.invalidateSuffix(suffix);
-      this.resolvedToolsCache.invalidateSuffix(suffix);
-    } else {
-      this.agentSkillsCache.clear();
-      this.resolvedToolsCache.clear();
-    }
+      if (agentId) {
+        // Resolved-tools keys carry the workspace scope between the tenant
+        // scope and the agent id; match the id suffix across all scopes.
+        const suffix = `:${agentId}`;
+        this.agentSkillsCache.invalidateSuffix(suffix);
+        this.resolvedToolsCache.invalidateSuffix(suffix);
+      } else {
+        this.agentSkillsCache.clear();
+        this.resolvedToolsCache.clear();
+      }
   }
 
   async list(filters?: { category?: string; limit?: number }): Promise<SkillDefinition[]> {
@@ -174,28 +176,35 @@ export class SkillService {
     return result.length > 0;
   }
 
-  async getAgentSkills(agentId: string): Promise<SkillDefinition[]> {
+  async getAgentSkills(agentId: string, workspaceId?: string | null): Promise<SkillDefinition[]> {
     const key = `${dbScopeKey()}:${agentId}`;
     const cached = this.agentSkillsCache.get(key);
     if (cached) return cached;
 
-    const db = getDb();
-    const links = await db.query.agentSkills.findMany({
-      where: and(eq(agentSkills.agentId, agentId), eq(agentSkills.isEnabled, true)),
-    });
-    if (links.length === 0) {
-      this.agentSkillsCache.set(key, []);
+    // Local-only parity: without a database there are no database-backed
+    // skill assignments; Markdown skills resolve through their own store.
+    // Fail closed to empty rather than throwing past the tool path.
+    try {
+      const db = getDb();
+      const links = await db.query.agentSkills.findMany({
+        where: and(eq(agentSkills.agentId, agentId), eq(agentSkills.isEnabled, true)),
+      });
+      if (links.length === 0) {
+        this.agentSkillsCache.set(key, []);
+        return [];
+      }
+
+      const skillIds = links.map(l => l.skillId);
+      const skillRows = await db.query.skills.findMany({
+        where: (table, { inArray }) => inArray(table.id, skillIds),
+      });
+
+      const result = skillRows.map(mapSkill);
+      this.agentSkillsCache.set(key, result);
+      return result;
+    } catch {
       return [];
     }
-
-    const skillIds = links.map(l => l.skillId);
-    const skillRows = await db.query.skills.findMany({
-      where: (table, { inArray }) => inArray(table.id, skillIds),
-    });
-
-    const result = skillRows.map(mapSkill);
-    this.agentSkillsCache.set(key, result);
-    return result;
   }
 
   async assignSkill(agentId: string, skillId: string): Promise<void> {
@@ -249,25 +258,63 @@ export class SkillService {
     this.invalidateAgentCaches(agentId);
   }
 
-  async getResolvedToolsForAgent(agentId: string): Promise<string[]> {
-    const key = `${dbScopeKey()}:${agentId}`;
+  async getResolvedToolsForAgent(agentId: string, workspaceId?: string | null): Promise<string[]> {
+    const scope = workspaceId?.trim() || "default";
+    const key = `${dbScopeKey()}:${scope}:${agentId}`;
     const cached = this.resolvedToolsCache.get(key);
     if (cached) return cached;
 
-    const db = getDb();
     const toolIds = new Set<string>();
 
-    // 1. Direct grants from agent.toolkitModuleId
-    const agent = await db.query.agents.findFirst({ where: eq(agents.id, agentId) });
-    if (agent?.toolkitModuleId) {
-      const toolkit = await db.query.toolkitModules.findFirst({ where: eq(toolkitModules.id, agent.toolkitModuleId) });
-      if (toolkit?.tools) {
-        for (const t of toolkit.tools) toolIds.add(t);
+    // 1. Direct grants from agent.toolkitModuleId. The ambient/bound handle
+    // wins when one resolves (split-DB tenant scope binds it via runWithDb
+    // and the executor passes the resolved workspace handle); otherwise
+    // resolve the agent through the owning gate so Local-only callers
+    // authorize without a database. Toolkit rows follow the same precedence
+    // through the Modules gate.
+    let toolkitModuleId: string | null | undefined;
+    let db: ReturnType<typeof getDb> | null = null;
+    try {
+      db = getDb();
+    } catch {
+      db = null;
+    }
+    if (db) {
+      try {
+        const agent = await db.query.agents.findFirst({ where: eq(agents.id, agentId) });
+        toolkitModuleId = agent?.toolkitModuleId;
+        if (toolkitModuleId) {
+          const toolkit = await db.query.toolkitModules.findFirst({ where: eq(toolkitModules.id, toolkitModuleId) });
+          const tools = (toolkit as { tools?: unknown } | null)?.tools;
+          if (Array.isArray(tools)) {
+            for (const t of tools) if (typeof t === "string") toolIds.add(t);
+          }
+        }
+      } catch {
+        db = null;
+      }
+    }
+    if (!db) {
+      // No database handle (Local-only): resolve through the owning gates.
+      const { agentGate } = await import("../agents/agent-gate.js");
+      const agent = await agentGate.getById(agentId, undefined, workspaceId).catch(() => null);
+      toolkitModuleId = (agent as { toolkitModuleId?: string | null } | null)?.toolkitModuleId;
+      if (toolkitModuleId) {
+        try {
+          const { moduleGate } = await import("../modules/module-gate.js");
+          const toolkit = await moduleGate.toolkit.get(toolkitModuleId, workspaceId);
+          const tools = (toolkit as { tools?: unknown } | null)?.tools;
+          if (Array.isArray(tools)) {
+            for (const t of tools) if (typeof t === "string") toolIds.add(t);
+          }
+        } catch {
+          // Local miss: fall through to skills + universals.
+        }
       }
     }
 
     // 2. Inherited tool requirements from active skills (required + optional)
-    const activeSkills = await this.getAgentSkills(agentId);
+    const activeSkills = await this.getAgentSkills(agentId, workspaceId);
     for (const skill of activeSkills) {
       if (skill.requiredToolIds) {
         for (const t of skill.requiredToolIds) toolIds.add(t);

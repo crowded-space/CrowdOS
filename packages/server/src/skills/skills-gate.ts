@@ -33,11 +33,11 @@ export const skillsGate = {
   create: (input: CreateSkillInput) => skillService.create(input),
   update: (id: string, input: UpdateSkillInput) => skillService.update(id, input),
   delete: (id: string) => skillService.delete(id),
-  getAgentSkills: (agentId: string) => skillService.getAgentSkills(agentId),
+  getAgentSkills: (agentId: string, workspaceId?: string | null) => skillService.getAgentSkills(agentId, workspaceId),
   assignSkill: (agentId: string, skillId: string) => skillService.assignSkill(agentId, skillId),
   removeSkill: (agentId: string, skillId: string) => skillService.removeSkill(agentId, skillId),
   replaceAgentSkills: (agentId: string, skillIds: string[]) => skillService.replaceAgentSkills(agentId, skillIds),
-  getResolvedToolsForAgent: (agentId: string) => skillService.getResolvedToolsForAgent(agentId),
+  getResolvedToolsForAgent: (agentId: string, workspaceId?: string | null) => skillService.getResolvedToolsForAgent(agentId, workspaceId),
   invalidateAgentCaches: (agentId?: string) => skillService.invalidateAgentCaches(agentId),
   // §20 Markdown skills: discovery-first, lazily expanded (§17: Markdown on disk).
   listMarkdownSummaries,
