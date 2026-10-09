@@ -49,6 +49,10 @@ export interface LocalMemoryNote {
   detailed: string;
   createdAt: string;
   updatedAt: string;
+  // MEM-002: suppression timestamp must exist on the local shape or the
+  // degraded path cannot honor suppression parity (TS2559 fix).
+  suppressUntil?: string | null;
+  suppressReason?: string | null;
 }
 
 function toLocal(agentId: string, note: Record<string, unknown>): LocalMemoryNote {

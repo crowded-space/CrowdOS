@@ -1,0 +1,9 @@
+
+ RUN  v4.1.7 C:/Users/Asus/Documents/GitHub/.ThisCrowd/packages/server
+
+
+ Test Files  3 passed (3)
+      Tests  14 passed (14)
+   Start at  03:04:20
+   Duration  13.69s (transform 4.11s, setup 211ms, import 3.33s, tests 9.03s, environment 1ms)
+

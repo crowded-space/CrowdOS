@@ -33,7 +33,7 @@ import type {
   BrokerEventType,
 } from "../../event-broker/event-broker-gate.js";
 import type { AgentProfile } from "../../agents/agent-gate.js";
-import { logMetric } from "../core/structured-log.js";
+import { logMetric, logWarn } from "../core/structured-log.js";
 import { queueGate } from "../../queue/queue-gate.js";
 
 const mentionParser = new MentionParser();
@@ -321,6 +321,42 @@ export function registerSocketServer(httpServer: HttpServer, broker: EventBroker
   setSharedBroker(broker);
 
   const executeRun: RunExecutor = deps.executeRun ?? ((req) => runtimeGate.execute(req));
+  // XD-016/ART-2: inline execution must run inside the message workspace's
+  // ALS handle, or run/artifact writes land on the ambient pool instead of
+  // the workspace DB (lost or cross-tenant rows in split-DB deployments).
+  const executeRunScoped: RunExecutor = async (req) => {
+    const ws = (req as unknown as Record<string, unknown>).workspaceId as string | undefined;
+    if (!ws || deps.executeRun) return executeRun(req);
+    // SH-005: the degrade below is fail-open by design (local-first), but it
+    // must not be silent — without a warn line a record-only workspace run is
+    // indistinguishable from a scoped one in the field (lost-artifact reports).
+    const warnDegraded = (reason: string): void => {
+      try {
+        logWarn({ stage: "socket.run.scope_degraded", workspaceId: ws, reason });
+      } catch {
+        // logging must never break the degrade path
+      }
+    };
+    try {
+      // dbForWorkspace lives in Shared/config (record-only tenant resolver);
+      // importing it from workspace-gate yielded undefined and the catch below
+      // silently degraded every inline run to the unscoped path (XD-016 gap).
+      const { runWithDb, dbForWorkspace } = await import("../config/database.js");
+      let degradeReason: string | null = null;
+      const db = await dbForWorkspace(ws).catch((err: unknown) => {
+        degradeReason = err instanceof Error ? err.message : String(err);
+        return null;
+      });
+      if (!db) {
+        warnDegraded(degradeReason ?? "resolver_null");
+        return executeRun(req);
+      }
+      return await runWithDb(db, () => executeRun(req));
+    } catch (err) {
+      warnDegraded(err instanceof Error ? err.message : String(err));
+      return executeRun(req);
+    }
+  };
 
   /**
    * Run a trigger with cancellation support (HM2/CAN-1). Registers the run's
@@ -331,7 +367,7 @@ export function registerSocketServer(httpServer: HttpServer, broker: EventBroker
     const key = runKey(req.channelId, req.agent.id);
     const entry = beginRun(key, req.agent.name);
     try {
-      return await executeRun({ ...req, abortSignal: entry.controller.signal });
+      return await executeRunScoped({ ...req, abortSignal: entry.controller.signal });
     } finally {
       endRun(key, entry);
     }
@@ -539,6 +575,39 @@ export function registerSocketServer(httpServer: HttpServer, broker: EventBroker
       (socket.data as { workspaceId?: string }).workspaceId ?? identity.workspaceId ?? DEFAULT_WORKSPACE_SCOPE;
 
     /**
+     * AP-009/APR-2: approval:decide / approval:list bypass the REST tenant hook
+     * (x-workspace-id), so bare getDb() inside approvalGate/runsGate resolved
+     * the global pool — in split-DB deployments decide read/updated the wrong
+     * database ("not_found"/cross-tenant) and list came back empty. Run those
+     * handlers inside the socket's workspace handle, mirroring
+     * executeRunScoped's discipline: local-only/unresolvable workspaces degrade
+     * to the unscoped path with one structured warn (fail-open, never silent).
+     */
+    const runWithSocketWorkspace = async <T>(fn: () => Promise<T>): Promise<T> => {
+      const ws = socketWorkspace();
+      const degrade = (reason: string): void => {
+        try {
+          logWarn({ stage: "socket.approval.scope_degraded", workspaceId: ws, reason });
+        } catch {
+          // logging must never break the handler
+        }
+      };
+      const { runWithDb, dbForWorkspace } = await import("../config/database.js");
+      let failReason: string | null = null;
+      const db = await dbForWorkspace(ws).catch((err: unknown) => {
+        failReason = err instanceof Error ? err.message : String(err);
+        return null;
+      });
+      if (!db) {
+        degrade(failReason ?? "resolver_null");
+        return fn();
+      }
+      // fn errors propagate to the handler's catch (error emit); never re-run
+      // the handler body on failure — a decide must not execute twice.
+      return await runWithDb(db, fn);
+    };
+
+    /**
      * §30 channel-room admission. Returns the room to join, or a denial reason.
      *
      * The room key comes from the CHANNEL's owning workspace (server truth via
@@ -725,7 +794,8 @@ export function registerSocketServer(httpServer: HttpServer, broker: EventBroker
 
       try {
         // 1. Resolve and parse mentions from content
-        const resolvedMentions = await mentionParser.parseMentions(content);
+        // AGT-003: same workspace scope as the roster below.
+        const resolvedMentions = await mentionParser.parseMentions(content, msgWorkspaceId);
 
         // 2. Persist the human operator's message — author identity is the
         // server-verified key identity; client authorId/authorName claims are
@@ -749,7 +819,10 @@ export function registerSocketServer(httpServer: HttpServer, broker: EventBroker
         );
 
         // 3. Process mentions and triggers
-        const allAgents = await agentRegistry.list({ isTemplate: false });
+        // AGT-003: scope the roster to this message's workspace. An
+        // unscoped list leaks foreign-workspace agents into mention and
+        // auto-trigger dispatch.
+        const allAgents = await agentRegistry.list({ isTemplate: false, workspaceId: msgWorkspaceId });
 
         console.log(`[Socket] user:message received in channel ${channelId}: "${content}" (resolved mentions: ${resolvedMentions.length})`);
 
@@ -983,23 +1056,32 @@ export function registerSocketServer(httpServer: HttpServer, broker: EventBroker
         const { run, checkpoint } = result;
         const resumeContext = checkpoint ? { watermarkSeq: checkpoint.watermarkSeq, completedCallIds: checkpoint.completedCallIds, historyRef: checkpoint.historyRef, updatedAt: checkpoint.updatedAt } : { watermarkSeq: 0, completedCallIds: [] as string[] };
         const queueMode = queueGate.mode();
+        // RUN-006 (socket leg): the ack carries delivery honesty like the REST
+        // route — an enqueue failure used to emit run:resume:ok regardless.
+        let delivery: "queued" | "inline" | "failed" = queueMode === "bullmq" ? "queued" : "inline";
+        let deliveryDetail: string | null = null;
         if (queueMode === "bullmq") {
           const messageId = `resume:${run.id}:${Date.now()}`;
-          await queueGate.enqueueRun({
-            runId: run.id,
-            channelId: run.channelId,
-            agentId: run.agentId,
-            messageId,
-            userInput: "",
-            workspaceId: run.workspaceId ?? undefined,
-            // @ts-ignore
-            resumeContext,
-            // @ts-ignore
-            resumeFrom: checkpoint,
-          } as unknown as never);
-          socket.emit("run:resume:ok" as any, { runId: run.id, status: run.status, resumeFrom: checkpoint });
+          try {
+            await queueGate.enqueueRun({
+              runId: run.id,
+              channelId: run.channelId,
+              agentId: run.agentId,
+              messageId,
+              userInput: "",
+              workspaceId: run.workspaceId ?? undefined,
+              // @ts-ignore
+              resumeContext,
+              // @ts-ignore
+              resumeFrom: checkpoint,
+            } as unknown as never);
+          } catch (err) {
+            delivery = "failed";
+            deliveryDetail = err instanceof Error ? err.message : String(err);
+            console.error("[Socket] run:resume enqueue failed:", deliveryDetail);
+          }
+          socket.emit("run:resume:ok" as any, { runId: run.id, status: run.status, resumeFrom: checkpoint, delivery, ...(deliveryDetail ? { deliveryDetail } : {}) });
         } else {
-          const { runtimeGate } = await import("../../runtime/runtime-gate.js");
           const { agentGate } = await import("../../agents/agent-gate.js");
           // Shared instance: runtime emits fan out + persist via the bridge above.
           const broker = globalBroker ?? getSharedBroker();
@@ -1020,11 +1102,18 @@ export function registerSocketServer(httpServer: HttpServer, broker: EventBroker
             } catch {}
           }
           if (!agent) {
-            socket.emit("error" as any, { code: "agent_not_found", message: `agent ${run.agentId} not found` });
+            // RUN-006 (socket leg): no agent resolved = nothing will execute
+            // the resume; still ack (delivery:failed) so the caller can tell
+            // lost from delivered instead of only the error channel.
+            socket.emit("run:resume:ok" as any, { runId: run.id, status: run.status, delivery: "failed", deliveryDetail: `agent not found: ${run.agentId}` });
             return;
           }
-          socket.emit("run:resume:ok" as any, { runId: run.id, status: run.status });
-          void (runtimeGate as unknown as { execute: (req: unknown) => Promise<unknown> }).execute({
+          socket.emit("run:resume:ok" as any, { runId: run.id, status: run.status, delivery });
+          // XD-016/ART-2: resume must ride the same tenant-scoped executor as
+          // live dispatch — a bare runtimeGate.execute here skipped runWithDb,
+          // so resumed-run artifacts wrote to the ambient pool (lost or
+          // cross-tenant) even after the dispatch path was scoped.
+          void (executeRunScoped as unknown as (req: unknown) => Promise<unknown>)({
             agent,
             channelId: run.channelId,
             workspaceId: run.workspaceId ?? "default",
@@ -1115,48 +1204,54 @@ export function registerSocketServer(httpServer: HttpServer, broker: EventBroker
         }
       }
       try {
-        const { approvalGate, emitDecided } = await import("../../approvals/approval-gate.js");
-        const existing = await approvalGate.getById(approvalId);
-        if (!existing) {
-          socket.emit("error" as any, { code: "not_found", message: `approval ${approvalId} not found` });
-          return;
-        }
-        if (existing.status !== "pending") {
-          socket.emit("error" as any, { code: "already_decided", message: `approval already ${existing.status}` });
-          return;
-        }
-        const decidedBy = identity.mode === "apikey" ? `apikey:${identity.keyId}` : identity.userId;
-        const updated = await approvalGate.decide(approvalId, { decision, decidedBy, scope: scope ?? null });
-        if (!updated) {
-          socket.emit("error" as any, { code: "decision_failed", message: "decision failed (concurrent update?)" });
-          return;
-        }
-        // Emit approval.decided for timeline observers
-        let channelIdForRun: string | undefined;
-        try {
-          const { runsGate } = await import("../../runs/runs-gate.js");
-          const run = await runsGate.getById(updated.runId);
-          channelIdForRun = run?.channelId;
-          emitDecided(broker, {
-            runId: updated.runId,
-            approvalId: updated.id,
-            tool: updated.toolName,
-            decision,
-            decidedBy,
-            scope: updated.scope,
-            riskClass: updated.riskClass,
-            channelId: channelIdForRun,
-          });
-        } catch {}
-        // APR-1: ensure run resumes even if no live poller (orphaned). Poller also transitions, so idempotent.
-        try {
-          const { runsGate } = await import("../../runs/runs-gate.js");
-          const run = await runsGate.getById(updated.runId);
-          if (run?.status === "waiting_for_approval") {
-            await runsGate.transition(updated.runId, "running", `approval_${decision}`);
+        // AP-009: run the gate calls inside the socket's workspace handle so
+        // split-DB deployments decide/list the right database.
+        await runWithSocketWorkspace(async () => {
+          const { approvalGate, emitDecided } = await import("../../approvals/approval-gate.js");
+          const existing = await approvalGate.getById(approvalId);
+          if (!existing) {
+            socket.emit("error" as any, { code: "not_found", message: `approval ${approvalId} not found` });
+            return;
           }
-        } catch {}
-        socket.emit("approval:decided" as any, { approvalId: updated.id, decision, status: updated.status });
+          if (existing.status !== "pending") {
+            socket.emit("error" as any, { code: "already_decided", message: `approval already ${existing.status}` });
+            return;
+          }
+          const decidedBy = identity.mode === "apikey" ? `apikey:${identity.keyId}` : identity.userId;
+          const updated = await approvalGate.decide(approvalId, { decision, decidedBy, scope: scope ?? null });
+          if (!updated) {
+            socket.emit("error" as any, { code: "decision_failed", message: "decision failed (concurrent update?)" });
+            return;
+          }
+          // Emit approval.decided for timeline observers
+          let channelIdForRun: string | undefined;
+          try {
+            const { runsGate } = await import("../../runs/runs-gate.js");
+            const run = await runsGate.getById(updated.runId);
+            channelIdForRun = run?.channelId;
+            emitDecided(broker, {
+              runId: updated.runId,
+              approvalId: updated.id,
+              tool: updated.toolName,
+              decision,
+              decidedBy,
+              scope: updated.scope,
+              riskClass: updated.riskClass,
+              channelId: channelIdForRun,
+            });
+          } catch {}
+          // APR-1: ensure run resumes even if no live poller (orphaned). Poller also transitions, so idempotent.
+          try {
+            const { runsGate } = await import("../../runs/runs-gate.js");
+            const run = await runsGate.getById(updated.runId);
+            if (run?.status === "waiting_for_approval") {
+              // XD-009: funnel through stateGate for the status emit.
+              const { stateGate } = await import("../../state/state-gate.js");
+              await stateGate.applyRunTransition({ runId: updated.runId, to: "running", reason: `approval_${decision}`, broker: globalBroker, workspaceId: (run as any)?.workspaceId ?? (socket.data as any)?.workspaceId ?? null });
+            }
+          } catch {}
+          socket.emit("approval:decided" as any, { approvalId: updated.id, decision, status: updated.status });
+        });
       } catch (err) {
         console.error("[Socket] approval:decide failed:", err);
         socket.emit("error" as any, { code: "approval_decide_failed", message: err instanceof Error ? err.message : String(err) });
@@ -1177,9 +1272,12 @@ export function registerSocketServer(httpServer: HttpServer, broker: EventBroker
         }
       }
       try {
-        const { approvalGate } = await import("../../approvals/approval-gate.js");
-        const rows = await approvalGate.listByRun(runId);
-        socket.emit("approval:list:result" as any, { runId, approvals: rows });
+        // AP-009: same workspace scope as approval:decide above.
+        await runWithSocketWorkspace(async () => {
+          const { approvalGate } = await import("../../approvals/approval-gate.js");
+          const rows = await approvalGate.listByRun(runId);
+          socket.emit("approval:list:result" as any, { runId, approvals: rows });
+        });
       } catch (err) {
         console.error("[Socket] approval:list failed:", err);
         socket.emit("error" as any, { code: "approval_list_failed", message: err instanceof Error ? err.message : String(err) });

@@ -39,6 +39,12 @@ export async function artifactsRoutes(app: FastifyInstance) {
       return reply.send({ artifacts: rows });
     }
     if (query.workspaceId) {
+      // ART-4: bind the query to the caller identity. A mismatched
+      // workspaceId enumerates another workspace's artifacts on shared DBs.
+      const callerWs = (request as any).workspaceId ?? null;
+      if (callerWs && query.workspaceId !== callerWs) {
+        return reply.status(403).send({ error: "Forbidden", message: "workspaceId does not match caller workspace" });
+      }
       const rows = await artifactsGate.listByWorkspace(query.workspaceId, opts);
       return reply.send({ artifacts: rows });
     }

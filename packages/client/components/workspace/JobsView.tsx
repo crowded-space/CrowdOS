@@ -2,10 +2,14 @@ import { useMemo, useState } from 'react';
 import { ArrowRight, ClipboardList, FileCode2, RotateCcw, Square, Terminal } from 'lucide-react';
 import { useCrowdOSStore, type jobRow } from '@/stores/crowdOsStore';
 import { useShallow } from 'zustand/react/shallow';
+import { isStoppableRunStatus } from './run-stoppability';
 
 // Terminal run states from the server state machine (run-state-machine.ts).
-// Terminal rows disable Stop; only resumable rows enable Retry because
-// POST /api/runs/:id/resume rejects every other state (routes/runs.ts).
+// Stop is enabled only for live stoppable states (run-stoppability.ts): the
+// socket user:cancel transport aborts only in-process runs, so parked
+// resumable/orphaned rows disable Stop and use Retry. Only resumable rows
+// enable Retry because POST /api/runs/:id/resume rejects every other state
+// (routes/runs.ts).
 const TERMINAL_RUN_STATUSES = new Set(['completed', 'failed', 'cancelled']);
 
 function formatElapsedMs(ms: number | null | undefined): string {
@@ -72,7 +76,7 @@ export function JobsView(): React.JSX.Element {
   const [retryBusy, setRetryBusy] = useState<string | null>(null);
   const [retryError, setRetryError] = useState<string | null>(null);
   const channelNameById = useMemo(function () {
-    const map = {};
+    const map: Record<string, string> = {};
     for (const ws of workspaces) {
       for (const ch of (ws.channels || [])) map[ch.id] = "#" + ch.name;
       for (const cat of (ws.categories || [])) {
@@ -82,7 +86,7 @@ export function JobsView(): React.JSX.Element {
     return map;
   }, [workspaces]);
   const agentNameById = useMemo(function () {
-    const map = {};
+    const map: Record<string, string> = {};
     for (const ag of agents) map[ag.id] = ag.name;
     return map;
   }, [agents]);
@@ -90,12 +94,12 @@ export function JobsView(): React.JSX.Element {
     return Object.values(jobsByRun).sort(function (a, b) { return a.updatedAt < b.updatedAt ? 1 : -1; });
   }, [jobsByRun]);
   const statuses = useMemo(function () {
-    const out = [];
+    const out: string[] = [];
     for (const job of jobs) { if (!out.includes(job.status)) out.push(job.status); }
     return out.sort();
   }, [jobs]);
   const channelIds = useMemo(function () {
-    const out = [];
+    const out: string[] = [];
     for (const job of jobs) { if (!out.includes(job.channelId)) out.push(job.channelId); }
     return out.sort();
   }, [jobs]);
@@ -109,18 +113,18 @@ export function JobsView(): React.JSX.Element {
     }
     return true;
   });
-  const handleRetry = function (runId) {
+  const handleRetry = function (runId: string) {
     setRetryBusy(runId);
     setRetryError(null);
     retryRun(runId).catch(function (err) {
       setRetryError(err instanceof Error ? err.message : "Failed to retry run");
     }).finally(function () { setRetryBusy(null); });
   };
-  const handleOpenDiff = function (job) {
+  const handleOpenDiff = function (job: jobRow) {
     fetchArtifacts(job.runId);
     if (job.channelId !== activeChannelId) setActiveChannel(job.channelId);
   };
-  const handleOpenLogs = function (job) {
+  const handleOpenLogs = function (job: jobRow) {
     if (job.channelId !== activeChannelId) setActiveChannel(job.channelId);
   };
   const filtersActive = statusFilter !== "all" || channelFilter !== "all" || needle !== "";
@@ -228,7 +232,10 @@ export function JobsView(): React.JSX.Element {
               <tbody>
                 {filtered.map(job => {
                   const terminal = TERMINAL_RUN_STATUSES.has(job.status.toLowerCase());
+                  const stoppable = isStoppableRunStatus(job.status);
                   const resumable = job.status.toLowerCase() === String("resumable");
+                  const orphaned = job.status.toLowerCase() === String("orphaned");
+                  const cancelling = job.status.toLowerCase() === String("cancelling");
                   const stopping = Object.keys(cancellingByAgent).some(k => k.startsWith(job.channelId + String(":")));
                   const agentsLabel = job.agentIds.length > 0
                     ? job.agentIds.map(id => agentNameById[id] || id).join(String(", "))
@@ -249,8 +256,8 @@ export function JobsView(): React.JSX.Element {
                         <span className="inline-flex items-center gap-1">
                           <button
                             onClick={() => stopRun(job.runId)}
-                            disabled={terminal || stopping}
-                            title={terminal ? String("Run already ") + job.status : String("Stop this run")}
+                            disabled={!stoppable || stopping}
+                            title={terminal ? String("Run already ") + job.status : resumable ? String("Parked run — use Retry to resume") : orphaned ? String("Parked run — Stop unavailable") : cancelling ? String("Run is already stopping") : String("Stop this run")}
                             aria-label={String("Stop run ") + job.runId}
                             className="w-7 h-7 rounded-lg border border-zinc-800 bg-zinc-900 text-zinc-300 hover:bg-zinc-800 disabled:opacity-40 flex items-center justify-center transition cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500/30"
                           >

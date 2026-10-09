@@ -1,6 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
-import { ilike, or, desc, sql } from "drizzle-orm";
+import { ilike, or, and, desc, eq, sql } from "drizzle-orm";
 import { getDb } from "../shared/config/database.js";
 import { channels, messages } from "../db/schema.js";
 
@@ -24,7 +24,10 @@ export async function searchRoutes(app: FastifyInstance) {
       const { q, limit } = request.query;
       const trimmed = q.trim();
       const searchPattern = `%${trimmed}%`;
-      const db = getDb();
+      // XD-001: caller workspace handle + filter. Unscoped search leaked
+      // cross-workspace channels/messages.
+      const db = (request as any).db ?? getDb();
+      const callerWs = (request as any).workspaceId ?? null;
 
       // pg_trgm similarity ranking: when extension is available, order by similarity descending
       // to surface best matches first while still using the gin_trgm_ops index (ILIKE %pat% already hits it).
@@ -32,17 +35,22 @@ export async function searchRoutes(app: FastifyInstance) {
       const trySimilarity = async () => {
         try {
           const [matchedChannels, matchedMessages] = await Promise.all([
-            db.execute(sql`SELECT id, name, category_id AS "categoryId", type, position, created_at AS "createdAt", archived_at AS "archivedAt", similarity(name, ${trimmed}) AS sim FROM channels WHERE name ILIKE ${searchPattern} ORDER BY sim DESC, position ASC LIMIT ${limit}`),
-            db.execute(sql`SELECT id, channel_id AS "channelId", author_id AS "authorId", author_name AS "authorName", author_level AS "authorLevel", author_type AS "authorType", LEFT(content, 280) AS content, is_internal_monologue AS "isInternalMonologue", sequence_number AS "sequenceNumber", timestamp, similarity(content, ${trimmed}) AS sim FROM messages WHERE content ILIKE ${searchPattern} OR author_name ILIKE ${searchPattern} ORDER BY sim DESC, timestamp DESC LIMIT ${limit}`),
+            db.execute(sql`SELECT id, name, category_id AS "categoryId", type, position, created_at AS "createdAt", archived_at AS "archivedAt", workspace_id AS "workspace_id", similarity(name, ${trimmed}) AS sim FROM channels WHERE name ILIKE ${searchPattern} ORDER BY sim DESC, position ASC LIMIT ${limit}`),
+            db.execute(sql`SELECT id, channel_id AS "channelId", author_id AS "authorId", author_name AS "authorName", author_level AS "authorLevel", author_type AS "authorType", LEFT(content, 280) AS content, is_internal_monologue AS "isInternalMonologue", sequence_number AS "sequenceNumber", timestamp, workspace_id AS "workspace_id", similarity(content, ${trimmed}) AS sim FROM messages WHERE content ILIKE ${searchPattern} OR author_name ILIKE ${searchPattern} ORDER BY sim DESC, timestamp DESC LIMIT ${limit}`),
           ]);
           // drizzle execute returns { rows } on postgres-js
           const chanRows = (matchedChannels as unknown as { rows?: unknown[] }).rows ?? (matchedChannels as unknown as unknown[]);
           const msgRows = (matchedMessages as unknown as { rows?: unknown[] }).rows ?? (matchedMessages as unknown as unknown[]);
-          // Strip sim before returning
-          const stripSim = (r: Record<string, unknown>) => { const { sim, ...rest } = r; return rest; };
+          // XD-001: raw rows carry workspace_id; filter here, strip sim +
+          // workspace_id before returning.
+          const inWs = (r: Record<string, unknown>) =>
+            !callerWs || r.workspaceId === callerWs || r.workspace_id === callerWs;
+          const stripSim = (r: Record<string, unknown>) => { const { sim, workspaceId, workspace_id, ...rest } = r; return rest; };
+          const chanArr = (Array.isArray(chanRows) ? chanRows : []).filter((r) => inWs(r as Record<string, unknown>));
+          const msgArr = (Array.isArray(msgRows) ? msgRows : []).filter((r) => inWs(r as Record<string, unknown>));
           return {
-            channels: (Array.isArray(chanRows) ? chanRows : []).map((r) => stripSim(r as Record<string, unknown>)),
-            messages: (Array.isArray(msgRows) ? msgRows : []).map((r) => stripSim(r as Record<string, unknown>)),
+            channels: chanArr.map((r) => stripSim(r as Record<string, unknown>)),
+            messages: msgArr.map((r) => stripSim(r as Record<string, unknown>)),
           };
         } catch {
           return null;
@@ -51,7 +59,16 @@ export async function searchRoutes(app: FastifyInstance) {
 
       const ranked = await trySimilarity();
       if (ranked) {
-        return { query: q, channels: ranked.channels, messages: ranked.messages };
+        // XD-001: the raw-SQL similarity path cannot easily bind the
+        // workspace predicate across pg_trgm variants; filter in JS. The
+        // drizzle fallback below filters in SQL.
+        const inWs = (r: unknown) =>
+          !callerWs || (r as Record<string, unknown>).workspaceId === callerWs || (r as Record<string, unknown>).workspace_id === callerWs;
+        return {
+          query: q,
+          channels: (ranked.channels as unknown[]).filter(inWs),
+          messages: (ranked.messages as unknown[]).filter(inWs),
+        };
       }
 
       const [matchedChannels, matchedMessages] = await Promise.all([
@@ -66,7 +83,7 @@ export async function searchRoutes(app: FastifyInstance) {
             archivedAt: channels.archivedAt,
           })
           .from(channels)
-          .where(ilike(channels.name, searchPattern))
+          .where(callerWs ? and(ilike(channels.name, searchPattern), eq(channels.workspaceId, callerWs)) : ilike(channels.name, searchPattern))
           .limit(limit),
         db
           .select({
@@ -83,10 +100,12 @@ export async function searchRoutes(app: FastifyInstance) {
           })
           .from(messages)
           .where(
-            or(
-              ilike(messages.content, searchPattern),
-              ilike(messages.authorName, searchPattern)
-            )
+            callerWs
+              ? and(
+                  or(ilike(messages.content, searchPattern), ilike(messages.authorName, searchPattern)),
+                  eq(messages.workspaceId, callerWs)
+                )
+              : or(ilike(messages.content, searchPattern), ilike(messages.authorName, searchPattern))
           )
           .orderBy(desc(messages.timestamp))
           .limit(limit),

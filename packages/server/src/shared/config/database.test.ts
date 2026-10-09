@@ -50,6 +50,40 @@ describe("runWithDb tenant scope", () => {
     expect(runWithDb(handleA, dbScopeKey)).toBe(k1);
     expect(runWithDb(fakeDb("b") as any, dbScopeKey)).not.toBe(k1);
   });
+
+  // TG-2 (SH-007): the socket resume path fires the executor with `void
+  // executeRunScoped(...)`, so the handler returns long before the runtime's
+  // own awaits (LLM/tool calls) continue. ALS must keep the bound handle for
+  // those deferred continuations, and must not leak to sibling unscoped work.
+  it("keeps the bound handle for deferred continuations after a fire-and-forget caller returns (TG-2)", async () => {
+    const handle = fakeDb("resume") as any;
+    const observed: Array<{ tag: string | undefined; key: string }> = [];
+    let releaseRuntime!: () => void;
+    const runtimeGate = new Promise<void>((resolve) => (releaseRuntime = resolve));
+
+    // Fire-and-forget shape of run:resume: the caller does not await.
+    const run = runWithDb(handle, async () => {
+      await new Promise((r) => setTimeout(r, 5)); // runtime await #1
+      observed.push({ tag: (getDb() as any).tag, key: dbScopeKey() });
+      await runtimeGate; // long LLM/tool wait; handler has returned by now
+      observed.push({ tag: (getDb() as any).tag, key: dbScopeKey() });
+    });
+    void run;
+
+    // A sibling unscoped task deferred outside the run must stay global.
+    await new Promise((r) => setTimeout(r, 20));
+    expect(observed).toHaveLength(1);
+    expect(observed[0].tag).toBe("resume");
+    expect(observed[0].key).not.toBe("global");
+    expect(dbScopeKey()).toBe("global");
+
+    releaseRuntime();
+    await run; // settle so the scope teardown is deterministic
+    expect(observed).toHaveLength(2);
+    expect(observed[1].tag).toBe("resume");
+    expect(observed[1].key).toBe(observed[0].key);
+    expect(dbScopeKey()).toBe("global");
+  });
 });
 
 describe("tenant-scoped roster cache", () => {

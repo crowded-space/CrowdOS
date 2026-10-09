@@ -85,6 +85,8 @@ export const memoriesGate = {
   updateMemoryNote,
   archiveMemoryNote,
   suppressMemoryNote,
+  // MEM-004: logMemoryUpdate was flat-only; gate object carries it now.
+  logMemoryUpdate,
   retrieveMemoryCandidates,
   buildMemoryPreviewBlock,
   mirrorMemoryNote,

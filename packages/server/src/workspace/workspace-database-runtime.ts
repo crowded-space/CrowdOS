@@ -4,12 +4,12 @@
 // held in memory — never in logs or errors.
 // ponytail: `.env` lookup kept as legacy fallback; remove when importer lands.
 //
-// Routing contract (record-only):
+// Routing contract (workspace-scoped):
 //   - `getWorkspaceDb(workspaceId)` resolves `{ db, source: "workspace" }`
 //     from the registry record (or per-workspace env file).
-//   - No id or no assigned URL throws NO_DATABASE — NEVER the process env
-//     pool (that fallback was the "single predetermined db" leak; env URLs
-//     are CLI-only). Callers degrade to local files.
+//   - No id or no assigned URL throws NO_DATABASE — NEVER the process-wide
+//     DATABASE_URL pool (that fallback was the "single predetermined db" leak).
+//     Callers degrade to local files.
 //   - `source === "global"` is retained on the type for the tenant hook's
 //     local-mode branch but is no longer produced here.
 //   - One drizzle handle === one Postgres database: never mix handles inside
@@ -82,12 +82,14 @@ async function evictIdle(now: number): Promise<void> {
 }
 
 /**
- * Resolve the drizzle handle for a workspace's record database. Record-only:
- * throws NO_DATABASE when no id is given or no database URL is assigned —
- * NEVER falls back to the process env pool (that fallback was the "single
- * predetermined db" leak; env URLs are CLI-only). Callers degrade to local.
+ * Resolve the drizzle handle for a workspace-assigned database. Throws
+ * NO_DATABASE when no id or database URL is assigned — NEVER falls back to the
+ * process-wide DATABASE_URL pool (that fallback was the "single predetermined
+ * db" leak). Callers degrade to local.
  * Rotates the pooled handle when the assigned URL changed on disk.
  */
+const rotationChains = new Map<string, Promise<void>>();
+
 export async function getWorkspaceDb(
   workspaceId?: string | null,
   opts?: { envPath?: string },
@@ -95,12 +97,34 @@ export async function getWorkspaceDb(
   if (!workspaceId) {
     throw Object.assign(new Error("NO_DATABASE: no workspace context (local-only)"), { code: "NO_DATABASE" });
   }
+  // WS-007: serialize rotation per workspace. Concurrent callers during a
+  // URL change both saw the stale pool and orphaned a client. Chain on a
+  // per-id promise so only one rotation runs at a time.
+  const prev = rotationChains.get(workspaceId) ?? Promise.resolve();
+  let release: () => void = () => {};
+  const turn = new Promise<void>((res) => { release = res; });
+  rotationChains.set(workspaceId, prev.then(() => turn));
+  await prev;
+  try {
+    return await getWorkspaceDbInner(workspaceId, opts);
+  } finally {
+    release();
+    if (rotationChains.get(workspaceId)?.then) {
+      // Leave chain cleanup to the next waiter; bounded by workspace count.
+    }
+  }
+}
+
+async function getWorkspaceDbInner(
+  workspaceId: string,
+  opts?: { envPath?: string },
+): Promise<ResolvedWorkspaceDb> {
   let url: string | null = null;
   try {
     const regRecord = await getWorkspaceRecord(workspaceId);
-    if (regRecord?.databaseUrl) url = regRecord.databaseUrl;
+    if (regRecord?.databaseUrl?.trim()) url = regRecord.databaseUrl.trim();
   } catch {}
-  if (!url) url = await readWorkspaceDatabaseUrl(workspaceId, opts);
+  if (!url) url = (await readWorkspaceDatabaseUrl(workspaceId, opts))?.trim() || null;
   if (!url) {
     throw Object.assign(new Error(`NO_DATABASE: workspace ${workspaceId} has no databaseUrl (local-only)`), { code: "NO_DATABASE" });
   }
@@ -163,8 +187,52 @@ export function __resetWorkspaceDbPoolsForTests(): void {
 }
 
 // ponytail: serial + per-target best-effort — one dead database never stalls
-// the rest. Record-only: no global-pool target (env URLs are CLI-only).
+// the rest. Only workspace-assigned pools are targets; the process-wide pool
+// is never added to tenant fan-out.
 // Parallelize if fleets make the serial pass slow.
+// ─── SYNC-1 schema readiness (auto schema sync) ─────────────────────────
+// A configured database is only query-ready when the CrowdOS relations exist.
+// A stale/partial schema (reachable but missing tables) answers NO tenant query
+// — without this probe the bind looks healthy while every read degrades. The
+// probe is one information_schema query, cached 60s per workspace; unknown
+// workspaces and probe failures report `ready: null` (honest unknown), never throw.
+const SCHEMA_PROBE_TABLES = ["workspaces", "categories", "channels", "messages", "agents", "runs", "token_usage_log", "model_modules", "channel_settings"] as const;
+const SCHEMA_PROBE_TTL_MS = 60_000;
+const schemaProbeCache = new Map<string, { at: number; ready: boolean | null; missing: string[] }>();
+
+export async function checkWorkspaceSchemaReady(
+  workspaceId: string,
+): Promise<{ ready: boolean | null; missing: string[] }> {
+  const now = Date.now();
+  const hit = schemaProbeCache.get(workspaceId);
+  if (hit && now - hit.at < SCHEMA_PROBE_TTL_MS) return { ready: hit.ready, missing: hit.missing };
+  const put = (ready: boolean | null, missing: string[]) => {
+    if (schemaProbeCache.size > 200) schemaProbeCache.clear();
+    schemaProbeCache.set(workspaceId, { at: Date.now(), ready, missing });
+    return { ready, missing };
+  };
+  let resolved: ResolvedWorkspaceDb;
+  try {
+    resolved = await getWorkspaceDb(workspaceId);
+  } catch {
+    return put(null, []);
+  }
+  if (resolved.source !== "workspace") return put(null, []);
+  try {
+    const rows = (await (resolved.db as any).execute(`select table_name from information_schema.tables where table_schema = 'public' and table_name in ('${SCHEMA_PROBE_TABLES.join("','")}')`)) as unknown as Array<{ table_name: string }>;
+    const have = new Set((rows ?? []).map((r) => String((r as any)?.table_name ?? (r as any)?.tableName ?? "")));
+    const missing = (SCHEMA_PROBE_TABLES as readonly string[]).filter((t) => !have.has(t));
+    return put(missing.length === 0, missing);
+  } catch {
+    return put(null, []);
+  }
+}
+
+/** Drop a cached schema probe (bind/change-db, tests). */
+export function invalidateWorkspaceSchemaProbe(workspaceId?: string | null): void {
+  if (!workspaceId) { schemaProbeCache.clear(); return; }
+  schemaProbeCache.delete(workspaceId);
+}
 export async function forEachWorkspaceDb(
   fn: (db: ReturnType<typeof getDb>, workspaceId: string | null) => Promise<void>,
 ): Promise<void> {
@@ -172,12 +240,15 @@ export async function forEachWorkspaceDb(
   try {
     const records = await listWorkspaceRecords();
     for (const record of records) {
-      if (!record.databaseUrl?.trim()) continue;
+      const databaseUrl = record.databaseUrl?.trim() || (await readWorkspaceDatabaseUrl(record.id))?.trim();
+      if (!databaseUrl) continue;
       try {
         const resolved = await getWorkspaceDb(record.id);
         if (resolved.source === "workspace") targets.push({ db: resolved.db, workspaceId: record.id });
-      } catch {
-        // Skip dead databases.
+    } catch (err) {
+      // WS-008: skipped sweep targets were invisible. Warn with the id so
+      // dead databases surface in logs instead of silently losing coverage.
+      console.warn(`[workspace] sweep target ${record.id} unreachable, skipping:`, (err as Error)?.message ?? err);
       }
     }
   } catch {
@@ -189,8 +260,9 @@ export async function forEachWorkspaceDb(
     seen.add(target.db);
     try {
       await fn(target.db, target.workspaceId);
-    } catch {
-      // Next workspace.
+    } catch (err) {
+      // WS-008: per-target sweep failures were silent coverage loss.
+      console.warn(`[workspace] sweep target ${target.workspaceId ?? "unknown"} failed:`, (err as Error)?.message ?? err);
     }
   }
 }

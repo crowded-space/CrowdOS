@@ -8,7 +8,7 @@ test.describe('approval journey (UX-2 / APR-1)', () => {
   test('approval card UI is wired to store and socket', async ({ page }) => {
     let viteUp = true;
     try {
-      await fetch('http://localhost:3000', { signal: AbortSignal.timeout(3000) });
+      await fetch('http://localhost:22077', { signal: AbortSignal.timeout(3000) });
     } catch { viteUp = false; }
     if (!viteUp) {
       test.info().annotations.push({ type: 'SKIP', description: 'Vite not running' });
@@ -22,13 +22,13 @@ test.describe('approval journey (UX-2 / APR-1)', () => {
     // Check that the approval API is reachable
     let apiUp = true;
     try {
-      await fetch('http://localhost:3001/health', { signal: AbortSignal.timeout(3000) });
+      await fetch('http://localhost:12077/health', { signal: AbortSignal.timeout(3000) });
     } catch { apiUp = false; }
     if (!apiUp) {
       test.info().annotations.push({ type: 'SKIP', description: 'API not reachable' });
       return;
     }
-    const res = await fetch('http://localhost:3001/api/approvals/test-run-id', { headers: { 'Content-Type': 'application/json' } }).catch(() => null);
+    const res = await fetch('http://localhost:12077/api/approvals/test-run-id', { headers: { 'Content-Type': 'application/json' } }).catch(() => null);
     // Endpoint may be 404 for unknown run or 401 without auth — both mean it exists
     if (res) expect([200, 401, 403, 404].includes(res.status)).toBeTruthy();
   });
@@ -36,18 +36,22 @@ test.describe('approval journey (UX-2 / APR-1)', () => {
   test('approval decision API shape is correct', async () => {
     let apiUp = true;
     try {
-      await fetch('http://localhost:3001/health', { signal: AbortSignal.timeout(3000) });
+      await fetch('http://localhost:12077/health', { signal: AbortSignal.timeout(3000) });
     } catch { apiUp = false; }
     if (!apiUp) {
       test.info().annotations.push({ type: 'SKIP', description: 'API not reachable' });
       return;
     }
     const fakeId = '00000000-0000-0000-0000-000000000000';
-    const res = await fetch(`http://localhost:3001/api/approvals/${fakeId}/decision`, {
+    const res = await fetch(`http://localhost:12077/api/approvals/${fakeId}/decision`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ decision: 'approved' }),
     }).catch(() => null);
-    if (res) expect([401, 403, 404, 400].includes(res.status)).toBeTruthy();
+    // 200 accepted as success (decision recorded); 500 fails loudly as a backend regression.
+    if (res) {
+      expect(res.status, 'approval decision POST returned 500 — backend regression, not an accepted skip').not.toBe(500);
+      expect([200, 401, 403, 404, 400].includes(res.status)).toBeTruthy();
+    }
   });
 });

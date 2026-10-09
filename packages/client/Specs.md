@@ -45,7 +45,7 @@ The currently implemented client (`@community-agent/client`) is a Discord-styled
 | Technology | Version | Purpose |
 |---|---|---|
 | React | ^19.0.1 | UI rendering framework |
-| Vite | ^6.3.0 | Build compiler & dev server (port 3000) |
+| Vite | ^6.3.0 | Build compiler & dev server (port 22077) |
 | TypeScript | ~5.8.2 | Type safety & definitions compiler |
 | Tailwind CSS | ^4.1.14 | Styling layout (v4 architecture) |
 | Zustand | ^5.0.13 | Local state manager & backend syncer |
@@ -55,7 +55,7 @@ The currently implemented client (`@community-agent/client`) is a Discord-styled
 | @google/genai | ^1.29.0 | Client-side Gemini SDK integration (devDependency) |
 
 **Path Alias**: `@/*` maps to `/packages/client/*` (configured in `tsconfig.json` and `vite.config.ts`).
-**Backend Proxy**: Proxies `/api` and `/socket.io` to `http://localhost:3001` (with WebSockets active).
+**Backend Proxy**: Proxies `/api` and `/socket.io` to `http://localhost:12077` (with WebSockets active).
 
 ---
 

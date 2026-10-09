@@ -58,7 +58,7 @@ export default function StatusBadge({ status }: StatusBadgeProps) {
   return (
     <span 
       id={`status-badge-${status}`}
-      className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full border text-xs font-mono tracking-tight font-medium ${current.bg} ${current.text}`}
+      className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded border text-xs font-mono tracking-tight font-medium ${current.bg} ${current.text}`}
     >
       <span className={`w-1.5 h-1.5 rounded-full ${current.dot}`} />
       <span className="capitalize">{status}</span>

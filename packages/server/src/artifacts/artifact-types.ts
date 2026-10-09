@@ -12,6 +12,9 @@ export interface CreateArtifactInput {
   contentRef?: string | null;
   semanticTags?: string[];
   metadata?: Record<string, unknown>;
+  /** ART-6: optional caller-supplied idempotency key, unique per workspace.
+   *  A retry with the same key returns the existing row (no new id/file). */
+  dedupeKey?: string | null;
 }
 
 export interface ArtifactRow {

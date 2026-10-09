@@ -106,6 +106,19 @@ export async function allocateEventSeq(channelId: string, workspaceId?: string |
     flooredChannels.add(key);
   }
   let next = 0;
+  // EVT-06: the one-shot floor above misses mid-process counter resets
+  // (backup restore, manual copy). When already floored, compare the
+  // counter against the file head and re-floor if it fell behind — seqs
+  // must never be re-issued or afterSeq silently skips.
+  if (flooredChannels.has(key)) {
+    const head = await eventHeadSeq(channelId, workspaceId).catch(() => 0);
+    if (head > 0) {
+      await mutateJsonObject<number>(EVENT_SEQUENCES_FILE, (obj) => {
+        const current = typeof obj[channelId] === "number" ? (obj[channelId] as number) : 0;
+        if (current < head) obj[channelId] = head;
+      }, workspaceId);
+    }
+  }
   await mutateJsonObject<number>(EVENT_SEQUENCES_FILE, (obj) => {
     const current = typeof obj[channelId] === "number" ? (obj[channelId] as number) : 0;
     next = current + 1;

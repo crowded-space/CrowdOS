@@ -27,7 +27,7 @@ export const options = {
   },
 };
 
-const BASE_URL = __ENV.BASE_URL || 'http://localhost:3001';
+const BASE_URL = __ENV.BASE_URL || 'http://localhost:12077';
 const AUTH_TOKEN = __ENV.API_KEY || __ENV.AUTH_TOKEN || '';
 
 function headers() {

@@ -236,7 +236,10 @@ Available commands:
         const resolvedModule = modelModule.apiKey && isEncrypted(modelModule.apiKey)
           ? { ...modelModule, apiKey: secretBoxDecrypt(modelModule.apiKey) }
           : modelModule;
-        const modelName = resolvedModule.modelName || "gemini-2.0-flash";
+        const modelName = resolvedModule.modelName;
+        if (!modelName) {
+          throw new Error("Librarian indexing needs a model name on the bound module.");
+        }
         const { url, headers, bodyBuilder } = compileGoogleEndpoint(resolvedModule);
 
         const historyText = compileHistoryText(

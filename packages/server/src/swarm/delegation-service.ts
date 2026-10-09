@@ -82,7 +82,7 @@ export async function summarizeChildResult(
   if (tokens <= MAX_SUBAGENT_RETURN_TOKENS) {
     return { summary: fullOutput, artifactRef: null, truncated: false };
   }
-  const truncatedSummary = fullOutput.slice(0, MAX_SUBAGENT_RETURN_CHARS) + `\n…[truncated ${fullOutput.length - MAX_SUBAGENT_RETURN_CHARS} chars, full output stored as artifact]`;
+  const truncatedSummary = fullOutput.slice(0, MAX_SUBAGENT_RETURN_CHARS) + `\n…[truncated ${fullOutput.length - MAX_SUBAGENT_RETURN_CHARS} chars, first 20000 chars stored as artifact]`;
   let artifactRef: string | null = null;
   if (!opts.workspaceId) console.warn("[delegation] no workspaceId for artifact, using \"default\" scope");
   try {

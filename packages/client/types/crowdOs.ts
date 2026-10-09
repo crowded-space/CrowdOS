@@ -236,7 +236,6 @@ export interface Tool {
   category: string;
   description: string;
   enabled: boolean;
-  usageCount: number;
 }
 
 // §6: Auto + the five runtimes. `chat` is the UI name for the Conversational

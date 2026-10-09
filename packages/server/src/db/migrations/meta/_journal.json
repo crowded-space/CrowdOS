@@ -176,6 +176,34 @@
       "when": 1790400000000,
       "tag": "0024_delegations_drop_child_run_fk",
       "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "7",
+      "when": 1790400000001,
+      "tag": "0025_thread_aware_message_sequence",
+      "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "7",
+      "when": 1790400000002,
+      "tag": "0026_threads_integrity",
+      "breakpoints": true
+    },
+    {
+      "idx": 27,
+      "version": "7",
+      "when": 1790400000003,
+      "tag": "0027_agents_context_token_cap",
+      "breakpoints": true
+    },
+    {
+      "idx": 28,
+      "version": "7",
+      "when": 1791331200000,
+      "tag": "0028_drop-approval-requests-scope-hash",
+      "breakpoints": true
     }
   ]
 }

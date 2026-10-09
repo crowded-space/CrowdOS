@@ -8,7 +8,7 @@ test.describe('coding diff journey (UX-3)', () => {
   test('diff viewer renders and can fetch artifacts for a run', async ({ page }) => {
     let viteUp = true;
     try {
-      await fetch('http://localhost:3000', { signal: AbortSignal.timeout(3000) });
+      await fetch('http://localhost:22077', { signal: AbortSignal.timeout(3000) });
     } catch { viteUp = false; }
     if (!viteUp) {
       test.info().annotations.push({ type: 'SKIP', description: 'Vite not running' });
@@ -21,13 +21,13 @@ test.describe('coding diff journey (UX-3)', () => {
     // Instead, assert that the artifacts API is reachable (honest ART-1)
     let apiUp = true;
     try {
-      await fetch('http://localhost:3001/health', { signal: AbortSignal.timeout(3000) });
+      await fetch('http://localhost:12077/health', { signal: AbortSignal.timeout(3000) });
     } catch { apiUp = false; }
     if (!apiUp) {
       test.info().annotations.push({ type: 'SKIP', description: 'API not reachable' });
       return;
     }
-    const res = await fetch('http://localhost:3001/api/artifacts?runId=test-run-id');
+    const res = await fetch('http://localhost:12077/api/artifacts?runId=test-run-id');
     // 200 with empty array or 401 both acceptable — endpoint exists
     expect([200, 401, 403].includes(res.status)).toBeTruthy();
   });
@@ -35,7 +35,7 @@ test.describe('coding diff journey (UX-3)', () => {
   test('filesystem explorer is present', async ({ page }) => {
     let viteUp = true;
     try {
-      await fetch('http://localhost:3000', { signal: AbortSignal.timeout(3000) });
+      await fetch('http://localhost:22077', { signal: AbortSignal.timeout(3000) });
     } catch { viteUp = false; }
     if (!viteUp) {
       test.info().annotations.push({ type: 'SKIP', description: 'Vite not running' });

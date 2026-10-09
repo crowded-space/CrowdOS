@@ -308,7 +308,6 @@ export default function WorkspaceSettingsModal() {
     updateToolkitModule,
     deleteToolkitModule,
     updateAgent,
-    modelProfiles,
     constraintsModules,
     capabilitiesModules,
     deleteCategory,
@@ -351,8 +350,10 @@ export default function WorkspaceSettingsModal() {
     title: string;
     description: string;
     confirmLabel?: string;
+    cancelLabel?: string;
     isDanger?: boolean;
     onConfirm: () => void;
+    onCancel?: () => void;
   }>({
     open: false,
     title: '',
@@ -364,19 +365,23 @@ export default function WorkspaceSettingsModal() {
     title: string;
     description: string;
     confirmLabel?: string;
+    cancelLabel?: string;
     isDanger?: boolean;
     onConfirm: () => void;
+    onCancel?: () => void;
   }) => {
     setConfirmModal({
       open: true,
       title: opts.title,
       description: opts.description,
       confirmLabel: opts.confirmLabel || 'Confirm',
+      cancelLabel: opts.cancelLabel,
       isDanger: opts.isDanger !== false,
       onConfirm: () => {
         opts.onConfirm();
         setConfirmModal(prev => ({ ...prev, open: false }));
-      }
+      },
+      onCancel: opts.onCancel,
     });
   };
 
@@ -404,7 +409,11 @@ export default function WorkspaceSettingsModal() {
   const [provSoftCapInput, setProvSoftCapInput] = useState<string>('500000');
   const [provResetPeriodInput, setProvResetPeriodInput] = useState<'daily' | 'weekly' | 'monthly' | 'never'>('monthly');
 
-  // Agent Presets
+  // Agent Presets: name/species/level/description only. Module bindings are
+  // deliberately blank — the live catalogs decide what exists, and the
+  // create path leaves blank modules unassigned for the server to resolve.
+  // Presets that hardcoded seed ids (mod-inst-l1, mod-model-heavy, …)
+  // bound profiles a workspace may not have.
   const PRESETS = [
     {
       id: 'ceo',
@@ -413,9 +422,9 @@ export default function WorkspaceSettingsModal() {
       species: 'Falcon',
       level: 1,
       description: 'Systems coordinator, pipeline executive monitor, and compliance auditor.',
-      instructionModuleId: 'mod-inst-l1',
-      modelModuleId: 'mod-model-heavy',
-      toolkitModuleId: 'mod-tool-super',
+      instructionModuleId: '',
+      modelModuleId: '',
+      toolkitModuleId: '',
       isOmniscient: true
     },
     {
@@ -425,9 +434,9 @@ export default function WorkspaceSettingsModal() {
       species: 'Owl',
       level: 2,
       description: 'Orchestrates autonomic work units, evaluates deliverables, and structures sub-agents.',
-      instructionModuleId: 'mod-inst-l2',
-      modelModuleId: 'mod-model-heavy',
-      toolkitModuleId: 'mod-tool-super',
+      instructionModuleId: '',
+      modelModuleId: '',
+      toolkitModuleId: '',
       isOmniscient: false
     },
     {
@@ -437,9 +446,9 @@ export default function WorkspaceSettingsModal() {
       species: 'Sparrow',
       level: 3,
       description: 'Standard software development autonomic worker unit rendering clean frontend UI/UX components.',
-      instructionModuleId: 'mod-inst-l3-coder',
-      modelModuleId: 'mod-model-light',
-      toolkitModuleId: 'mod-tool-coder',
+      instructionModuleId: '',
+      modelModuleId: '',
+      toolkitModuleId: '',
       isOmniscient: false
     },
     {
@@ -449,9 +458,9 @@ export default function WorkspaceSettingsModal() {
       species: 'Pigeon',
       level: 3,
       description: 'Validates code execution deliverables, measures latency, and tests compliance criteria.',
-      instructionModuleId: 'mod-inst-l3-coder',
-      modelModuleId: 'mod-model-light',
-      toolkitModuleId: 'mod-tool-coder',
+      instructionModuleId: '',
+      modelModuleId: '',
+      toolkitModuleId: '',
       isOmniscient: false
     },
     {
@@ -461,9 +470,9 @@ export default function WorkspaceSettingsModal() {
       species: 'Raven',
       level: 3,
       description: 'Composes high-altitude strategic summaries, updates progress logs, and outputs markdown.',
-      instructionModuleId: 'mod-inst-l3-coder',
-      modelModuleId: 'mod-model-light',
-      toolkitModuleId: 'mod-tool-coder',
+      instructionModuleId: '',
+      modelModuleId: '',
+      toolkitModuleId: '',
       isOmniscient: false
     }
   ];
@@ -606,7 +615,9 @@ export default function WorkspaceSettingsModal() {
     };
   }, [settingsModalOpen, setSettingsModalOpen]);
 
-  // Local safety option toggles
+  // Local safety option toggles (display-only preferences: nothing behind
+  // them enforces server-side, so the copy must say so — a silent checkbox
+  // would imply enforcement that does not exist).
   const [humanApproval, setHumanApproval] = useState(true);
   const [rateLimit, setRateLimit] = useState(true);
   const [emergencyKill, setEmergencyKill] = useState(false);
@@ -842,7 +853,9 @@ export default function WorkspaceSettingsModal() {
     setSkillFormDesc(skill.description || '');
     setSkillFormPrompt(skill.systemPrompt);
     setSkillFormSandboxPath(skill.sandboxPath || `/src/skills/${skill.name.toLowerCase().replace(/\s+/g, '-')}.md`);
-    setSkillFormModelProfileId(skill.modelProfileId || 'prof-gemini-flash');
+      // Keep a genuinely-unset model unset: falling back to a hardcoded id
+      // would bind a profile this workspace may not have.
+      setSkillFormModelProfileId(skill.modelProfileId || '');
   };
 
   const handleSaveSkill = async (id: string) => {
@@ -921,7 +934,7 @@ export default function WorkspaceSettingsModal() {
       try {
         parsedConfig = JSON.parse(toolFormSchema);
       } catch (err) {
-        alert("Invalid JSON schema syntax. Please verify function declarations.");
+        showError('Syntax Error', 'Invalid JSON schema syntax. Please verify function declarations.');
         return;
       }
     }
@@ -939,7 +952,7 @@ export default function WorkspaceSettingsModal() {
       setToolFormCapabilities([]);
       setToolFormSchema('');
     } catch (err) {
-      alert(err instanceof Error ? err.message : 'Failed to create toolkit.');
+      showError('Failed to create toolkit', err instanceof Error ? err.message : 'Failed to create toolkit.');
     }
   };
 
@@ -1014,16 +1027,31 @@ export default function WorkspaceSettingsModal() {
             <button
               onClick={() => {
                 askConfirmation({
-                  title: 'De-authorize Workspace Environment?',
-                  description: 'This will completely remove this workspace environment from your system. This action is irreversible.',
+                  title: 'Delete this workspace?',
+                  description: 'This removes the workspace from this device. Channel history, agent roster, and local settings for this workspace are removed. This cannot be undone.',
                   confirmLabel: 'Delete Workspace',
+                  cancelLabel: 'Keep workspace',
                   isDanger: true,
                   onConfirm: () => {
-                    // ponytail: native confirm over custom checkbox; drop when wizard wired.
-                    const flush = window.confirm('Also reset the database tables so it can be reused? (OK = flush, Cancel = keep DB intact)');
-                    void deleteWorkspace(activeWS.id, flush ? { flush: true } : undefined);
-                    setSettingsModalOpen(false);
-                    showSuccess('Workspace Deleted', activeWS.name);
+                    const workspaceId = activeWS.id;
+                    const workspaceName = activeWS.name;
+                    askConfirmation({
+                      title: 'Also reset the database tables?',
+                      description: 'Flushing clears the synced database tables so the workspace id can be reused cleanly. Keeping leaves the database tables intact.',
+                      confirmLabel: 'Flush tables',
+                      cancelLabel: 'Keep DB intact',
+                      isDanger: true,
+                      onConfirm: () => {
+                        void deleteWorkspace(workspaceId, { flush: true });
+                        setSettingsModalOpen(false);
+                        showSuccess('Workspace deleted', workspaceName);
+                      },
+                      onCancel: () => {
+                        void deleteWorkspace(workspaceId);
+                        setSettingsModalOpen(false);
+                        showSuccess('Workspace deleted', workspaceName);
+                      },
+                    });
                   }
                 });
               }}
@@ -1268,7 +1296,7 @@ export default function WorkspaceSettingsModal() {
                           onChange={(e) => setNewAgentInstructionModuleId(e.target.value)}
                           className="w-full bg-zinc-900 border border-zinc-800 rounded px-2.5 py-1.5 focus:border-zinc-700 focus:ring-1 focus:ring-zinc-700/40 focus:outline-none text-xs text-zinc-200 cursor-pointer"
                         >
-                          <option value="">Default directives</option>
+                          <option value="">No instructions (unassigned)</option>
                           {instructionModules.map(m => (
                             <option key={m.id} value={m.id}>{m.name}</option>
                           ))}
@@ -1282,7 +1310,7 @@ export default function WorkspaceSettingsModal() {
                           onChange={(e) => setNewAgentModelModuleId(e.target.value)}
                           className="w-full bg-zinc-900 border border-zinc-800 rounded px-2.5 py-1.5 focus:border-zinc-700 focus:ring-1 focus:ring-zinc-700/40 focus:outline-none text-xs text-zinc-200 cursor-pointer"
                         >
-                          <option value="">Default flagship profile</option>
+                          <option value="">No model (unassigned)</option>
                           {modelModules.map(m => (
                             <option key={m.id} value={m.id}>{m.name}</option>
                           ))}
@@ -1500,7 +1528,7 @@ export default function WorkspaceSettingsModal() {
                           }}
                           className="w-full bg-zinc-950 border border-zinc-800 rounded px-2.5 py-1.5 focus:border-indigo-700 focus:ring-1 focus:ring-indigo-700/40 focus:outline-none text-xs text-zinc-200 cursor-pointer"
                         >
-                          <option value="">Default directives</option>
+                          <option value="">No instructions (unassigned)</option>
                           {instructionModules.map(m => (
                             <option key={m.id} value={m.id}>{m.name}</option>
                           ))}
@@ -1514,7 +1542,7 @@ export default function WorkspaceSettingsModal() {
                           onChange={(e) => setEditAgentModelModuleId(e.target.value)}
                           className="w-full bg-zinc-950 border border-zinc-800 rounded px-2.5 py-1.5 focus:border-indigo-700 focus:ring-1 focus:ring-indigo-700/40 focus:outline-none text-xs text-zinc-200 cursor-pointer"
                         >
-                          <option value="">Default flagship profile</option>
+                            <option value="">No model (unassigned)</option>
                           {modelModules.map(m => (
                             <option key={m.id} value={m.id}>{m.name}</option>
                           ))}
@@ -1692,11 +1720,12 @@ export default function WorkspaceSettingsModal() {
                 {/* Left side: Roles List */}
                 <div className="w-1/3 border border-zinc-900 rounded-lg bg-zinc-950/40 flex flex-col">
                   <div className="p-3 border-b border-zinc-900 flex items-center justify-between">
-                    <span className="font-medium text-zinc-300 text-[13px]">Roles</span>
+                    <span className="font-medium text-zinc-300 text-[13px]">Roles <span className="text-[10px] font-mono text-zinc-500">· local only</span></span>
                     <button onClick={handleCreateRole} aria-label="Create role" title="Create role" className="p-1 hover:bg-zinc-800 rounded outline-none text-zinc-400 hover:text-zinc-200">
                       <Plus size={14} aria-hidden="true" />
                     </button>
                   </div>
+                  <p className="px-3 pt-2 text-[10.5px] leading-snug text-zinc-500">Display labels on this device — no server enforcement behind them.</p>
                   <div className="flex-1 overflow-y-auto p-2 space-y-1">
                     {roles.map((r, i) => (
                       <div 
@@ -1830,8 +1859,8 @@ export default function WorkspaceSettingsModal() {
             {workspaceSettingsTab === 'tools' && (
               <div className="space-y-4 text-xs font-sans">
                 <div>
-                  <h3 className="font-semibold text-zinc-200">Agent Capabilities & Toolkit Module</h3>
-                  <p className="text-zinc-500">Toggles authorization variables enabling target components to query system databases or execute untrusted sandboxed binaries.</p>
+                    <h3 className="font-semibold text-zinc-200">Agent Capabilities & Toolkit Module <span className="text-[10px] font-mono text-zinc-500">· local only</span></h3>
+                    <p className="text-zinc-500">Display toggles on this device — they flip the local tool list only and enforce nothing server-side. Real tool grants come from each agent's toolkit module.</p>
                 </div>
 
                 <div className="space-y-2.5 select-none">
@@ -1851,10 +1880,6 @@ export default function WorkspaceSettingsModal() {
                       </div>
 
                       <div className="flex items-center gap-4 shrink-0 font-mono">
-                        <span className="text-[10px] text-zinc-500">
-                          {t.usageCount.toLocaleString()} Invokes
-                        </span>
-
                         <button
                           onClick={() => toggleToolEnabled(t.id)}
                           className={`p-1 rounded cursor-pointer transition focus:outline-none ${
@@ -2259,7 +2284,10 @@ export default function WorkspaceSettingsModal() {
                             setSkillFormDesc('');
                             setSkillFormPrompt('# Custom Skill Instructions\n\n- Perform deep evaluation\n- Structure outputs as CJS models');
                             setSkillFormSandboxPath('/src/skills/custom-skill.md');
-                            setSkillFormModelProfileId('prof-gemini-flash');
+                              // Blank = unassigned: the select offers an
+                              // explicit empty option, so a new skill never
+                              // binds a profile id this workspace may not have.
+                              setSkillFormModelProfileId('');
                           }}
                           className="px-2 py-1 text-[10px] font-mono font-bold text-indigo-400 hover:text-indigo-300 border border-indigo-500/20 hover:border-indigo-500/40 bg-indigo-500/[0.03] rounded transition flex items-center gap-0.5"
                         >
@@ -2325,6 +2353,7 @@ export default function WorkspaceSettingsModal() {
                                 onChange={(e) => setSkillFormModelProfileId(e.target.value)}
                                 className="w-full bg-zinc-950 border border-zinc-850 rounded px-2 py-1 text-zinc-200 text-[11.5px] outline-none focus:border-zinc-700 font-mono"
                               >
+                                  <option value="">No model (unassigned)</option>
                                 {modelModules.map(p => (
                                   <option key={p.id} value={p.id}>{p.name}</option>
                                 ))}
@@ -2368,7 +2397,7 @@ export default function WorkspaceSettingsModal() {
                                   setSkillFormDesc(orig.description || '');
                                   setSkillFormPrompt(orig.systemPrompt);
                                   setSkillFormSandboxPath(orig.sandboxPath || `/src/skills/${orig.name.toLowerCase().replace(/\s+/g, '-')}.md`);
-                                  setSkillFormModelProfileId(orig.modelProfileId || 'prof-gemini-flash');
+                                  setSkillFormModelProfileId(orig.modelProfileId || '');
                                 }
                               } else {
                                 setIsCreatingSkill(false);
@@ -2861,7 +2890,7 @@ export default function WorkspaceSettingsModal() {
                             if (!isNaN(val)) {
                               await updateBudget(val, undefined);
                               setEditedGlobalSoftCap('');
-                              alert('Global soft cap updated successfully.');
+                              showSuccess('Global soft cap updated', 'Budget cap saved successfully.');
                             }
                             setIsSavingBudget(false);
                           }}
@@ -2969,7 +2998,7 @@ export default function WorkspaceSettingsModal() {
                                   }
                                 };
                                 await updateBudget(undefined, perProvPayload);
-                                alert(`Provider budget limit for ${selectedProvider} updated successfully.`);
+                                showSuccess(`Provider budget updated`, `Budget limit for ${selectedProvider} saved successfully.`);
                               }
                               setIsSavingBudget(false);
                             }}
@@ -3000,8 +3029,8 @@ export default function WorkspaceSettingsModal() {
                           className="mt-0.5 cursor-pointer accent-indigo-500"
                         />
                         <div className="leading-snug">
-                          <span className="font-semibold text-zinc-250 block">Require Human Approval (L3)</span>
-                          <span className="text-[11.5px] text-zinc-500 leading-normal block mt-0.5">Prompt the operator with confirmation panels before L3 workers run sandboxed file modifications.</span>
+                          <span className="font-semibold text-zinc-250 block">Require Human Approval (L3) <span className="text-[10px] font-mono text-zinc-500">· local view only</span></span>
+                          <span className="text-[11.5px] text-zinc-500 leading-normal block mt-0.5">Local display preference only — approvals are still requested by the server whenever a run needs one. Turning this off hides nothing server-side.</span>
                         </div>
                       </label>
 
@@ -3014,8 +3043,8 @@ export default function WorkspaceSettingsModal() {
                           className="mt-0.5 cursor-pointer accent-indigo-500"
                         />
                         <div className="leading-snug">
-                          <span className="font-semibold text-zinc-250 block">Aggressive Rate Limiter Checks</span>
-                          <span className="text-[11.5px] text-zinc-500 leading-normal block mt-0.5">Enforce maximum token rates and budgets spending ceilings to secure workspace models from infinite looping.</span>
+                          <span className="font-semibold text-zinc-250 block">Aggressive Rate Limiter Checks <span className="text-[10px] font-mono text-zinc-500">· local view only</span></span>
+                          <span className="text-[11.5px] text-zinc-500 leading-normal block mt-0.5">Local display preference only — budget caps above are the real enforcement. Turning this off lifts nothing server-side.</span>
                         </div>
                       </label>
                     </div>
@@ -3028,17 +3057,30 @@ export default function WorkspaceSettingsModal() {
                       <span>Stop all running work</span>
                     </h4>
                     <p className="text-[11.5px] text-zinc-400 leading-normal font-sans">
-                      Activating this switch immediately stops running sub-agent threads and freezes sandbox processes.
+                      Sends a stop to every channel in this workspace with live work, over the same transport as each Stop button. Runs already finished stay finished — this never rewrites history.
                     </p>
                     <button
                       onClick={() => {
                         const nextState = !emergencyKill;
                         setEmergencyKill(nextState);
                         if (nextState) {
-                          showError('Work stopped', 'Running workers were terminated.');
-                        } else {
-                          showSuccess('System restored', 'Workspace unlocked. Model calls resume.');
-                        }
+                          try {
+                            const state = useCrowdOSStore.getState();
+                            const ws = state.workspaces.find((w) => w.id === state.activeWorkspaceId);
+                            const liveIds = new Set<string>();
+                            for (const ch of (ws?.channels ?? [])) liveIds.add(ch.id);
+                            for (const cat of (ws?.categories ?? [])) {
+                              for (const ch of (cat.channels ?? [])) liveIds.add(ch.id);
+                            }
+                            let stopped = 0;
+                            for (const id of liveIds) {
+                              try { state.cancelRun(id); stopped += 1; } catch {}
+                            }
+                            showError('Stop sent', stopped > 0 ? 'Stop requested on ' + stopped + ' channel' + (stopped === 1 ? '' : 's') + ' with live work.' : 'No live channels found — nothing was sent.');
+                          } catch {}
+                          } else {
+                            showSuccess('System restored', 'Stop state cleared. New runs can start.');
+                          }
                       }}
                       className={`px-3 py-1.5 rounded text-xs font-semibold transition select-none cursor-pointer focus:outline-none ${
                         emergencyKill 
@@ -3092,9 +3134,14 @@ export default function WorkspaceSettingsModal() {
   title={confirmModal.title}
   description={confirmModal.description}
   confirmLabel={confirmModal.confirmLabel || 'Confirm'}
+  cancelLabel={confirmModal.cancelLabel || 'Cancel'}
   isDanger={confirmModal.isDanger !== false}
   onConfirm={confirmModal.onConfirm}
-  onCancel={() => setConfirmModal(prev => ({ ...prev, open: false }))}
+  onCancel={() => {
+    const cancel = confirmModal.onCancel;
+    setConfirmModal(prev => ({ ...prev, open: false }));
+    if (cancel) cancel();
+  }}
 />
 </>
 );

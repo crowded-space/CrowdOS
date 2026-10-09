@@ -231,4 +231,7 @@ export const BUILTIN_CAPABILITIES: readonly CapabilityDescriptor[] = [
 
 // Shallow-freeze the vocabulary array so no consumer can add/remove descriptors
 // via the shared ref (descriptors themselves are deep-copied on return).
+// CAP-002: deep-freeze descriptors (was array-only; consumers could mutate
+// shared catalog entries and change merge input).
+for (const entry of BUILTIN_CAPABILITIES) Object.freeze(entry);
 Object.freeze(BUILTIN_CAPABILITIES);

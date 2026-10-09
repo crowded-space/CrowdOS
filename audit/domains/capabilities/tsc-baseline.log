@@ -1,0 +1,1 @@
+src/memories/memory-retrieval.ts(168,41): error TS2559: Type 'LocalMemoryNote' has no properties in common with type '{ suppressUntil?: string | Date | null | undefined; }'.

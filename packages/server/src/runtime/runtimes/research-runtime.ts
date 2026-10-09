@@ -102,7 +102,10 @@ async function decomposeQuery(
 
   // Attempt LLM decomposition if provider seems usable
   try {
-    const providerName = effectiveConfig.provider || "google"
+    const providerName = effectiveConfig.provider
+    if (!providerName) {
+      throw new Error("Research decompose needs a resolved model provider. Bind the agent to a model module first.")
+    }
     const adapter = ProviderRegistry.get(providerName)
     const llmRequest: LLMRequest = {
       systemPrompt:
@@ -215,7 +218,10 @@ async function synthesizeReport(
   } as any)
 
   try {
-    const providerName = modelConfig.provider || "google"
+    const providerName = modelConfig.provider
+    if (!providerName) {
+      throw new Error("Research synthesis needs a resolved model provider. Bind the agent to a model module first.")
+    }
     const adapter = ProviderRegistry.get(providerName)
     const callConfig: ModelModuleConfig = {
       ...modelConfig,
@@ -341,13 +347,13 @@ export class ResearchRuntime extends BaseRuntime {
         }
       }
 
-      const modelConfig: ModelModuleConfig =
-        (packet as unknown as { _modelConfig?: ModelModuleConfig })._modelConfig ?? {
-          provider: "google",
-          modelName: "gemini-2.0-flash",
-          temperature: 0.2,
-          maxOutputTokens: 1200,
-        }
+      const modelConfig = (packet as unknown as { _modelConfig?: ModelModuleConfig })._modelConfig
+      if (!modelConfig) {
+        throw Object.assign(
+          new Error(`Research run for agent ${packet.agentName} has no resolved model config. Bind the agent to a model module first.`),
+          { code: "MODEL_MODULE_NOT_CONFIGURED", statusCode: 400 },
+        )
+      }
 
       // (a) Decompose query into sub-questions (LLM cheap tier or template)
       const decomposeRes = await decomposeQuery(query, packet, modelConfig)

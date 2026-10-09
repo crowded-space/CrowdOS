@@ -27,11 +27,6 @@ const KNOWN_VIOLATIONS = [
     note: "gate->sweeper->gate cycle blocks a plain re-export; needs an approvals-owned restructure",
   },
   {
-    file: "routes/workspace.ts",
-    imports: "../channels/channel-local-store.js",
-    note: "TODO(workspace): local channel seeding must go through the channels gate (dynamic imports are now checked)",
-  },
-  {
     file: "worker.ts",
     imports: "./approvals/approval-sweeper.js",
     note: "TODO(approvals): sweeper entry must be re-exported from approvals-gate.js (dynamic imports are now checked)",

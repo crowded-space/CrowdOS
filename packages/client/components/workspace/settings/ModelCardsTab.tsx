@@ -1,11 +1,10 @@
 ﻿import React, { useState } from 'react';
 import { useCrowdOSStore } from '@/stores/crowdOsStore';
 import { ModelModule, ProviderType } from '@/types/crowdOs';
-import { Plus, Trash2, CheckCircle2, AlertCircle, RefreshCw, Cpu } from 'lucide-react';
+import { Plus, Trash2, CheckCircle2, AlertCircle, RefreshCw, Cpu, RotateCcw } from 'lucide-react';
 import { useToast } from '@/components/ui/ToastProvider';
 import ConfirmDialog from '@/components/ui/ConfirmDialog';
-
-const BACKEND_URL = '';
+import { apiClient, apiErrorStatus } from '@/src/api/client';
 
 export default function ModelCardsTab() {
   const { 
@@ -22,7 +21,7 @@ export default function ModelCardsTab() {
 
   // Form Fields
   const [label, setLabel] = useState('');
-  const [provider, setProvider] = useState<ProviderType>('google');
+  const [provider, setProvider] = useState<ProviderType>('custom');
   const [modelName, setModelName] = useState('');
   const [apiKey, setApiKey] = useState('');
   const [baseUrl, setBaseUrl] = useState('');
@@ -64,7 +63,7 @@ export default function ModelCardsTab() {
 
   const resetForm = () => {
     setLabel('');
-    setProvider('google');
+    setProvider('custom');
     setModelName('');
     setApiKey('');
     setBaseUrl('');
@@ -77,7 +76,7 @@ export default function ModelCardsTab() {
   const handleEdit = (mod: ModelModule) => {
     setEditingId(mod.id);
     setLabel(mod.name);
-    setProvider(mod.provider || 'google');
+    setProvider(mod.provider);
     setModelName(mod.modelProfileId);
     // Never prefill the key: reads return a redacted mask, and sending that
     // mask back would overwrite the stored credential. Blank = keep existing.
@@ -112,7 +111,7 @@ export default function ModelCardsTab() {
       }
       resetForm();
     } catch (err) {
-      alert(err instanceof Error ? err.message : 'Failed to save ModelModule.');
+      showError('Failed to save model', err instanceof Error ? err.message : 'Failed to save ModelModule.');
     }
   };
 
@@ -122,43 +121,38 @@ export default function ModelCardsTab() {
     setTestResult(prev => ({ ...prev, [id]: { success: false, msg: '' } }));
 
     try {
-      const verifyRes = await fetch(`${BACKEND_URL}/api/modules/model/${id}/test`, {
-        method: 'POST'
-      });
-
+      const data = await apiClient.testModelModule(id);
       setTestingId(null);
-      const data = await verifyRes.json();
-
-      if (verifyRes.ok && data.success) {
+      if (data.success) {
         setTestResult(prev => ({
           ...prev,
           [id]: { success: true, msg: data.message || 'API channel verified. Handshake success.' }
         }));
       } else {
+        const hint = mod.provider === 'custom'
+          ? ' Custom endpoints have no live probe: saving is config-only until the first real run.'
+          : '';
+        const offlineNote = data.offline ? ' (offline: config shape only)' : '';
         setTestResult(prev => ({
           ...prev,
-          [id]: { success: false, msg: data.message || 'API Key is missing or invalid. Handshake failed.' }
+          [id]: { success: false, msg: `${data.message || 'API key is missing or invalid. Handshake failed.'}${offlineNote}${hint}` }
         }));
       }
     } catch (err) {
-      console.warn("Backend connection test failed, using simulated fallback.", err);
-      setTimeout(() => {
-        setTestingId(null);
-        const target = modelModules.find(m => m.id === id);
-        const isConfigured = Boolean(target?.apiKey);
-
-        if (isConfigured) {
-          setTestResult(prev => ({
-            ...prev,
-            [id]: { success: true, msg: 'API channel verified (Offline Fallback).' }
-          }));
-        } else {
-          setTestResult(prev => ({
-            ...prev,
-            [id]: { success: false, msg: 'API Key missing or invalid (Offline Fallback).' }
-          }));
-        }
-      }, 700);
+      setTestingId(null);
+      const status = apiErrorStatus(err);
+      if (status === 404) {
+        setTestResult(prev => ({
+          ...prev,
+          [id]: { success: false, msg: 'Model not found. It may have been deleted.' }
+        }));
+        return;
+      }
+      const statusNote = typeof status === 'number' ? ` (HTTP ${status})` : '';
+      setTestResult(prev => ({
+        ...prev,
+        [id]: { success: false, msg: `${err instanceof Error ? err.message : 'Connection test failed. Backend unreachable.'}${statusNote}` }
+      }));
     }
   };
 
@@ -334,7 +328,7 @@ export default function ModelCardsTab() {
                     {mod.name}
                   </span>
                   <span className="px-1.5 py-0.5 rounded bg-zinc-950 border border-zinc-800 text-[9px] font-mono text-zinc-450">
-                    {mod.provider || 'google'}
+                    {mod.provider}
                   </span>
                 </div>
                 <div className="flex items-center gap-1.5 text-[10px] font-mono text-zinc-500">
@@ -351,13 +345,13 @@ export default function ModelCardsTab() {
                 )}
               </div>
 
-              <div className="flex items-center gap-2 shrink-0 select-none">
+              <div className="flex flex-wrap items-center justify-end gap-2 min-w-0 max-w-full select-none">
                 {result && (
-                  <span className={`text-[10px] font-mono flex items-center gap-1 px-2 py-0.5 rounded ${
+                  <span className={`order-first w-full text-[10px] font-mono leading-relaxed break-words whitespace-normal flex items-start gap-1 px-2 py-1 rounded ${
                     result.success ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' : 'bg-rose-500/10 text-rose-400 border border-rose-500/20'
                   }`}>
-                    {result.success ? <CheckCircle2 size={10} /> : <AlertCircle size={10} />}
-                    <span>{result.msg}</span>
+                    {result.success ? <CheckCircle2 size={10} className="mt-0.5 shrink-0" /> : <AlertCircle size={10} className="mt-0.5 shrink-0" />}
+                    <span className="min-w-0 flex-1">{result.msg}</span>
                   </span>
                 )}
 
@@ -369,8 +363,20 @@ export default function ModelCardsTab() {
                   aria-label={`Test connection to ${mod.name}`}
                 >
                   <RefreshCw size={10} className={isTesting ? 'animate-spin' : ''} aria-hidden="true" />
-                  <span>{isTesting ? 'Testing...' : 'Test'}</span>
+                  <span>{isTesting ? 'Testing...' : result && !result.success ? 'Retry' : 'Test'}</span>
                 </button>
+
+                {result && !result.success && !isTesting && (
+                  <button
+                    onClick={() => handleEdit(mod)}
+                    className="px-2 py-1 bg-zinc-950 hover:bg-zinc-900 border border-zinc-800 text-zinc-300 hover:text-zinc-100 text-[10px] rounded flex items-center gap-1 transition cursor-pointer focus:outline-none"
+                    title={`Edit ${mod.name} to fix the failing config`}
+                    aria-label={`Edit ${mod.name} to fix the failing config`}
+                  >
+                    <RotateCcw size={10} aria-hidden="true" />
+                    <span>Fix</span>
+                  </button>
+                )}
 
                 <button
                   onClick={() => handleEdit(mod)}

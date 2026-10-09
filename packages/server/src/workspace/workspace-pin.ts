@@ -94,23 +94,41 @@ export async function setScreenLockPin(
   }
   const hashedPin = hashScreenLockPin(normalized);
 
-  // 1. Update local workspace registry record
+  // WS-002: honest persistence. At least one store must acknowledge the
+  // write or the caller gets a 5xx instead of a false success. Registry is
+  // authoritative for screenlock; DB sync stays best-effort but is tracked.
+  let persisted = false;
+  let registryError: unknown = null;
   try {
     const record = await getWorkspaceRecord(workspaceId);
     if (record) {
       record.screenLockPinHash = hashedPin;
       await saveWorkspaceRecord(record);
+      persisted = true;
     }
-  } catch {}
+  } catch (err) {
+    registryError = err;
+  }
 
-  // 2. Best-effort sync to DB if accessible
   try {
     const db = getDb();
     await db
       .update(workspaces)
       .set({ screenLockPinHash: hashedPin, updatedAt: new Date() })
       .where(eq(workspaces.id, workspaceId));
+    persisted = true;
   } catch {}
+
+  if (!persisted) {
+    throw new Error(
+      `Failed to persist screenlock PIN for workspace ${workspaceId}` +
+        (registryError instanceof Error ? `: ${registryError.message}` : "")
+    );
+  }
+
+  // WS-001: drop the 15s pin-entries cache so the new PIN enforces immediately.
+  const { invalidatePinCache } = await import("../shared/auth/pin-gate.js");
+  invalidatePinCache();
 
   return { workspaceId, enabled: true };
 }
@@ -124,23 +142,38 @@ export async function clearScreenLockPin(
     throw new Error("Current screenlock PIN is incorrect.");
   }
 
-  // 1. Update local workspace registry record
+  // WS-002 (clear path): same honest-persist + invalidate contract as set.
+  let cleared = false;
+  let registryError: unknown = null;
   try {
     const record = await getWorkspaceRecord(workspaceId);
     if (record) {
       record.screenLockPinHash = null;
       await saveWorkspaceRecord(record);
+      cleared = true;
     }
-  } catch {}
+  } catch (err) {
+    registryError = err;
+  }
 
-  // 2. Best-effort sync to DB if accessible
   try {
     const db = getDb();
     await db
       .update(workspaces)
       .set({ screenLockPinHash: null, updatedAt: new Date() })
       .where(eq(workspaces.id, workspaceId));
+    cleared = true;
   } catch {}
+
+  if (!cleared) {
+    throw new Error(
+      `Failed to clear screenlock PIN for workspace ${workspaceId}` +
+        (registryError instanceof Error ? `: ${registryError.message}` : "")
+    );
+  }
+
+  const { invalidatePinCache } = await import("../shared/auth/pin-gate.js");
+  invalidatePinCache();
 
   return { workspaceId, enabled: false };
 }

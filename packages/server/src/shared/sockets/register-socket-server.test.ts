@@ -24,7 +24,7 @@ interface Harness {
   port: number;
   io: any;
   broker: import("../../event-broker/event-broker-gate.js").EventBroker;
-  apiKeyService: typeof import("../auth/api-key-service.js");
+  apiKeyService: typeof import("../auth/auth-gate.js").authGate;
   socketsInternals: {
     limiter: { size: number; consume(id: string): boolean; release(id: string): void } | null;
     activeRuns(): Array<{ key: string; controller: AbortController; startedAt: number }>;
@@ -81,7 +81,8 @@ async function setup(
     import("../config/database.js"),
     import("../../channels/channel-gate.js"),
     import("../../event-broker/event-broker-gate.js"),
-    import("../auth/api-key-service.js"),
+    // Facade rule: cross-domain callers go through the auth gate.
+    import("../auth/auth-gate.js"),
     import("./register-socket-server.js"),
     import("../core/local-file.js"),
   ]);
@@ -114,7 +115,7 @@ async function setup(
     port,
     io: serverIo,
     broker,
-    apiKeyService: authModule,
+    apiKeyService: (authModule as typeof import("../auth/auth-gate.js")).authGate,
     socketsInternals: _socketsInternals as Harness["socketsInternals"],
     store: socketTestDb.store,
     setChannelOverride: (fn) => socketTestGate.setOverride(fn),
@@ -736,6 +737,23 @@ function captureMetrics() {
   return { metrics, restore: () => spy.mockRestore() };
 }
 
+function captureWarns() {
+  const entries: Array<{ level?: string; stage?: string; workspaceId?: string; reason?: string }> = [];
+  const original = console.warn.bind(console);
+  const spy = vi.spyOn(console, "warn").mockImplementation((...args: unknown[]) => {
+    try {
+      const parsed = JSON.parse(String(args[0])) as { level?: string };
+      if (parsed && typeof parsed === "object" && parsed.level === "warn") {
+        entries.push(parsed as (typeof entries)[number]);
+      }
+    } catch {
+      // not a structured warn line
+    }
+    original(...args);
+  });
+  return { entries, restore: () => spy.mockRestore() };
+}
+
 interface DelayedExecutor {
   executor: (req: any) => Promise<any>;
   calls: string[];
@@ -929,5 +947,235 @@ describe("CrowdOS §10 · serial multi-mention dispatch", () => {
       await harness.cleanup();
       activeHarness = null;
     }
+  });
+});
+
+/**
+ * TG-1 / SH-007: with NO deps.executeRun stub, dispatch must run the executor
+ * inside the workspace's ALS handle (executeRunScoped → dbForWorkspace →
+ * runWithDb). The fake DB (test-setup.ts) hands out per-workspace handles
+ * carrying __workspaceMarker, and the opt-in fake ALS makes a bare getDb()
+ * inside the bound scope resolve the bound handle. The executor spy is
+ * installed AFTER setup()'s vi.resetModules() so it lands on the same fresh
+ * runtime-gate instance the socket server holds (executeRun reads
+ * runtimeGate.execute at call time).
+ */
+describe("TG-1 · tenant scope of socket run execution (XD-016/ART-2)", () => {
+  async function setupScopedHarness() {
+    process.env.__SOCKET_FAKE_DB__ = "1";
+    // NO deps: the real executeRunScoped wrap must run (no stub short-circuit).
+    const harness = await setup();
+    const databaseModule = await import("../config/database.js");
+    const runtimeModule = await import("../../runtime/runtime-gate.js");
+    const socketTestDb = (databaseModule as any).__socketTestDb as {
+      setFakeAls(enabled: boolean): void;
+      setWorkspaceDbResolver(fn: ((workspaceId: string) => Promise<unknown> | unknown) | null): void;
+      lastBoundDb: unknown;
+      boundCalls: unknown[];
+    };
+    // Opt-in fake ALS: a bare getDb() inside runWithDb's scope must resolve
+    // the bound handle, not a fresh unmarked fake.
+    socketTestDb.setFakeAls(true);
+
+    const markers: Array<string | undefined> = [];
+    const seenWorkspaces: Array<string | undefined> = [];
+    const executeSpy = vi.spyOn(runtimeModule.runtimeGate, "execute");
+    executeSpy.mockImplementation(async (req: any) => {
+      seenWorkspaces.push(req.workspaceId);
+      markers.push((databaseModule.getDb() as any).__workspaceMarker);
+      return {
+        requestId: req.requestId ?? "tg1",
+        agentId: req.agent.id,
+        channelId: req.channelId,
+        finalResponse: "done",
+        runtimeEvents: [],
+        usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
+        status: "completed",
+      } as any;
+    });
+    return { harness, socketTestDb, markers, seenWorkspaces, executeSpy };
+  }
+
+  it("bound: a ws-a channel runs the executor inside the ws-a handle", { timeout: 20_000 }, async () => {
+    const { harness, socketTestDb, markers, seenWorkspaces } = await setupScopedHarness();
+    const connect = connectOf(harness);
+    harness.setChannelOverride(async (id: string) =>
+      id === "ch-a" ? { id: "ch-a", name: "scoped", workspaceId: "ws-a" } : null);
+    seedAgent(harness.store, "agent-scope", "Scoped");
+
+    const { key } = await seedKey(harness);
+    const session = await connect({ auth: { key } });
+    expect(session.error).toBeUndefined();
+
+    session.client.emit("user:message", { channelId: "ch-a", content: "@Scoped go" });
+
+    await waitFor(() => markers.length === 1);
+    expect(seenWorkspaces[0]).toBe("ws-a");
+    // A bare getDb() read inside the executor resolved the bound ws-a handle.
+    expect(markers[0]).toBe("ws-a");
+    expect((socketTestDb.lastBoundDb as any)?.__workspaceMarker).toBe("ws-a");
+  });
+
+  it("default-bound: a channel without a workspace binds the default handle", { timeout: 20_000 }, async () => {
+    const { harness, markers, seenWorkspaces } = await setupScopedHarness();
+    const connect = connectOf(harness);
+    harness.setChannelOverride(async (id: string) =>
+      id === "ch-def" ? { id: "ch-def", name: "general" } : null);
+    seedAgent(harness.store, "agent-scope", "Scoped");
+
+    const { key } = await seedKey(harness);
+    const session = await connect({ auth: { key } });
+    expect(session.error).toBeUndefined();
+
+    session.client.emit("user:message", { channelId: "ch-def", content: "@Scoped go" });
+
+    await waitFor(() => markers.length === 1);
+    // Legacy channel (no workspaceId): the socket identity's unscoped
+    // "default" placeholder still binds a handle — never a bare execute.
+    expect(seenWorkspaces[0]).toBe("default");
+    expect(markers[0]).toBe("default");
+  });
+
+  it("resolver-null: degrades to the unscoped executor with one structured warn (TG-3/SH-005)", { timeout: 20_000 }, async () => {
+    const { harness, socketTestDb, markers, seenWorkspaces } = await setupScopedHarness();
+    const warns = captureWarns();
+    try {
+      // Local-only/unknown workspace: the record resolver yields null, so the
+      // wrap is skipped and the executor runs unbound (intended degradation).
+      socketTestDb.setWorkspaceDbResolver(() => null);
+      const connect = connectOf(harness);
+      harness.setChannelOverride(async (id: string) =>
+        id === "ch-a" ? { id: "ch-a", name: "scoped", workspaceId: "ws-a" } : null);
+      seedAgent(harness.store, "agent-scope", "Scoped");
+
+      const { key } = await seedKey(harness);
+      const session = await connect({ auth: { key } });
+      expect(session.error).toBeUndefined();
+
+      session.client.emit("user:message", { channelId: "ch-a", content: "@Scoped go" });
+
+      await waitFor(() => markers.length === 1);
+      await waitFor(() => warns.entries.length === 1);
+      expect(seenWorkspaces[0]).toBe("ws-a");
+      expect(markers[0]).toBeUndefined();
+      expect(socketTestDb.boundCalls).toHaveLength(0);
+      expect(socketTestDb.lastBoundDb).toBeNull();
+      // SH-005: the silent degrade now records exactly one structured warn.
+      expect(warns.entries).toHaveLength(1);
+      expect(warns.entries[0]).toMatchObject({
+        stage: "socket.run.scope_degraded",
+        workspaceId: "ws-a",
+        reason: "resolver_null",
+      });
+    } finally {
+      warns.restore();
+    }
+  });
+
+  it("resolver-throw (record-only workspace): degrades unscoped with the NO_DATABASE reason in the warn (TG-3/SH-005)", { timeout: 20_000 }, async () => {
+    const { harness, socketTestDb, markers } = await setupScopedHarness();
+    const warns = captureWarns();
+    try {
+      // SH-005 repro: dbForWorkspace throws for a record-only workspace.
+      socketTestDb.setWorkspaceDbResolver(() => {
+        throw Object.assign(new Error("NO_DATABASE: workspace ws-a is local-only"), { code: "NO_DATABASE" });
+      });
+      const connect = connectOf(harness);
+      harness.setChannelOverride(async (id: string) =>
+        id === "ch-a" ? { id: "ch-a", name: "scoped", workspaceId: "ws-a" } : null);
+      seedAgent(harness.store, "agent-scope", "Scoped");
+
+      const { key } = await seedKey(harness);
+      const session = await connect({ auth: { key } });
+      expect(session.error).toBeUndefined();
+
+      session.client.emit("user:message", { channelId: "ch-a", content: "@Scoped go" });
+
+      await waitFor(() => markers.length === 1);
+      await waitFor(() => warns.entries.length === 1);
+      expect(markers[0]).toBeUndefined();
+      expect(socketTestDb.boundCalls).toHaveLength(0);
+      expect(warns.entries).toHaveLength(1);
+      expect(warns.entries[0]).toMatchObject({
+        stage: "socket.run.scope_degraded",
+        workspaceId: "ws-a",
+        reason: "NO_DATABASE: workspace ws-a is local-only",
+      });
+    } finally {
+      warns.restore();
+    }
+  });
+});
+
+/**
+ * AP-009 regression (fix-approvals-micro-005-009): approval:decide /
+ * approval:list called approvalGate outside any runWithDb scope, so a bare
+ * getDb() inside the gate resolved the global pool — in split-DB deployments
+ * a socket decide hit the wrong database (not_found / cross-tenant) and list
+ * came back empty. The handlers must now run inside the socket's workspace
+ * handle (socket.data.workspaceId), mirroring executeRunScoped's discipline.
+ *
+ * Repro shape: fake ALS + marked per-workspace handles (same seams as TG-1).
+ * The gate spies record which handle a bare getDb() resolves during the call:
+ * before the fix that is an unmarked global fake; after it must be "ws-a".
+ */
+describe("AP-009 · socket approval handlers run in the socket's workspace scope", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  async function setupApprovalHarness() {
+    process.env.__SOCKET_FAKE_DB__ = "1";
+    const harness = await setup();
+    const databaseModule = await import("../config/database.js");
+    const approvalModule = await import("../../approvals/approval-gate.js");
+    const socketTestDb = (databaseModule as any).__socketTestDb as {
+      setFakeAls(enabled: boolean): void;
+      lastBoundDb: unknown;
+      boundCalls: unknown[];
+    };
+    socketTestDb.setFakeAls(true);
+    return { harness, databaseModule, approvalModule, socketTestDb };
+  }
+
+  it("decide + list resolve the workspace handle when the socket joined a workspace", { timeout: 20_000 }, async () => {
+    const { harness, databaseModule, approvalModule, socketTestDb } = await setupApprovalHarness();
+    seedWorkspace(harness, "ws-a");
+
+    const getByIdMarkers: Array<string | undefined> = [];
+    const decideMarkers: Array<string | undefined> = [];
+    const listMarkers: Array<string | undefined> = [];
+    vi.spyOn(approvalModule.approvalGate, "getById").mockImplementation(async (id: string) => {
+      getByIdMarkers.push((databaseModule.getDb() as any).__workspaceMarker);
+      return { id, runId: "run-ap009", toolName: "execute_bash", status: "pending", scope: null, riskClass: "general", requestedBy: "agent", decidedBy: null, expiresAt: null, argsPreview: null, createdAt: new Date(), decidedAt: null } as never;
+    });
+    vi.spyOn(approvalModule.approvalGate, "decide").mockImplementation(async (id: string) => {
+      decideMarkers.push((databaseModule.getDb() as any).__workspaceMarker);
+      return { id, runId: "run-ap009", toolName: "execute_bash", status: "approved", scope: null, riskClass: "general", requestedBy: "agent", decidedBy: "apikey:k1", expiresAt: null, argsPreview: null, createdAt: new Date(), decidedAt: new Date() } as never;
+    });
+    vi.spyOn(approvalModule.approvalGate, "listByRun").mockImplementation(async () => {
+      listMarkers.push((databaseModule.getDb() as any).__workspaceMarker);
+      return [] as never;
+    });
+
+    const connect = connectOf(harness);
+    const { key } = await seedKey(harness);
+    const session = await connect({ auth: { key } });
+    expect(session.error).toBeUndefined();
+
+    session.client.emit("workspace:join", { workspaceId: "ws-a" });
+    await waitFor(() => harness.io.sockets.adapter.rooms.has(workspaceRoomOf("ws-a")));
+
+    session.client.emit("approval:decide", { approvalId: "ap-009", decision: "approved" });
+    await waitFor(() => decideMarkers.length === 1);
+    expect(getByIdMarkers[0]).toBe("ws-a");
+    expect(decideMarkers[0]).toBe("ws-a");
+
+    session.client.emit("approval:list", { runId: "run-ap009" });
+    await waitFor(() => listMarkers.length === 1);
+    expect(listMarkers[0]).toBe("ws-a");
+
+    // The bound handle is the ws-a workspace fake, never the global pool.
+    expect((socketTestDb.lastBoundDb as any)?.__workspaceMarker).toBe("ws-a");
   });
 });

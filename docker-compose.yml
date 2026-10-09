@@ -40,15 +40,15 @@ services:
     environment:
       DATABASE_URL: postgresql://postgres:postgres@postgres:5432/community_agent
       QUEUE_MODE: ${QUEUE_MODE:-inline}
-      CLIENT_ORIGIN: http://localhost:5173
-      PORT: 3001
+      CLIENT_ORIGIN: http://localhost:22077
+      PORT: 12077
       # CREDENTIALS_ENCRYPTION_KEY must be set in production (32-byte hex). Generate: openssl rand -hex 32
       # CREDENTIALS_ENCRYPTION_KEY: "change-me-32-byte-hex"
     ports:
-      - "3001:3001"
+      - "12077:12077"
     command: npm run dev --workspace @crowdspace/server
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost:3001/health || wget -qO- http://localhost:3001/api/health || exit 1"]
+      test: ["CMD-SHELL", "wget -qO- http://localhost:12077/health || wget -qO- http://localhost:12077/api/health || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 10
@@ -71,8 +71,8 @@ services:
       DATABASE_URL: postgresql://postgres:postgres@postgres:5432/community_agent
       REDIS_URL: redis://redis:6379
       QUEUE_MODE: bullmq
-      CLIENT_ORIGIN: http://localhost:5173
-      PORT: 3001
+      CLIENT_ORIGIN: http://localhost:22077
+      PORT: 12077
     command: npm run worker --workspace @crowdspace/server
     healthcheck:
       test: ["CMD-SHELL", "redis-cli -h redis ping | grep -q PONG"]

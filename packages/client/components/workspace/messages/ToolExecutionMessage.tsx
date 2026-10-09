@@ -87,6 +87,7 @@ export default function ToolExecutionMessage({ toolExecution, timestamp, inline 
       {/* Header clickable to expand */}
       <button
         onClick={() => setExpanded(!expanded)}
+        aria-expanded={expanded}
         className="w-full flex items-center justify-between p-3 bg-zinc-900/40 hover:bg-zinc-900/70 transition border-b border-zinc-900 text-left cursor-pointer focus:outline-none select-none"
       >
         <div className="flex items-center gap-2">

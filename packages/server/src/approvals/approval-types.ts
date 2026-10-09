@@ -42,6 +42,12 @@ export interface DecideApprovalInput {
   decidedBy: string;
   scope?: string | null;
   expiresAt?: Date | null;
+  /**
+   * AP-001/AP-005: explicit session-reuse request. Replaces the overloaded
+   * scope:'reusable' sentinel, which silently skipped assignment on
+   * null-scope rows and tied expiry to a magic string.
+   */
+  reuse?: boolean;
 }
 
 export const APPROVAL_PENDING_TTL_MS = (() => {

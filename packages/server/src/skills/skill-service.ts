@@ -1,6 +1,6 @@
 ﻿import { randomUUID } from "node:crypto";
 import { eq, and } from "drizzle-orm";
-import { getDb, dbScopeKey } from "../shared/config/database.js";
+import { getDb, dbScopeKey, withTransaction } from "../shared/config/database.js";
 import { TtlCache } from "../shared/core/ttl-cache.js";
 import { skills, agentSkills, agents, toolkitModules } from "../db/schema.js";
 import type { SkillDefinition, SkillWorkflowPattern, CreateSkillInput, UpdateSkillInput } from "./skill-types.js";
@@ -69,12 +69,16 @@ export class SkillService {
   private readonly resolvedToolsCache = new TtlCache<string[]>(30_000, 500);
 
   invalidateAgentCaches(agentId?: string): void {
-    // ponytail: keys carry the tenant scope (same scope as the mutating
-    // request); a scope-less clear only ever causes extra misses, never stale.
+    // Keys carry the tenant scope. The no-id clear is scope-agnostic and can
+    // only cause extra misses, never stale reads.
+    // SK-003: per-agent invalidation must NOT assume the writer shares the
+    // reader's scope (workers/sockets run outside ALS; handles rotate) —
+    // suffix-match across all scopes; extra misses beat stale authz for the
+    // 30s TTL window.
     if (agentId) {
-      const scope = dbScopeKey();
-      this.agentSkillsCache.delete(`${scope}:${agentId}`);
-      this.resolvedToolsCache.delete(`${scope}:${agentId}`);
+      const suffix = `:${agentId}`;
+      this.agentSkillsCache.invalidateSuffix(suffix);
+      this.resolvedToolsCache.invalidateSuffix(suffix);
     } else {
       this.agentSkillsCache.clear();
       this.resolvedToolsCache.clear();
@@ -227,6 +231,24 @@ export class SkillService {
     return result.length > 0;
   }
 
+  /**
+   * SK-001: atomic all-or-nothing skill replacement. The studio manifest
+   * path used to delete-then-insert from the route with no transaction, so
+   * a mid-write failure wiped the agent's skill links. Route callers must
+   * use this port instead of writing `agentSkills` directly.
+   */
+  async replaceAgentSkills(agentId: string, skillIds: string[]): Promise<void> {
+    await withTransaction(async (tx: any) => {
+      await tx.delete(agentSkills).where(eq(agentSkills.agentId, agentId));
+      if (skillIds.length > 0) {
+        await tx.insert(agentSkills).values(
+          skillIds.map((skillId) => ({ agentId, skillId, isEnabled: true }))
+        );
+      }
+    });
+    this.invalidateAgentCaches(agentId);
+  }
+
   async getResolvedToolsForAgent(agentId: string): Promise<string[]> {
     const key = `${dbScopeKey()}:${agentId}`;
     const cached = this.resolvedToolsCache.get(key);
@@ -259,15 +281,33 @@ export class SkillService {
     // Fail-open with warn when the registry cannot be reached (offline/boot):
     // granting the verbs is safe — per-call authorization still enforced in
     // ToolExecutor — while advertising vapor tools is not.
-    const UNIVERSAL_TOOLS = [
-      "open_memory",
-      "discard_memory_from_context",
-      "remember",
-      "lock_in",
-      "lock_out",
-      "open_detail",
-      "load_skill",
-    ];
+    // SK-008: single source of truth lives in tools-gate (UNIVERSAL_TOOL_IDS).
+    // SK-008: single source of truth lives in tools-gate (UNIVERSAL_TOOL_IDS).
+    // Lazy dynamic import: a static import creates a skills->tools import
+    // cycle that breaks suites loading mention-parser->socket->registry.
+    let UNIVERSAL_TOOLS: string[];
+    try {
+      const mod = await import("../tools/tools-gate.js");
+      UNIVERSAL_TOOLS = (mod as { UNIVERSAL_TOOL_IDS?: string[] }).UNIVERSAL_TOOL_IDS ?? [
+        "open_memory",
+        "discard_memory_from_context",
+        "remember",
+        "lock_in",
+        "lock_out",
+        "open_detail",
+        "load_skill",
+      ];
+    } catch {
+      UNIVERSAL_TOOLS = [
+        "open_memory",
+        "discard_memory_from_context",
+        "remember",
+        "lock_in",
+        "lock_out",
+        "open_detail",
+        "load_skill",
+      ];
+    }
     try {
       const { toolsGate } = await import("../tools/tools-gate.js");
       for (const t of UNIVERSAL_TOOLS) {

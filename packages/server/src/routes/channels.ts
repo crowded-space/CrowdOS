@@ -41,17 +41,24 @@ export async function channelRoutes(app: FastifyInstance) {
   app.get<{ Querystring: z.infer<typeof listChannelsQuerySchema> }>(
     "/api/channels",
     { schema: { querystring: listChannelsQuerySchema } },
-    async (req: any) => {
+    async (req: any, reply: FastifyReply) => {
       const limit = req.query?.limit as number | undefined;
       const cursor = req.query?.cursor ?? req.query?.offset ?? null;
       // §30: thread the tenant scope so local-tier workspaces do not serve the
       // default folder's channels to every workspace.
-      return listChannels({
-        limit,
-        cursor: cursor != null ? String(cursor) : null,
-        workspaceId: (req as any).workspaceId ?? null,
-        db: (req as any).db,
-      });
+      try {
+        return await listChannels({
+          limit,
+          cursor: cursor != null ? String(cursor) : null,
+          workspaceId: (req as any).workspaceId ?? null,
+          db: (req as any).db,
+        });
+      } catch (error) {
+        if (error instanceof Error && error.name === "ChannelOffsetLimitError") {
+          return reply.status(400).send({ error: "Bad Request", message: error.message });
+        }
+        throw error;
+      }
     });
 
   // POST /api/channels - Create a channel under a category
@@ -61,6 +68,14 @@ export async function channelRoutes(app: FastifyInstance) {
     async (request, reply) => {
       const result = await createChannel(request.body, (request as any).db, (request as any).workspaceId ?? null);
       if ("error" in result) {
+        // CHN-004: duplicate_name and category are distinct failures.
+        // Conflating them into "Category not found: undefined" misleads callers.
+        if ((result as any).error === "duplicate_name") {
+          return reply.status(409).send({
+            error: "Conflict",
+            message: `Channel name already exists: ${(result as any).name}`,
+          });
+        }
         return reply.status(400).send({
           error: "Bad Request",
           message: `Category not found: ${result.categoryId}`,
@@ -80,6 +95,13 @@ export async function channelRoutes(app: FastifyInstance) {
       return reply.status(404).send({ error: "Not Found", message: "Channel not found" });
     }
     if ("error" in result) {
+      // CHN-004 (update path): duplicate_name is 409, category stays 400.
+      if ((result as any).error === "duplicate_name") {
+        return reply.status(409).send({
+          error: "Conflict",
+          message: `Channel name already exists: ${(result as any).name}`,
+        });
+      }
       return reply.status(400).send({
         error: "Bad Request",
         message: `Category not found: ${result.categoryId}`,
@@ -131,9 +153,19 @@ export async function channelRoutes(app: FastifyInstance) {
     async (request, reply) => {
       for (const key of ["activeAgentId", "defaultAgentId"] as const) {
         const agentId = request.body[key];
-        if (typeof agentId === "string" && !(await agentGate.getById(agentId))) {
+        // XD-004: scope the lookup to the caller workspace. An unscoped
+        // getById lets a foreign-workspace agent id pin and dispatch here.
+        if (typeof agentId === "string" && !(await agentGate.getById(agentId, (request as any).db, (request as any).workspaceId ?? null))) {
           return reply.status(400).send({ error: "Bad Request", message: `Agent not found: ${agentId}` });
         }
+      }
+      // CHN-012: refuse orphan pin writes at the transport boundary. The
+      // gate stays permissive for fixture/test callers; HTTP callers must
+      // name a real channel.
+      const { channelGate } = await import("../channels/channel-gate.js");
+      const target = await channelGate.get(request.params.id, (request as any).db).catch(() => null);
+      if (!target) {
+        return reply.status(404).send({ error: "Not Found", message: "Channel not found" });
       }
       const result = await updateChannelSettings(
         request.params.id,

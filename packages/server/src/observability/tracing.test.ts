@@ -60,4 +60,82 @@ describe("SCL-3 OTel + cost ledger — tracing", () => {
     ).rejects.toThrow("boom");
     expect(observabilityGate.getTrace("run-withspan-err")[0].status).toBe("error");
   });
+
+  it("evicts the least-recently-written run bucket, keeping an active run (OBS-010)", () => {
+    for (let i = 0; i < 1000; i++) {
+      const s = observabilityGate.startSpan("llm", { runId: `run-${i}` });
+      observabilityGate.endSpan(s);
+    }
+    // Touch run-0 (most recent write) then force one eviction with a new run.
+    observabilityGate.endSpan(observabilityGate.startSpan("tool", { runId: "run-0" }));
+    observabilityGate.endSpan(observabilityGate.startSpan("llm", { runId: "run-new" }));
+
+    expect(observabilityGate.getTrace("run-0").length).toBe(2);
+    expect(observabilityGate.getTrace("run-1").length).toBe(0);
+    expect(observabilityGate.getTrace("run-new").length).toBe(1);
+  });
+
+  it("stores a snapshot that does not alias live attributes (OBS-011)", () => {
+    const s = observabilityGate.startSpan("llm", { runId: "run-copy", attributes: { x: 1 } });
+    observabilityGate.endSpan(s);
+    s.attributes.x = 99;
+    expect(observabilityGate.getTrace("run-copy")[0].attributes.x).toBe(1);
+  });
+
+  it("bounds the live-span registry while parent lookup still resolves (OBS-001)", () => {
+    const parent = observabilityGate.startSpan("llm", { runId: "run-registry" });
+    const child = observabilityGate.startSpan("tool", { parentSpanId: parent.spanId, runId: "run-registry" });
+    expect(child.traceId).toBe(parent.traceId);
+
+    const ids: string[] = [];
+    for (let i = 0; i < 10050; i++) ids.push(observabilityGate.startSpan("llm", { runId: "run-registry" }).spanId);
+
+    // Registry capped at 10k: oldest entries evicted, newest still resolvable.
+    expect(observabilityGate.getSpanById(parent.spanId)).toBeUndefined();
+    expect(observabilityGate.getSpanById(ids[ids.length - 1])).toBeDefined();
+    const recent = observabilityGate.startSpan("tool", { parentSpanId: ids[ids.length - 1], runId: "run-registry" });
+    expect(recent.traceId).toBeTruthy();
+  });
+
+  it("closes a fast span via the pending OTel attach (OBS-002)", async () => {
+    const ended: string[] = [];
+    const fakeSpan = { end: () => ended.push("end"), setStatus: () => ended.push("status") };
+    const fakeOtel = { trace: { getTracer: () => ({ startSpan: () => fakeSpan }) } };
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    (globalThis as unknown as Record<string, unknown>).__OBS_OTEL_LOADER__ = async () => {
+      await gate;
+      return fakeOtel;
+    };
+    process.env.OTEL_ENABLED = "true";
+    try {
+      const fast = observabilityGate.startSpan("llm", { runId: "run-otel-fast" });
+      observabilityGate.endSpan(fast); // ends before the import resolves
+      const runless = observabilityGate.startSpan("tool", {});
+      observabilityGate.endSpan(runless);
+      expect(ended.length).toBe(0);
+      release();
+      await new Promise((r) => setTimeout(r, 20));
+      expect(ended.length).toBe(2); // both fast spans received end()
+    } finally {
+      delete process.env.OTEL_ENABLED;
+      delete (globalThis as unknown as Record<string, unknown>).__OBS_OTEL_LOADER__;
+    }
+  });
+
+  it("drops run-less spans from every read — no __global bucket (OBS-007)", () => {
+    const runless = observabilityGate.startSpan("tool", {});
+    observabilityGate.endSpan(runless);
+    // Lifecycle still completes on the returned span; only storage is skipped.
+    expect(runless.durationMs).toBeGreaterThanOrEqual(0);
+    expect(runless.status).toBe("ok");
+
+    expect(observabilityGate.getTrace("__global")).toEqual([]);
+    expect(observabilityGate.getAllTraces().some((t) => t.runId === "__global")).toBe(false);
+    expect(observabilityGate.getTraceStats()).toEqual({ totalRuns: 0, totalSpans: 0 });
+
+    observabilityGate.endSpan(observabilityGate.startSpan("llm", { runId: "run-obs-007" }));
+    expect(observabilityGate.getAllTraces().map((t) => t.runId)).toEqual(["run-obs-007"]);
+    expect(observabilityGate.getTraceStats()).toEqual({ totalRuns: 1, totalSpans: 1 });
+  });
 });

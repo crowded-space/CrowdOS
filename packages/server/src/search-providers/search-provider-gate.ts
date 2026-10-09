@@ -10,4 +10,4 @@ export const searchProviderGate = {
 
 export { searchProviders, normalizeUrl, dedupeByUrl, dedupeEvidence, sortByFreshness }
 
-export type { SearchResult, SearchProvider, SearchOptions } from "./search-provider-types.js"
+export type { SearchResult, SearchProvider, SearchOptions, searchSource } from "./search-provider-types.js"

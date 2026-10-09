@@ -1,4 +1,4 @@
-import type { SearchResult, SearchProvider, SearchOptions } from "../search-provider-types.js"
+import type { SearchResult, SearchProvider, SearchOptions, searchSource } from "../search-provider-types.js"
 
 const BRAVE_ENDPOINT = "https://api.search.brave.com/res/v1/web/search"
 const DEFAULT_TIMEOUT_MS = 5000
@@ -12,7 +12,7 @@ function getBraveKey(): string | undefined {
   return raw && raw.length > 0 ? raw : undefined
 }
 
-function mapBraveJson(json: unknown, source: string): SearchResult[] {
+function mapBraveJson(json: unknown, source: searchSource): SearchResult[] {
   const out: SearchResult[] = []
   if (!json || typeof json !== "object") return out
   const obj = json as Record<string, unknown>
@@ -61,7 +61,9 @@ export const braveProvider: SearchProvider = {
       return []
     }
     const limit = Math.min(Math.max(opts?.limit ?? DEFAULT_LIMIT, 1), 20)
-    const timeoutMs = opts?.timeoutMs ?? DEFAULT_TIMEOUT_MS
+    const rawTimeout = opts?.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+    // SP-07: non-finite timeouts clamp setTimeout to ~1ms (instant abort). Fall back to default.
+    const timeoutMs = Number.isFinite(rawTimeout) && rawTimeout > 0 ? rawTimeout : DEFAULT_TIMEOUT_MS
     const controller = new AbortController()
     const timeoutId = setTimeout(() => controller.abort(new Error("Brave search timeout")), timeoutMs)
     // Compose with caller signal

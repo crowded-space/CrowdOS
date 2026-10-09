@@ -58,7 +58,10 @@ export function compileGoogleEndpoint(modelModule: any): {
   headers: Record<string, string>;
   bodyBuilder: (systemPrompt: string, userPrompt: string) => any;
 } {
-  const modelName = modelModule.modelName || "gemini-2.0-flash";
+  const modelName = modelModule.modelName;
+  if (!modelName) {
+    throw new Error("Google endpoint needs a model name on the bound module.");
+  }
   
   // Enforce Gemma 4 check
   validateGemmaModel(modelName);

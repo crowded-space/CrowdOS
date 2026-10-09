@@ -48,6 +48,14 @@ export function resetEventLogStatsForTests(): void {
 // §30: workspaceId is immutable after channel create, so a bounded memo is safe.
 const channelWorkspaceMemo = new Map<string, string | null>();
 
+/**
+ * EVT-04: drop a channel's memoized workspace (rename/restore/migration
+ * changed its owner). Exported for channel-mutation paths.
+ */
+export function invalidateChannelWorkspace(channelId: string): void {
+  channelWorkspaceMemo.delete(channelId);
+}
+
 async function workspaceOfChannel(channelId: string): Promise<string | null> {
   const hit = channelWorkspaceMemo.get(channelId);
   // ponytail: never pin null — first-event race would split the log across scopes
@@ -81,7 +89,10 @@ export async function recordBrokerEvent(
   const channelId = resolveEventChannelId(event)!;
   const timestamp = event.timestamp instanceof Date ? event.timestamp : new Date();
   try {
-    const workspaceId = resolveEventWorkspaceId(event.payload) ?? (await workspaceOfChannel(channelId));
+    // XD-013: channel row is authoritative for write scope. The payload
+    // workspaceId is demoted to fallback — trusting it first misrouted
+    // cross-workspace events into the wrong log.
+    const workspaceId = (await workspaceOfChannel(channelId)) ?? resolveEventWorkspaceId(event.payload);
     const record = await appendNextEvent(
       channelId,
       (seq) => ({

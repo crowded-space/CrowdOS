@@ -6,13 +6,27 @@ export async function runsRoutes(app: FastifyInstance) {
   // Local-first: loopback is the trust boundary; no role gates (single user).
   app.post("/api/runs/:id/resume", async (request, reply) => {
     const { id } = request.params as { id: string };
-    const result = await runsGate.resumeRun(id);
+    // RUN-025: resumeRun's null contract covers "not resumable"; a transport
+    // failure (DB down) still throws. Map it to the same 400 shape with the
+    // real cause so a DB outage does not surface as an opaque 500.
+    let result: Awaited<ReturnType<typeof runsGate.resumeRun>>;
+    try {
+      result = await runsGate.resumeRun(id);
+    } catch (err) {
+      request.log.error({ err }, "[runs] resumeRun transport failure");
+      return reply.status(400).send({ error: "run not resumable", runId: id, cause: err instanceof Error ? err.message : String(err) });
+    }
     if (!result) {
       return reply.status(400).send({ error: "run not resumable", runId: id });
     }
     const { run, checkpoint } = result;
     const queueMode = queueGate.mode();
     const resumeContext = checkpoint ? { watermarkSeq: checkpoint.watermarkSeq, completedCallIds: checkpoint.completedCallIds, historyRef: checkpoint.historyRef, updatedAt: checkpoint.updatedAt } : { watermarkSeq: 0, completedCallIds: [] as string[] };
+    // Q-2/Q-5: delivery honesty. An enqueue/inline failure used to log and
+    // still return 200 success; callers could not distinguish delivered
+    // from lost resumes (or duplicate no-ops).
+    let delivery: "queued" | "inline" | "failed" = queueMode === "bullmq" ? "queued" : "inline";
+    let deliveryDetail: string | null = null;
     if (queueMode === "bullmq") {
       const messageId = `resume:${run.id}`;
       try {
@@ -30,6 +44,8 @@ export async function runsRoutes(app: FastifyInstance) {
         } as unknown as never);
       } catch (err) {
         request.log.error({ err }, "[runs] enqueue resume failed");
+        delivery = "failed";
+        deliveryDetail = err instanceof Error ? err.message : String(err);
       }
     } else {
       try {
@@ -61,12 +77,20 @@ export async function runsRoutes(app: FastifyInstance) {
             runId: run.id,
             resumeContext,
           });
+        } else {
+          // RUN-006: no agent resolved = nothing will execute the resume.
+          // Previously this fell through as silent "inline" success.
+          request.log.error({ runId: run.id, agentId: run.agentId }, "[runs] inline resume skipped: agent not found");
+          delivery = "failed";
+          deliveryDetail = `agent not found: ${run.agentId}`;
         }
       } catch (err) {
         request.log.error({ err }, "[runs] inline resume execute failed");
+        delivery = "failed";
+        deliveryDetail = err instanceof Error ? err.message : String(err);
       }
     }
-    return reply.send({ runId: run.id, status: run.status, resumeFrom: checkpoint });
+    return reply.send({ runId: run.id, status: run.status, resumeFrom: checkpoint, delivery, ...(deliveryDetail ? { deliveryDetail } : {}) });
   });
 
   app.get("/api/runs/:id/compensations", async (request, reply) => {

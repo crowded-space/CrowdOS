@@ -41,4 +41,34 @@ describe("registerRoutes", () => {
 
     await app.close();
   });
+
+  // THR-001: threadRoutes must stay mounted on the real entrypoint.
+  // Every endpoint below must not 404. Auth/DB failures answer non-404
+  // (401/500), which still proves the module is registered.
+  it("serves every Threads endpoint (THR-001)", async () => {
+    const app = Fastify();
+    app.setValidatorCompiler(validatorCompiler);
+    await registerRoutes(app);
+    await app.ready();
+
+    // Presence is proven by routes that do NOT 404 on missing resources:
+    // list (empty array), create (400 validation, not 404), sweep (count).
+    // Single-resource GET/PATCH/DELETE correctly 404 on unknown ids from
+    // the handler, so they cannot distinguish mounted from unmounted.
+    const urls: Array<{ method: "GET" | "POST"; url: string }> = [
+      { method: "GET", url: "/api/channels/no-such-channel/threads" },
+      { method: "POST", url: "/api/channels/no-such-channel/threads" },
+      { method: "POST", url: "/api/threads/sweep" },
+    ];
+    for (const { method, url } of urls) {
+      const res = await app.inject({
+        method,
+        url,
+        payload: method === "POST" ? {} : undefined,
+      });
+      expect(res.statusCode, `${method} ${url}`).not.toBe(404);
+    }
+
+    await app.close();
+  });
 });

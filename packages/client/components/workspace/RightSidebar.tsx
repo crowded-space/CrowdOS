@@ -9,11 +9,14 @@ import AgentRow from './AgentRow';
 const FileExplorer = lazy(() => import('./FileExplorer'));
 import { JobsView } from './JobsView';
 import { OperationsInbox } from './OperationsInbox';
+import { isStoppableRunStatus } from './run-stoppability';
 
 // Terminal run states mirror JobsView/RunHeader (server run-state-machine).
-// Terminal rows render a static snapshot and hide Stop; only non-terminal
-// rows tick elapsed and offer Stop via the existing stopRun transport.
-// No pauseRun exists: routes/runs.ts exposes only resume/compensations/get.
+// Terminal rows render a static snapshot and hide Stop; non-terminal rows
+// tick elapsed, and Stop shows only for live stoppable states (parked
+// resumable/orphaned rows have no controller behind the user:cancel
+// transport). No pauseRun exists: routes/runs.ts exposes only
+// resume/compensations/get.
 const TERMINAL_ROSTER_RUN_STATUSES = new Set(['completed', 'failed', 'cancelled']);
 
 // Roster excludes the Owl/librarian heartbeat indexing service: it is not
@@ -206,7 +209,7 @@ export default function RightSidebar() {
             liveSince: job.firstSeenAt ?? null,
             live: !terminal,
             stopping,
-            canStop: !terminal,
+            canStop: isStoppableRunStatus(job.status),
           });
         } else if (!prev.live && !terminal) {
           byAgent.set(agentId, {
@@ -216,7 +219,7 @@ export default function RightSidebar() {
             liveSince: job.firstSeenAt ?? null,
             live: true,
             stopping,
-            canStop: true,
+            canStop: isStoppableRunStatus(job.status),
           });
         }
       }
@@ -225,8 +228,6 @@ export default function RightSidebar() {
   }, [jobsByRun, cancellingByAgent]);
 
   // Respect reduced-motion: disable AnimatePresence spring when user prefers reduced motion
-  const MotionDiv: any = shouldReduceMotion ? 'div' : motion.div;
-
   if (shouldReduceMotion) {
     // Reduced-motion: no AnimatePresence spring, plain divs preserve UX quality statically
     if (rightPanelView === 'repo') {

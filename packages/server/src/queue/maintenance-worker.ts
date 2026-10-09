@@ -97,6 +97,11 @@ async function handleRetention(): Promise<void> {
       | (() => Promise<void>)
       | undefined;
     if (typeof fn === "function") await fn();
+    // ART-3: the artifacts retention sweep existed but was never wired -
+    // without this call artifacts grow unboundedly (retention job only
+    // reconciled budgets).
+    const { artifactsGate } = await import("../artifacts/artifacts-gate.js");
+    await artifactsGate.runRetentionSweep();
   } catch (err) {
     console.error("[maintenance:retention] partial failure", (err as Error)?.message || err);
     throw err;
@@ -113,6 +118,65 @@ async function handleApprovalExpire(): Promise<void> {
     await approvalGate.sweepOnce(broker);
   } catch (err) {
     console.error("[maintenance:approval-expire] failed", (err as Error)?.message || err);
+    throw err;
+  }
+}
+
+// THR-007: thread TTL expiry had no scheduler — the sweep was only a manual
+// endpoint, so expired threads never transitioned anywhere. Runs per-workspace
+// DBs (THR-025: each call carries the tenant id for tier selection and uses
+// runWithDb for its handle) plus the ambient handle for single-DB deployments;
+// local-only workspaces use the gate's scoped file-store path.
+async function handleThreadExpire(): Promise<void> {
+  try {
+    const { threadGate } = await import("../threads/thread-gate.js");
+    const { runWithDb, getDb, isDatabaseConfigured } = await import("../shared/config/database.js");
+    const { forEachWorkspaceDb, listWorkspaceRecords } = await import("../workspace/workspace-gate.js");
+    let total = 0;
+    const sweptDbWorkspaces = new Set<string>();
+    await forEachWorkspaceDb(async (db, workspaceId) => {
+      if (workspaceId) sweptDbWorkspaces.add(workspaceId);
+      await runWithDb(db, async () => {
+        total += await threadGate.archiveExpired({ workspaceId });
+      });
+    });
+    // Mixed-mode deployments pair some workspaces with a database while
+    // others remain local-only. The fan-out above only visits database
+    // targets, and the ambient sweep below cannot cover them with a global
+    // pool present, so sweep each unswept registry workspace in its local tier.
+    if (isDatabaseConfigured()) {
+      const { tierContextFor } = await import("../workspace/workspace-gate.js");
+      const { resolveTier } = await import("../shared/config/database.js");
+      const records = await listWorkspaceRecords().catch(() => []);
+      for (const record of records) {
+        if (!record?.id || sweptDbWorkspaces.has(record.id)) continue;
+        // Tier-select before delegating: archiveExpired resolves the tenant
+        // handle first, so a local-only workspace would throw NO_DATABASE
+        // here instead of reaching its file-store sweep. Local-only records
+        // degrade to their scoped local path; unexpected tier failures stay loud.
+        try {
+          const tier = resolveTier(await tierContextFor(record.id)).tier;
+          if (tier !== "local") continue;
+        } catch {
+          continue;
+        }
+        total += await threadGate.archiveExpired({ workspaceId: record.id });
+      }
+    }
+    // AP-003 parity: single-DB deployments have no per-workspace URLs, so the
+    // fan-out above visits nothing; always sweep the ambient/global handle too.
+    // With no database at all the gate's local-tier branch does the scan.
+    try {
+      const db = getDb();
+      await runWithDb(db, async () => {
+        total += await threadGate.archiveExpired();
+      });
+    } catch {
+      total += await threadGate.archiveExpired();
+    }
+    if (total > 0) console.log(`[maintenance:thread-expire] expired ${total} thread(s)`);
+  } catch (err) {
+    console.error("[maintenance:thread-expire] failed", (err as Error)?.message || err);
     throw err;
   }
 }
@@ -206,7 +270,9 @@ async function handleSnapshotFull(): Promise<void> {
   } catch {}
 }
 
-async function maintenanceProcessor(job: Job): Promise<unknown> {
+// Exported for tests: the thread-expire tick is pinned by
+// src/threads/thread-expire-scheduler.test.ts (THR-007) calling this directly.
+export async function maintenanceProcessor(job: Job): Promise<unknown> {
   switch (job.name) {
     case "librarian-delta":
       return handleLibrarianDelta();
@@ -224,6 +290,8 @@ async function maintenanceProcessor(job: Job): Promise<unknown> {
       return handleSnapshotFull();
     case "approval-expire":
       return handleApprovalExpire();
+    case "thread-expire":
+      return handleThreadExpire();
     default:
       switch ((job.data as { kind?: string })?.kind) {
         case "librarian-delta":
@@ -242,6 +310,8 @@ async function maintenanceProcessor(job: Job): Promise<unknown> {
           return handleSnapshotFull();
         case "approval-expire":
           return handleApprovalExpire();
+        case "thread-expire":
+          return handleThreadExpire();
         default:
           return null;
       }

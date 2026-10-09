@@ -41,7 +41,7 @@ npm run load:soak:nightly       # k6 soak 8h
 `load/harness.mjs` to assert no queue starvation / vault bounded without k6:
 
 ```bash
-node load/harness.mjs --base http://localhost:3001 --vus 100 --duration 60
+node load/harness.mjs --base http://localhost:12077 --vus 100 --duration 60
 ```
 
 ## What is asserted

@@ -482,7 +482,7 @@ function flushWriteMessagesMirrorImmediate(messages: Message[]) {
 function mapBackendMessage(msg: any): Message {
   return {
     id: msg.id,
-    type: msg.type || (msg.authorType === 'user' ? 'human' : 'agent'),
+    type: msg.type || (msg.authorType === 'user' ? 'human' : msg.authorType === 'system' ? 'system' : 'agent'),
     content: stripToolCalls(msg.content || ''),
     authorId: msg.authorId,
     authorName: msg.authorName,
@@ -665,7 +665,6 @@ interface CrowdOSState {
 
   // Tools Setup Toggle
   toggleToolEnabled: (toolId: string) => void;
-  incrementToolUsage: (toolId: string) => void;
 
   // Roles Mutation
   addRole: (role: Omit<Role, 'id'>) => void;
@@ -695,6 +694,12 @@ interface CrowdOSState {
   // UX-3 Diff review
   artifactsByRun: Record<string, ArtifactRow[]>;
   fetchArtifacts: (runId: string) => Promise<void>;
+  // FIX-B: honest fetch state for diff fetch only. No API shape change.
+  // artifactsFetching lists in-flight runIds; artifactsFetchError holds the
+  // last fetch failure per runId (cleared on next attempt). DiffViewer wires
+  // the error slot to its existing error-with-retry block.
+  artifactsFetching: Record<string, boolean>;
+  artifactsFetchError: Record<string, string | null>;
   applyDiff: (artifactId: string) => Promise<void>;
   revertDiff: (artifactId: string) => Promise<void>;
   // Phase C: one busy token shared by DiffViewer + CheckpointRow + drawer.
@@ -1120,7 +1125,7 @@ const initialSelectedMode: ComposerMode = (() => {
       : undefined;
     const mapped: Message = {
       id: msg.id,
-      type: msg.authorType === 'user' ? 'human' : 'agent',
+      type: msg.authorType === 'user' ? 'human' : msg.authorType === 'system' ? 'system' : 'agent',
       content: stripToolCalls(msg.content),
       authorId: msg.authorId,
       authorName: msg.authorName,
@@ -1898,6 +1903,9 @@ const initialSelectedMode: ComposerMode = (() => {
     // UX-2 Approval cards + UX-3 Diff review
     approvalRequests: [] as ApprovalRequest[],
     artifactsByRun: {} as Record<string, ArtifactRow[]>,
+    // FIX-B: honest fetch state for diff fetch only (no API shape change).
+    artifactsFetching: {} as Record<string, boolean>,
+    artifactsFetchError: {} as Record<string, string | null>,
     // Phase C: one busy token shared by every diff mutator (DiffViewer,
     // CheckpointRow, drawer). Non-null means a mutation is in flight.
     diffBusy: null,
@@ -2937,10 +2945,11 @@ const initialSelectedMode: ComposerMode = (() => {
     // Agent operations
     addAgent: async (agent) => {
       try {
-        // Local mode: the server seeds canon default modules and resolves
-        // missing references on create, so an empty catalog is not an error.
-        const modelModuleId = agent.modelModuleId || get().modelModules[0]?.id || null;
-        const instructionModuleId = agent.instructionModuleId || get().instructionModules[0]?.id || 'instr-default';
+          // Blank stays blank: the server seeds canon defaults and resolves
+          // missing references on create. Falling back to the first catalog
+          // row would bind whatever happens to be listed first.
+          const modelModuleId = agent.modelModuleId || null;
+          const instructionModuleId = agent.instructionModuleId || null;
 
         const body = {
           name: agent.name,
@@ -3052,7 +3061,7 @@ const initialSelectedMode: ComposerMode = (() => {
             label: profile.label,
             provider: profile.provider,
             modelName: profile.modelName,
-            apiKey: profile.apiKey || 'mock-key',
+              apiKey: profile.apiKey || null,
             endpointUrl: profile.baseUrl || null,
             temperature: 0.7,
             topP: 0.9,
@@ -3063,19 +3072,15 @@ const initialSelectedMode: ComposerMode = (() => {
         });
         if (res.ok) {
           await get().fetchWorkspaces();
+          } else {
+            const detail = await res.json().catch(() => ({} as any));
+            throw new Error((detail as any)?.message || 'Failed to create model profile (HTTP ' + res.status + ').');
         }
       } catch (err) {
-        console.error("Failed to create Model profile card, using offline mock fallback.", err);
-        const newProf: ModelProfile = {
-          ...profile,
-          id: `prof-${Date.now()}`,
-          createdAt: new Date().toISOString()
-        };
-        const updated = [...get().modelProfiles, newProf];
-        set({ modelProfiles: updated });
-        if (typeof localStorage !== 'undefined') {
-          localStorage.setItem('crowdos_model_profiles', JSON.stringify(updated));
-        }
+          // No silent local fallback: a failed create must surface, never a
+          // phantom row that the server never stored.
+          set({ workspaceError: err instanceof Error ? err.message : 'Failed to create model profile.' });
+          throw err;
       }
     },
 
@@ -3095,19 +3100,15 @@ const initialSelectedMode: ComposerMode = (() => {
         });
         if (res.ok) {
           await get().fetchWorkspaces();
+          } else {
+            const detail = await res.json().catch(() => ({} as any));
+            throw new Error((detail as any)?.message || 'Failed to update model profile (HTTP ' + res.status + ').');
         }
       } catch (err) {
-        console.error("Failed to update Model profile card, using offline mock fallback.", err);
-        const updated = get().modelProfiles.map(prof => {
-          if (prof.id === id) {
-            return { ...prof, ...patch, updatedAt: new Date().toISOString() };
-          }
-          return prof;
-        });
-        set({ modelProfiles: updated });
-        if (typeof localStorage !== 'undefined') {
-          localStorage.setItem('crowdos_model_profiles', JSON.stringify(updated));
-        }
+          // No silent local fallback: a failed update must surface, never a
+          // local-only edit that the server never stored.
+          set({ workspaceError: err instanceof Error ? err.message : 'Failed to update model profile.' });
+          throw err;
       }
     },
 
@@ -3123,14 +3124,15 @@ const initialSelectedMode: ComposerMode = (() => {
             localStorage.setItem('crowdos_model_profiles', JSON.stringify(updated));
           }
           await get().fetchWorkspaces();
+          } else {
+            const detail = await res.json().catch(() => ({} as any));
+            throw new Error((detail as any)?.message || 'Failed to delete model profile (HTTP ' + res.status + ').');
         }
       } catch (err) {
-        console.error("Failed to delete Model profile card, using offline mock fallback.", err);
-        const updated = get().modelProfiles.filter(prof => prof.id !== id);
-        set({ modelProfiles: updated });
-        if (typeof localStorage !== 'undefined') {
-          localStorage.setItem('crowdos_model_profiles', JSON.stringify(updated));
-        }
+          // No silent local fallback: a failed delete must surface, never a
+          // local-only removal that the server never stored.
+          set({ workspaceError: err instanceof Error ? err.message : 'Failed to delete model profile.' });
+          throw err;
       }
     },
 
@@ -3191,11 +3193,11 @@ const initialSelectedMode: ComposerMode = (() => {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             label: mod.name,
-            provider: mod.provider || 'google',
-            modelName: mod.modelProfileId || 'gemini-2.5-flash',
+            provider: mod.provider,
+            modelName: mod.modelProfileId,
             apiKey: mod.apiKey || '',
             endpointUrl: mod.baseUrl || null,
-            temperature: mod.temperature || 0.7,
+            temperature: mod.temperature ?? 0.7,
             topP: mod.topP ?? 0.9,
             maxOutputTokens: mod.maxTokens || 2048,
             maxRecentMessages: mod.maxRecentMessages ?? 10,
@@ -3660,16 +3662,6 @@ const initialSelectedMode: ComposerMode = (() => {
       set({ tools: updated });
     },
 
-    incrementToolUsage: (toolId) => {
-      const updated = get().tools.map(tool => {
-        if (tool.id === toolId) {
-          return { ...tool, usageCount: tool.usageCount + 1 };
-        }
-        return tool;
-      });
-      set({ tools: updated });
-    },
-
     // Roles actions 
     addRole: (role) => {
       const newRole: Role = {
@@ -3772,6 +3764,12 @@ const initialSelectedMode: ComposerMode = (() => {
     },
 
     fetchArtifacts: async (runId) => {
+      // FIX-B: honest fetch state for diff fetch only; no API shape change.
+      // Failure clears to error slot (never swallowed); success clears error.
+      set((state: any) => ({
+        artifactsFetching: { ...state.artifactsFetching, [runId]: true },
+        artifactsFetchError: { ...state.artifactsFetchError, [runId]: null },
+      }));
       try {
         const data = await apiClient.getArtifacts(runId);
         const rows: ArtifactRow[] = ((data as any).artifacts || data || []) as ArtifactRow[];
@@ -3781,8 +3779,15 @@ const initialSelectedMode: ComposerMode = (() => {
         }));
         set((state: any) => ({
           artifactsByRun: { ...state.artifactsByRun, [runId]: mapped },
+          artifactsFetching: { ...state.artifactsFetching, [runId]: false },
+          artifactsFetchError: { ...state.artifactsFetchError, [runId]: null },
         }));
-      } catch {}
+      } catch (err: any) {
+        set((state: any) => ({
+          artifactsFetching: { ...state.artifactsFetching, [runId]: false },
+          artifactsFetchError: { ...state.artifactsFetchError, [runId]: err?.message || 'Failed to load diffs.' },
+        }));
+      }
     },
 
     applyDiff: async (artifactId) => {
@@ -3790,7 +3795,14 @@ const initialSelectedMode: ComposerMode = (() => {
       const art = all.find((a) => a.id === artifactId);
       if (!art || !art.path) return;
       const workspaceId = get().activeWorkspaceId || art.workspaceId || 'default';
-      const content = art.contentRef ?? '';
+      // ART-1: list rows carry a 500-char contentRef truncation. Fetch the
+      // full row so Apply writes the complete body, never the preview.
+      let content = art.contentRef ?? '';
+      try {
+        const full = await apiClient.getArtifact(artifactId) as any;
+        const row = (full as any)?.artifact ?? full;
+        if (typeof (row as any)?.contentRef === 'string') content = (row as any).contentRef;
+      } catch { /* fall back to the cached preview */ }
       await apiClient.applyFileContent(art.path, content, workspaceId);
       get().incrementFilesystemRevision();
     },

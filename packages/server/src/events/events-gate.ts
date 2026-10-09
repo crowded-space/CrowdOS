@@ -4,6 +4,7 @@ import {
   recordBrokerEvent,
   recordBrokerEventDetached,
   eventLogStats,
+  invalidateChannelWorkspace,
   resetEventLogStatsForTests,
 } from "./event-log-service.js";
 import {
@@ -29,6 +30,7 @@ export {
   recordBrokerEvent,
   recordBrokerEventDetached,
   eventLogStats,
+  invalidateChannelWorkspace,
   resetEventLogStatsForTests,
   EPHEMERAL_EVENT_TYPES,
   isEphemeralEventType,
@@ -51,4 +53,6 @@ export const eventsGate = {
   headSeq: eventHeadSeq,
   isEphemeral: isEphemeralEventType,
   stats: eventLogStats,
+  // EVT-04: channel owner changed — drop the memoized workspace.
+  invalidateChannelWorkspace,
 };

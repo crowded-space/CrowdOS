@@ -2,7 +2,7 @@
  * PERF-5 acceptance: channel-open latency stays constant with 10k messages.
  *
  * Run prerequisites (all must hold or the test SKIPS itself with the reason):
- *   1. Dev stack running: npm run dev  (vite :3000 proxying fastify :3001)
+ *   1. Dev stack running: npm run dev  (vite :22077 proxying fastify :12077)
  *   2. DATABASE_URL in root .env pointing at the dev DB.
  *
  * Auth handling: in strict mode (AUTH_STRICT=true, the default) the API is
@@ -14,9 +14,9 @@
  * (deferred step).
  *
  * Strict-mode manual verification without this harness (curl):
- *   curl -s -H "X-API-Key: <BOOTSTRAP_ADMIN_KEY>" "http://localhost:3001/api/channels/<channelId>/messages?limit=50"
+ *   curl -s -H "X-API-Key: <BOOTSTRAP_ADMIN_KEY>" "http://localhost:12077/api/channels/<channelId>/messages?limit=50"
  *     -> expect {"messages":[...50 newest-first...],"cursor":{"before":{"timestamp":"<ISO>","seq":N}}}
- *   curl -s -H "X-API-Key: <KEY>" "http://localhost:3001/api/channels/<channelId>/messages?before=<ISO>;<seq>&limit=50"
+ *   curl -s -H "X-API-Key: <KEY>" "http://localhost:12077/api/channels/<channelId>/messages?before=<ISO>;<seq>&limit=50"
  *     -> expect next-older page; last page returns cursor:null
  */
 import { test, expect } from '@playwright/test';
@@ -59,10 +59,16 @@ test.describe('PERF-5 pagination acceptance', () => {
     postgres = (await import('postgres')).default;
 
     client = await tryConnect();
-    if (!client) throw new Error('SKIP: No DATABASE_URL or dev DB unreachable. PERF-5 e2e needs the dev stack; see file header for manual curl verification.');
+    if (!client) {
+      test.skip(true, 'No DATABASE_URL or dev DB unreachable. PERF-5 e2e needs the dev stack; see file header for manual curl verification.');
+      return;
+    }
 
     const tableRow = await client`select to_regclass('public.messages') as t`;
-    if (!tableRow[0]?.t) throw new Error('SKIP: messages table missing in dev DB. Run npm run db:bootstrap first.');
+    if (!tableRow[0]?.t) {
+      test.skip(true, 'messages table missing in dev DB. Run npm run db:bootstrap first.');
+      return;
+    }
 
     // Exact per-process id: overlapping runs must never delete each other's fixture.
     await client`delete from "channels" where "id" = ${CHANNEL_ID}`;
@@ -114,7 +120,10 @@ test.describe('PERF-5 pagination acceptance', () => {
       returning "id"
     `;
     e2eKeyId = inserted[0]?.id ?? null;
-    if (!e2eKeyId) throw new Error('SKIP: Could not provision a temporary API key in the dev DB api_keys table.');
+    if (!e2eKeyId) {
+      test.skip(true, 'Could not provision a temporary API key in the dev DB api_keys table.');
+      return;
+    }
   }, 60_000);
 
   test.afterAll(async () => {
@@ -132,18 +141,18 @@ test.describe('PERF-5 pagination acceptance', () => {
     // because playwright.config.ts is outside this task's file scope.
     let viteUp = true;
     try {
-      await fetch(process.env.PLAYWRIGHT_BASE_URL ?? 'http://localhost:3000', { signal: AbortSignal.timeout(3000) });
+      await fetch(process.env.PLAYWRIGHT_BASE_URL ?? 'http://localhost:22077', { signal: AbortSignal.timeout(3000) });
     } catch {
       viteUp = false;
     }
     if (!viteUp) {
-      test.info().annotations.push({ type: 'SKIP', description: 'Vite dev server not running on :3000. Start npm run dev and re-run npx playwright test.' });
+      test.info().annotations.push({ type: 'SKIP', description: 'Vite dev server not running on :22077. Start npm run dev and re-run npx playwright test.' });
       return;
     }
 
-    const apiProbe = await fetch(`http://localhost:3001/api/channels`, { signal: AbortSignal.timeout(4000) }).catch(() => null);
+    const apiProbe = await fetch(`http://localhost:12077/api/channels`, { signal: AbortSignal.timeout(4000) }).catch(() => null);
     if (!apiProbe) {
-      test.info().annotations.push({ type: 'SKIP', description: 'Fastify API not reachable on :3001. Start npm run dev and re-run.' });
+      test.info().annotations.push({ type: 'SKIP', description: 'Fastify API not reachable on :12077. Start npm run dev and re-run.' });
       return;
     }
 

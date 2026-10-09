@@ -13,7 +13,10 @@ export class OpenAIAdapter implements IProviderAdapter {
     onChunk?: (chunk: { content: string; thoughts?: string; isThoughts?: boolean }) => void,
     options?: { signal?: AbortSignal }
   ): Promise<LLMResponse> {
-    const modelName = config.modelName || 'gpt-4o'
+    const modelName = config.modelName
+    if (!modelName) {
+      throw new Error('[OpenAIAdapter] Missing model name. Bind the agent to a model module with an explicit model.')
+    }
     const apiKey = config.apiKey || process.env.OPENAI_API_KEY || ''
     const endpointUrl = config.endpointUrl || 'https://api.openai.com/v1'
 

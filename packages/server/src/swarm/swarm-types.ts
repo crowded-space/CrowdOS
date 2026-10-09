@@ -28,7 +28,9 @@ export interface SwarmTaskRow {
 
 export interface SwarmWorkerResult {
   taskId: string;
-  status: "completed" | "failed";
+  // SW-05: blocked is a first-class outcome. The dispatch map used to say
+  // failed while rows said blocked.
+  status: "completed" | "failed" | "blocked";
   output?: string | null;
   error?: string | null;
   durationMs?: number;

@@ -41,6 +41,11 @@ export function setLocalStoreDirForTests(dir: string | null): void {
   folderCache.clear();
 }
 
+/** M-10: true only when tests pinned a temp store dir (not mere VITEST env). */
+export function isTestStoreDir(): boolean {
+  return testDirOverride !== null;
+}
+
 /** Canon dirs for one workspace under the test base (or the real sandbox). */
 export function localStoreDirsForTests(workspaceId?: string | null): {
   workspaceFolder: string;
@@ -348,6 +353,7 @@ export async function mutateJsonArray<T>(
     await fs.mkdir(dir, { recursive: true });
     const rows = await readJsonArray<T>(name, workspaceId);
     const next = fn(rows) ?? rows;
+    await fs.mkdir(join(dir, name, ".."), { recursive: true });
     await fs.writeFile(join(dir, name), JSON.stringify(next, null, 2), "utf8");
     return next;
   });
@@ -378,6 +384,7 @@ export async function mutateJsonObject<V>(
     await fs.mkdir(dir, { recursive: true });
     const obj = await readJsonObject<V>(name, workspaceId);
     const next = fn(obj) ?? obj;
+    await fs.mkdir(join(dir, name, ".."), { recursive: true });
     await fs.writeFile(join(dir, name), JSON.stringify(next, null, 2), "utf8");
     return next;
   });
@@ -399,19 +406,40 @@ function safeChannelFileId(channelId: string): string {
  * the reader. Writing the missing newline first keeps one line per record — the
  * torn line is skipped by the reader, and everything appended after it survives.
  */
+interface JsonlFileOptions {
+  repairTornTail?: boolean;
+  workspaceId?: string | null;
+}
+
+/** Runs one operation under the same per-file lock used by every JSONL writer. */
+async function withJsonlFileLock<T>(
+  dirName: string,
+  channelId: string,
+  opts: JsonlFileOptions,
+  fn: (file: string) => Promise<T>,
+): Promise<T> {
+  const safe = safeChannelFileId(channelId);
+  const dir = join(resolveLocalStoreDir(opts.workspaceId), dirName);
+  await fs.mkdir(dir, { recursive: true });
+  let file = join(await fs.realpath(dir), `${safe}.jsonl`);
+  try {
+    file = await fs.realpath(file);
+  } catch (err: any) {
+    if (err?.code !== "ENOENT") throw err;
+  }
+  return withFileLock(`jsonl:${file}`, async () => {
+    if (opts.repairTornTail) await terminateTornTail(file);
+    return fn(file);
+  });
+}
+
 async function appendJsonlLine(
   dirName: string,
   channelId: string,
   row: Record<string, unknown>,
-  opts: { repairTornTail?: boolean; workspaceId?: string | null } = {},
+  opts: JsonlFileOptions = {},
 ): Promise<void> {
-  const safe = safeChannelFileId(channelId);
-  const scope = opts.workspaceId ?? DEFAULT_WORKSPACE_SCOPE;
-  await withFileLock(`jsonl:${scope}:${dirName}:${safe}`, async () => {
-    const dir = join(resolveLocalStoreDir(opts.workspaceId), dirName);
-    await fs.mkdir(dir, { recursive: true });
-    const file = join(dir, `${safe}.jsonl`);
-    if (opts.repairTornTail) await terminateTornTail(file);
+  await withJsonlFileLock(dirName, channelId, opts, async (file) => {
     await fs.appendFile(file, JSON.stringify(row) + "\n", "utf8");
   });
 }
@@ -466,6 +494,76 @@ export async function appendJsonl(
   return appendJsonlLine("messages", channelId, row, { workspaceId });
 }
 
+/** Append a message row only when its id is absent from the channel log. */
+export async function appendJsonlIfAbsentById(
+  channelId: string,
+  row: Record<string, unknown> & { id: string },
+  workspaceId?: string | null,
+): Promise<{ appended: boolean; row: Record<string, unknown> }> {
+  return appendJsonlIfAbsentByIdWithFactory(channelId, row.id, async () => row, workspaceId);
+}
+
+/** Reserve or construct a row only after its ID is confirmed absent under the file lock. */
+export async function appendJsonlIfAbsentByIdWithFactory(
+  channelId: string,
+  id: string,
+  createRow: () => Promise<Record<string, unknown> & { id: string }>,
+  workspaceId?: string | null,
+): Promise<{ appended: boolean; row: Record<string, unknown> }> {
+  if (typeof id !== "string" || id.length === 0) {
+    throw new TypeError("JSONL id must be a non-empty string");
+  }
+  return withJsonlFileLock("messages", channelId, { workspaceId }, async (file) => {
+    const sharedOverride = !testDirOverride && Boolean(process.env.CROWDOS_LOCALSTORE_DIR?.trim());
+    const targetScope = workspaceId?.trim() || DEFAULT_WORKSPACE_SCOPE;
+    const existing = (await readJsonlLines("messages", channelId, workspaceId))
+      .find((candidate) => {
+        if (candidate.id !== id || candidate.channelId !== channelId) return false;
+        if (!sharedOverride) return true;
+        const candidateScope =
+          typeof candidate.workspaceId === "string" && candidate.workspaceId.trim()
+            ? candidate.workspaceId.trim()
+            : DEFAULT_WORKSPACE_SCOPE;
+        return candidateScope === targetScope;
+      });
+    if (existing) return { appended: false, row: existing };
+
+    const row = await createRow();
+    if (typeof row.id !== "string" || row.id.length === 0 || row.id !== id) {
+      throw new TypeError("JSONL row factory must preserve a non-empty id");
+    }
+    if (row.channelId !== channelId) {
+      throw new TypeError("JSONL row factory must preserve the channel id");
+    }
+    await terminateTornTail(file);
+    const serialized = JSON.stringify(row);
+    await fs.appendFile(file, serialized + "\n", "utf8");
+    return { appended: true, row: JSON.parse(serialized) as Record<string, unknown> };
+  });
+}
+
+/** Clear a field on matching raw JSONL rows under the same lock as appends. */
+export async function mutateJsonlRows(
+  channelId: string,
+  workspaceId: string | null | undefined,
+  predicate: (row: Record<string, unknown>) => boolean,
+  mutate: (row: Record<string, unknown>) => Record<string, unknown>,
+): Promise<number> {
+  return withJsonlFileLock("messages", channelId, { workspaceId, repairTornTail: true }, async (file) => {
+    const rows = await readJsonlLines("messages", channelId, workspaceId);
+    let changed = 0;
+    const updated = rows.map((row) => {
+      if (!predicate(row)) return row;
+      changed += 1;
+      return mutate(row);
+    });
+    if (changed > 0) {
+      await fs.writeFile(file, updated.map((row) => JSON.stringify(row)).join("\n") + "\n", "utf8");
+    }
+    return changed;
+  });
+}
+
 /** Read all JSON lines for a channel; missing file reads as []. */
 export async function readJsonl(
   channelId: string,
@@ -477,8 +575,8 @@ export async function readJsonl(
 /**
  * §29 local event log: append one JSON line to events/<channelId>.jsonl.
  * Same append-only + torn-tail-tolerant rules as the message log; the mutex is
- * per file (`jsonl:<ws>:events:<id>`), so event and message appends never block
- * each other for the same channel.
+ * keyed by the resolved physical JSONL path, so workspace aliases to one file
+ * share its lock while event and message files stay independent.
  */
 export async function appendEventJsonl(
   channelId: string,

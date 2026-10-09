@@ -1,6 +1,7 @@
 // ─── Workspace Registry (Local File Persistence) ─────────────────────
-// Manages workspace metadata and database credentials in <userData>/workspaces.json.
-// Decouples workspace definitions completely from .env and the global database.
+// Manages workspace metadata and primary database URLs in <userData>/workspaces.json.
+// Legacy per-workspace env keys remain secondary URL sources; workspace routing
+// is separate from the process-wide database pool.
 //
 // Canon (mock-structure-polished): the global workspaces.json is the portal/hub
 // index and wins for listing and startup. Every workspace also owns a
@@ -14,7 +15,7 @@ import { promises as fs } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { TtlCache } from "../shared/core/ttl-cache.js";
 import { invalidateWorkspacePathCaches } from "../shared/core/local-file.js";
-import { parseWorkspaceDatabaseUrl } from "./workspace-database.js";
+import { parseWorkspaceDatabaseUrl, readWorkspaceDatabaseUrl } from "./workspace-database.js";
 import {
   DEFAULT_ARTIFACT_DIR,
   normalizeArtifactDir,
@@ -244,7 +245,10 @@ async function readAllRaw(): Promise<WorkspaceRecord[]> {
     return [];
   } catch (err: any) {
     if (err?.code === "ENOENT") return [];
-    return [];
+    // WS-005: a corrupt registry must not read as empty (locks disabled,
+    // records vanish). Surface the parse failure so callers fail closed
+    // instead of operating on a phantom-empty workspace list.
+    throw new Error(`Workspace registry at ${filePath} is unreadable: ${(err as Error)?.message ?? err}`);
   }
 }
 
@@ -279,18 +283,27 @@ export async function getWorkspaceDescriptor(id: string): Promise<WorkspaceDescr
 }
 
 /**
- * Build a dual-boot TierContext for a workspace (registry preference +
- * record URL, record-cached ≤60s). Unknown workspaces get the global default.
+ * Build a dual-boot TierContext using the same workspace URL precedence as
+ * getWorkspaceDb: registry record first, then the matching per-workspace env
+ * key. The process-wide DATABASE_URL is not a tenant URL.
  */
 export async function tierContextFor(
   workspaceId?: string | null,
 ): Promise<{ workspaceId: string | null; databaseUrl?: string | null; storagePreference?: string | null }> {
   if (!workspaceId) return { workspaceId: null };
   const rec = await getWorkspaceRecord(workspaceId).catch(() => null);
-  if (!rec) return { workspaceId };
+  const databaseUrl = rec?.databaseUrl?.trim() || (await readWorkspaceDatabaseUrl(workspaceId))?.trim() || null;
+  if (!rec) return { workspaceId, databaseUrl };
+  // WS-004: conflict quarantine. A record whose dbSync state is conflict is
+  // attached to an unrelated database — resolve local-only so dualWrite and
+  // withStoreFallback never push rows into the wrong DB. (Was: only
+  // drainOutbox checked the flag; writes continued.)
+  if (rec.dbSync?.state === "conflict") {
+    return { workspaceId, storagePreference: "local" };
+  }
   return {
     workspaceId,
-    databaseUrl: rec.databaseUrl?.trim() || null,
+    databaseUrl,
     storagePreference: rec.storagePreference === "local" ? "local" : "default",
   };
 }

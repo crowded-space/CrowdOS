@@ -10,6 +10,7 @@ import { categoryRoutes } from "./categories.js";
 import { channelRoutes } from "./channels.js";
 import { channelMountRoutes } from "./channel-mounts.js";
 import { messageRoutes } from "./messages.js";
+import { threadRoutes } from "./threads.js";
 import { filesystemRoutes } from "./filesystem.js";
 import { skillRoutes } from "./skills.js";
 import { toolRoutes } from "./tools.js";
@@ -22,6 +23,7 @@ import { artifactsRoutes } from "./artifacts.js";
 import { approvalsRoutes } from "./approvals.js";
 import { searchRoutes } from "./search.js";
 import { observabilityRoutes } from "./observability.js";
+import { safetyRoutes } from "./safety.js";
 
 export async function registerRoutes(app: FastifyInstance) {
   await app.register(healthRoutes);
@@ -38,6 +40,7 @@ export async function registerRoutes(app: FastifyInstance) {
   // route-integration test (which wires its own app) still passes.
   await app.register(channelMountRoutes);
   await app.register(messageRoutes);
+  await app.register(threadRoutes);
   await app.register(filesystemRoutes);
   await app.register(skillRoutes);
   await app.register(toolRoutes);
@@ -50,4 +53,10 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(approvalsRoutes);
   await app.register(searchRoutes);
   await app.register(observabilityRoutes);
+  // Safety transport: channel/workspace fsPolicy + approval-grant management.
+  // The tool executor reads the fsPolicy rows these routes write, so the
+  // module must be mounted or those policies can never be configured (and
+  // the grants list/revoke API 404s). Same class of defect the ChannelMounts
+  // registration comment above documents.
+  await app.register(safetyRoutes);
 }

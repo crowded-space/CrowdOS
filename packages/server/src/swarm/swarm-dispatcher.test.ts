@@ -103,7 +103,8 @@ describe('swarmDispatcher DAG respects dependsOn', () => {
     };
     const results = await swarmGate.dispatch({ plan, runId: packet.runId!, packet, broker, workerExecutor: executor as any });
     expect(results.get('task-1')?.status).toBe('failed');
-    expect(results.get('task-2')?.status).toBe('failed');
+    // SW-05: the dispatch map agrees with the persisted row — blocked, not failed.
+    expect(results.get('task-2')?.status).toBe('blocked');
     expect(results.get('task-2')?.error).toMatch(/blocked/i);
     expect(results.get('task-3')?.status).toBe('completed');
   });

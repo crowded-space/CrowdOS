@@ -4,6 +4,8 @@ import {
   closeAllWorkspaceDatabases,
   getWorkspaceDbPoolStats,
   forEachWorkspaceDb,
+  checkWorkspaceSchemaReady,
+  invalidateWorkspaceSchemaProbe,
 } from "./workspace-database-runtime.js";
 import {
   parseWorkspaceDatabaseUrl,
@@ -90,6 +92,8 @@ export {
   closeAllWorkspaceDatabases,
   getWorkspaceDbPoolStats,
   forEachWorkspaceDb,
+  checkWorkspaceSchemaReady,
+  invalidateWorkspaceSchemaProbe,
   parseWorkspaceDatabaseUrl,
   describeWorkspaceDatabaseUrl,
   testWorkspaceDatabaseConnection,

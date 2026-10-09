@@ -189,6 +189,10 @@ export async function workspaceRoutes(app: FastifyInstance) {
       const { name, icon, rootPath } = request.body;
       const databaseUrl = (request.body.databaseUrl ?? "").trim();
       const hasDb = databaseUrl.length > 0;
+      // WS-006: provision/seed readiness for the 201 payload. Declared at
+      // handler scope — the response below is outside the hasDb branch.
+      let schemaReady = true;
+      let seedReady = true;
 
       if (hasDb) {
         // 1. Validate DB URL structure
@@ -224,6 +228,7 @@ export async function workspaceRoutes(app: FastifyInstance) {
           } catch (err: any) {
             // In mock / offline test scenarios, don't hard-fail if migrations can't run
             request.log.warn({ err }, "Notice: provisionWorkspaceDatabase did not complete schema");
+          schemaReady = false;
           }
         });
       }
@@ -235,6 +240,15 @@ export async function workspaceRoutes(app: FastifyInstance) {
       // directory is browsable. `id` stays the stable key everywhere else.
       const folderName = resolveRecordFolderName({ id, name });
       const resolvedSandbox = rootPath || resolveWorkspaceFolderPath(sandboxBase, folderName);
+      // WS-013: Zone A rule — `rootPath` holds workspace-local state
+      // (vfs/, .crowdos/) and must never point at a user repository. An
+      // explicit path outside the sandbox is still honored (folder-picker
+      // flows), but flagged in the response so the portal can warn before
+      // sectors are written there. Delete keeps such folders in place.
+      const rootPathWarning =
+        rootPath && !isInsideRoot(path.resolve(rootPath), sandboxBase)
+          ? "rootPath is outside the workspace sandbox; CrowdOS will write its workspace sectors (vfs/, .crowdos/) into this directory."
+          : null;
 
       // 5. Save to local workspaces.json registry FIRST so getWorkspaceDb(id)
       // resolves the new workspace pool (not global) for seeding.
@@ -271,14 +285,15 @@ export async function workspaceRoutes(app: FastifyInstance) {
       let dbMeta = { configured: false, host: "", database: "", port: null as number | null };
       if (!hasDb) {
         try {
-          const { localCreateCategory } = await import("../channels/channel-local-store.js");
-          const { localCreateChannel } = await import("../channels/channel-local-store.js");
+          // CHN-020: seed through the channels gate (idempotent) instead of
+          // reaching into channel-local-store directly.
+          const { channelGate } = await import("../channels/channel-gate.js");
           const { agentGate } = await import("../agents/agent-gate.js");
-          const cat = await localCreateCategory({ name: "General", workspaceId: id, createdBy: "system", position: 0 });
-          await localCreateChannel({ name: "general", type: "standard", createdBy: "system", categoryId: cat.id, workspaceId: id, position: 0 });
+          await channelGate.seedLocalPresets(id);
           await agentGate.seedDefaultAgent(id);
         } catch (err: any) {
           request.log.warn({ err }, "Notice: local preset seeding skipped or deferred");
+          seedReady = false;
         }
       }
       if (hasDb) {
@@ -290,6 +305,7 @@ export async function workspaceRoutes(app: FastifyInstance) {
             }
           } catch (err: any) {
             request.log.warn({ err }, "Notice: preset seeding skipped or deferred");
+            seedReady = false;
           }
         });
 
@@ -332,6 +348,11 @@ export async function workspaceRoutes(app: FastifyInstance) {
         ...descriptor,
         metadata: { database: dbMeta },
         pairing,
+        // WS-006: readiness surfaced (was warn-only 201).
+        schemaReady,
+        seedReady,
+        // WS-013: outside-sandbox rootPath flag (null when contained).
+        rootPathWarning,
       });
     }
   );
@@ -392,6 +413,10 @@ export async function workspaceRoutes(app: FastifyInstance) {
       if (databaseUrl === null) {
         // Disconnect DB
         await closeWorkspaceDatabase(id);
+        try {
+          const { invalidateWorkspaceSchemaProbe: invalidateProbe2 } = await import("../workspace/workspace-gate.js");
+          invalidateProbe2(id);
+        } catch {}
         if (record) {
           record.databaseUrl = "";
           record.dbSync = null;
@@ -420,15 +445,33 @@ export async function workspaceRoutes(app: FastifyInstance) {
         const trimmedUrl = databaseUrl.trim();
         parseWorkspaceDatabaseUrl(trimmedUrl);
         await testWorkspaceDatabaseConnection(trimmedUrl);
+        // SYNC-1: bind-time auto schema sync. A URL attached here must be
+        // query-ready before the record points at it — a stale/partial schema
+        // otherwise 500s every tenant-scoped read until something retries. A
+        // failed sync never blocks the bind (local tier keeps serving); the
+        // outcome rides the response as `schemaReady` + `schemaError` and the
+        // sweeper retries it in the background.
+        let bindSchemaReady = true;
+        let bindSchemaError: string | null = null;
         await withProvisionLock(trimmedUrl, async () => {
           try {
             await provisionWorkspaceDatabase(trimmedUrl, 90_000);
-          } catch {}
+          } catch (err: any) {
+            bindSchemaReady = false;
+            bindSchemaError = err?.message ? String(err.message).slice(0, 300) : String(err ?? "provision failed").slice(0, 300);
+            request.log.warn({ err }, "Notice: bind-time schema sync did not complete; sweeper will retry");
+          }
         });
+        (request as any).bindSchemaReady = bindSchemaReady;
+        (request as any).bindSchemaError = bindSchemaError;
         await closeWorkspaceDatabase(id);
         if (record) {
           record.databaseUrl = trimmedUrl;
         }
+        try {
+          const { invalidateWorkspaceSchemaProbe: invalidateProbe } = await import("../workspace/workspace-gate.js");
+          invalidateProbe(id);
+        } catch {}
         const parsed = parseWorkspaceDatabaseUrl(trimmedUrl);
         updatedDbMeta = {
           configured: true,
@@ -484,10 +527,23 @@ export async function workspaceRoutes(app: FastifyInstance) {
       }
 
       const descriptor = await getWorkspaceDescriptor(id);
+      // WS-013: same outside-sandbox flag as create (patch accepts rootPath too).
+      const patchedRootPath = typeof rootPath === "string" && rootPath.trim() ? rootPath : null;
+      const rootPathWarning =
+        patchedRootPath && !isInsideRoot(path.resolve(patchedRootPath), resolveSandboxBase())
+          ? "rootPath is outside the workspace sandbox; CrowdOS will write its workspace sectors (vfs/, .crowdos/) into this directory."
+          : null;
       return {
         ...(descriptor || { id, name: record?.name ?? name ?? id, icon: record?.icon ?? icon ?? "💼" }),
         metadata: updatedDbMeta ? { database: updatedDbMeta } : undefined,
         pairing,
+        rootPathWarning,
+        // SYNC-1: bind-time schema sync outcome (failed sync still binds;
+        // the sweeper retries — see GET db-sync `schemaReady`).
+        ...((request as any).bindSchemaReady === undefined ? null : {
+          schemaReady: (request as any).bindSchemaReady,
+          schemaError: (request as any).bindSchemaError,
+        }),
       };
     }
   );
@@ -655,6 +711,11 @@ export async function workspaceRoutes(app: FastifyInstance) {
     const ctx = await tierCtx(id);
     const { tier, url } = resolveTier(ctx);
     const backlog = await outboxBacklog(id).catch(() => 0);
+    // SYNC-1: schema readiness — DISTINCT from reachability (a reachable DB
+    // with a stale/partial schema answers no tenant query). Cached, so the
+    // per-request cost stays one metadata query outside the cache window.
+    const { checkWorkspaceSchemaReady } = await import("../workspace/workspace-gate.js");
+    const schema = url ? await checkWorkspaceSchemaReady(id).catch(() => ({ ready: null as boolean | null, missing: [] as string[] })) : { ready: null as boolean | null, missing: [] as string[] };
     return {
       workspaceId: id,
       storagePreference: record.storagePreference === "local" ? "local" : "default",
@@ -664,6 +725,8 @@ export async function workspaceRoutes(app: FastifyInstance) {
       dbSync: record.dbSync ?? null,
       backlog,
       backlogNotice: backlog >= OUTBOX_NOTICE_THRESHOLD,
+      schemaReady: schema.ready,
+      schemaMissing: schema.missing,
       suggestion: !url
         ? "Connect a database to enable dual-boot sync and semantic memory."
         : undefined,
@@ -693,7 +756,30 @@ export async function workspaceRoutes(app: FastifyInstance) {
           return await sync.resolveDbConflict(id, choice);
         }
         if (action === "sync-now") {
-          return await sync.drainOutbox(id);
+          // SYNC-1: a bound DB whose schema never finished provisioning (bind
+          // raced, or an older partial schema) converges here first — drain
+          // only makes sense once the relations exist. A failed retry still
+          // drains (local writes keep flowing) and the outcome rides along.
+          let schemaRetried: boolean | null = null;
+          try {
+            const { checkWorkspaceSchemaReady, invalidateWorkspaceSchemaProbe } = await import("../workspace/workspace-gate.js");
+            const probe = await checkWorkspaceSchemaReady(id);
+            if (probe.ready === false) {
+              const { provisionWorkspaceDatabase, withProvisionLock } = await import("../workspace/workspace-gate.js");
+              const { getWorkspaceRecord: getRec } = await import("../workspace/workspace-gate.js");
+              const rec = await getRec(id).catch(() => null);
+              const url = rec?.databaseUrl?.trim();
+              if (url) {
+                await withProvisionLock(url, () => provisionWorkspaceDatabase(url, 90_000));
+                invalidateWorkspaceSchemaProbe(id);
+                schemaRetried = (await checkWorkspaceSchemaReady(id)).ready;
+              }
+            } else { schemaRetried = probe.ready; }
+          } catch (err: any) {
+            request.log.warn({ err }, "Notice: schema sync retry did not complete; draining anyway");
+          }
+          const drained = await sync.drainOutbox(id);
+          return { ...(drained as object ?? {}), schemaRetried };
         }
         return await sync.rebuildWorkspaceRag(id);
       } catch (err: any) {

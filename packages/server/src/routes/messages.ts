@@ -24,6 +24,19 @@ export async function messageRoutes(app: FastifyInstance) {
       const { channelId } = request.params;
       const { before, limit } = request.query;
       try {
+        // MSG-007: tenant check mirroring the socket rule. The page query
+        // runs on the caller workspace handle, but without the header the
+        // service resolves the channel's own workspace — verify the caller
+        // workspace owns the channel before serving history.
+        const callerWs = (request as any).workspaceId ?? null;
+        if (callerWs) {
+          const { channelGate } = await import("../channels/channel-gate.js");
+          const ch = await channelGate.get(channelId, (request as any).db).catch(() => null);
+          const ownerWs = (ch as unknown as Record<string, unknown> | null)?.workspaceId as string | null ?? null;
+          if (ch && ownerWs && ownerWs !== callerWs) {
+            return reply.status(403).send({ error: "Forbidden", message: "Channel belongs to another workspace" });
+          }
+        }
         return await getChannelMessagesPage(channelId, {
           limit,
           before: parseBeforeCursor(before),

@@ -8,7 +8,7 @@ test.describe('agentic tools journey', () => {
   test('agentic message triggers tool cards and completes', async ({ page }) => {
     let viteUp = true;
     try {
-      await fetch('http://localhost:3000', { signal: AbortSignal.timeout(3000) });
+      await fetch('http://localhost:22077', { signal: AbortSignal.timeout(3000) });
     } catch { viteUp = false; }
     if (!viteUp) {
       test.info().annotations.push({ type: 'SKIP', description: 'Vite not running' });
@@ -29,14 +29,14 @@ test.describe('agentic tools journey', () => {
   test('tool execution API is reachable (honest tools)', async () => {
     let apiUp = true;
     try {
-      await fetch('http://localhost:3001/health', { signal: AbortSignal.timeout(3000) });
+      await fetch('http://localhost:12077/health', { signal: AbortSignal.timeout(3000) });
     } catch { apiUp = false; }
     if (!apiUp) {
       test.info().annotations.push({ type: 'SKIP', description: 'API not reachable' });
       return;
     }
     // Honest tools are registered; query_database should be reachable via tool list
-    const res = await fetch('http://localhost:3001/api/tools', { headers: { 'Content-Type': 'application/json' } }).catch(() => null);
+    const res = await fetch('http://localhost:12077/api/tools', { headers: { 'Content-Type': 'application/json' } }).catch(() => null);
     // 200 or 401 (auth required) both count as reachable
     if (res) expect([200, 401, 403, 404].includes(res.status)).toBeTruthy();
   });

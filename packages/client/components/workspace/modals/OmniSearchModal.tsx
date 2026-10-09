@@ -37,6 +37,10 @@ export default function OmniSearchModal({ open, onClose }: OmniSearchModalProps)
   const searchInputRef = useRef<HTMLInputElement>(null);
   const [tab, setTab] = useState<'search' | 'commands'>('search');
   const [activeVerbIndex, setActiveVerbIndex] = useState(0);
+  // Destructive verbs arm on first press and run on the second; confirm
+  // verbs run immediately. The risk badge alone enforced nothing — a single
+  // Enter on "Clear channel history" wiped the channel with no second step.
+  const [armedVerbId, setArmedVerbId] = useState<string | null>(null);
 
   useOverlayFocus(open, dialogRef, {
     initialFocusRef: searchInputRef,
@@ -194,7 +198,7 @@ export default function OmniSearchModal({ open, onClose }: OmniSearchModalProps)
     return merged.slice(0, 10);
   }, [query, messages, serverResults]);
 
-  // Commands tab: 14 palette verbs, fuzzy subsequence scored by
+  // Commands tab: 16 palette verbs, fuzzy subsequence scored by
   // filterVerbs (subsequence scorer, no dependency) with recent-first
   // ordering from the crowdos_palette_recent mirror (cap 10). The Search
   // tab keeps its own 200ms server debounce; verbs are local-only.
@@ -210,8 +214,22 @@ export default function OmniSearchModal({ open, onClose }: OmniSearchModalProps)
     setActiveVerbIndex(0);
   }, [query, tab]);
 
+  // A new query, tab, or close disarms a half-armed destructive verb — an
+  // armed row must never survive the list it was armed in.
+  useEffect(() => {
+    setArmedVerbId(null);
+  }, [query, tab, open]);
+
   function runVerb(verb: paletteVerb | null) {
     if (!verb) return;
+    // Destructive verbs need a second press on the same row: first press
+    // arms ("Press again to confirm"), second press runs. Any other verb
+    // (or a different row) disarms first.
+    if (verb.risk === 'destructive' && armedVerbId !== verb.id) {
+      setArmedVerbId(verb.id);
+      return;
+    }
+    setArmedVerbId(null);
     recordVerbUse(verb.id);
     onClose();
     void Promise.resolve().then(() => verb.run());
@@ -275,7 +293,7 @@ export default function OmniSearchModal({ open, onClose }: OmniSearchModalProps)
             <div className="flex-1 overflow-y-auto p-3 sm:p-3.5 space-y-5 scrollbar-thin overscroll-contain">
               {/* Dual mode: Search + Commands tabs (role=tablist). Search is
                   the existing entity/message results untouched below; Commands
-                  lists the 14 palette verbs. Ctrl/Cmd+K reaches both tabs. */}
+                  lists the 16 palette verbs. Ctrl/Cmd+K reaches both tabs. */}
               <div role="tablist" aria-label="Palette mode" className="flex items-center gap-1 bg-zinc-900 border border-zinc-800 rounded-xl p-1">
                 <button
                   type="button"
@@ -432,6 +450,7 @@ export default function OmniSearchModal({ open, onClose }: OmniSearchModalProps)
                       {filteredVerbs.map((verb, idx) => {
                         const optionId = `palette-verb-${verb.id}`;
                         const selected = activeVerb ? verb.id === activeVerb.id : idx === 0;
+                        const armed = armedVerbId === verb.id;
                         return (
                           <button
                             key={verb.id}
@@ -449,12 +468,15 @@ export default function OmniSearchModal({ open, onClose }: OmniSearchModalProps)
                                 <span>{verb.scope}</span>
                                 <span aria-hidden="true">·</span>
                                 <span className={`px-1.5 py-0.5 rounded border ${verbRiskClass(verb.risk)}`}>{verb.risk}</span>
+                                {armed && (
+                                  <span className="px-1.5 py-0.5 rounded border border-rose-400/50 bg-rose-500/20 text-rose-200 font-semibold">press again to confirm</span>
+                                )}
                                 {verb.shortcut && (
                                   <span className="ml-1 rounded border border-zinc-700 bg-zinc-900 px-1.5 py-0.5">{verb.shortcut}</span>
                                 )}
                               </span>
                             </span>
-                            <span className={`shrink-0 text-[11px] ${selected ? 'text-white/90' : 'text-indigo-400'}`}>Run →</span>
+                            <span className={`shrink-0 text-[11px] ${selected ? 'text-white/90' : 'text-indigo-400'}`}>{armed ? 'Confirm →' : 'Run →'}</span>
                           </button>
                         );
                       })}

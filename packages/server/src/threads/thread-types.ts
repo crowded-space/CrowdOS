@@ -30,3 +30,10 @@ export interface UpdateThreadInput {
   title?: string | null;
   status?: ThreadStatus;
 }
+
+/**
+ * THR-025: explicit tenant context for non-HTTP callers (workers/jobs/sockets).
+ * `workspaceId` selects that workspace's effective Local/DB tier; `db` pins an
+ * exact handle. Omitted → the ambient ALS handle or process-wide pool.
+ */
+export type threadCallContext = { workspaceId?: string | null; db?: any };

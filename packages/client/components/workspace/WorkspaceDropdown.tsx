@@ -151,7 +151,7 @@ export default function WorkspaceDropdown() {
       <ConfirmDialog
         open={leaveConfirmOpen}
         title="Leave Workspace?"
-        description={`Leave "${activeWS.name}" and return to portal? Unsent drafts will be discarded. You can re-enter from the active sessions list.`}
+        description={`Leave "${activeWS.name}" and return to portal? Your drafts and queued sends stay on this device and are there when you re-enter.`}
         confirmLabel="Leave"
         cancelLabel="Cancel"
         isDanger={true}

@@ -1,0 +1,13 @@
+# dom-db — PHASE 2 CONTRACTS (per operation)
+
+| Op | Preconditions | Validation | Result | Errors | Auth/Tenant | Idempotency | Txn | Side effects / order | Events | Observability | Perf notes |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| bootstrap.main() (db:push) | DATABASE_URL set (env; CLI-only) | throws named error if missing | migrate + pgvector + seed applied; exit 0 | console.error + exitCode 1 | none (CLI) | drizzle journal + seed lookups | migrate() applies pending batch in ONE txn | migrate -> ensurePgVectorExtension -> seed -> close pool | none | console logs | max:1 client for migrate; separate pool closed in finally |
+| bootstrap.ensureSchema() (LEGACY_BOOTSTRAP=true) | same | same | legacy DDL; exit 0 | same | none | IF NOT EXISTS style | none (statement-by-statement) | creates enums/tables/indexes incl. messages_channel_sequence_idx | none | deprecation warning | frozen, deprecated |
+| seed() (db:seed / called by bootstrap) | DATABASE_URL; schema migrated | none | rows ensured; exit 0 | exitCode 1 | none | lookup by label/name then insert | NOT wrapped in a txn (partial writes possible) | instruction modules -> toolkit -> agents -> settings -> #general -> categories/channels | none | console logs | sequential, N lookups |
+| check.ts (db:check) | DATABASE_URL; migrated; expects workspaces row 'default' for messages FK | none | roundtrip verified; exit 0 | exitCode 1 | none | destructive probe: inserts + deletes own rows | none | insert 5 rows -> select verify -> delete cleanup | none | console logs | best-effort deletes (.catch(()=>{})) |
+| backfill-encrypt-secrets (db:encrypt-secrets) | DATABASE_URL; CREDENTIALS_ENCRYPTION_KEY for real effect | isEncrypted() per value | dry-run counts / --apply writes envelopes | exitCode 1 | none | per-row; encrypt() is idempotent (skips envelopes) | none | reads all rows per table -> optional updates | none | redactLogPayload stats | full-table scan per table; per-row updates |
+| create-workspace-crowdos | DATABASE_URL | none | workspace 'crowdos' + FS sectors | console.error ONLY (exit 0 — see DB-012) | none | existing-check by id | none | insert workspace -> LocalFilesystem.initialize() | none | console logs | one-shot |
+| schema.ts (module) | none (pure definitions) | compile-time | 46 tables + relations + types | n/a | n/a | n/a | n/a | none | n/a | n/a | consumed by 50+ importers |
+| migrations/*.sql | ordered by _journal.json | drizzle migrator | schema delta | migrator errors -> bootstrap fails | n/a | IF NOT EXISTS / DO-block guards (0012+); pre-0012 NOT idempotent | whole pending batch in one txn | DDL | n/a | migrator logs | hand-written after 0010 |
+

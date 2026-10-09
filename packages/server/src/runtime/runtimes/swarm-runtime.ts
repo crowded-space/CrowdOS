@@ -62,13 +62,8 @@ export class SwarmRuntime extends BaseRuntime {
       }
 
       // 2. Persist swarm_tasks DAG
-      try {
-        await swarmGate.deleteByRun(runId)
-      } catch (err) {
-        console.warn('[SwarmRuntime] deleteByRun failed (stale rows may remain):', (err as Error)?.message || err)
-      }
-      await swarmGate.createTasks(runId, plan.tasks)
-
+      // SW-04: settle before persist. A cancel between plan and dispatch
+      // used to leave pending rows with no terminal settle.
       if (packet.abortSignal?.aborted) {
         await this.kernel.setAgentStatus(broker, packet.agentId, 'idle')
         return {
@@ -81,6 +76,15 @@ export class SwarmRuntime extends BaseRuntime {
           status: 'cancelled',
         }
       }
+      // B-03: a failed cleanup must fail loudly. Continuing after a failed
+      // delete mixes stale rows from a prior plan with the new DAG.
+      try {
+        await swarmGate.deleteByRun(runId)
+      } catch (err) {
+        throw new Error(`[SwarmRuntime] deleteByRun failed for run ${runId}: refusing to mix stale rows with a new plan: ${(err as Error)?.message || err}`)
+      }
+      await swarmGate.createTasks(runId, plan.tasks)
+
 
       // 3. Leaf task dispatch (DAG respect, fan-out, lease reuse via heartbeats)
       // Real L3 delegation (§22/§31). Each task is assigned to an actual

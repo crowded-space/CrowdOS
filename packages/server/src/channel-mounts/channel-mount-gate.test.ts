@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, realpathSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import Fastify from "fastify";
@@ -683,6 +683,118 @@ describe("channelMountGate", () => {
       expect(res.statusCode).toBe(200);
       expect(res.json().source).toBe("channel");
       await app.close();
+    });
+  });
+
+  // ─── CM-003: caller-vs-target ownership on mount routes ─────────────
+
+  describe("CM-003 ownership", () => {
+    async function buildAppAs(wsId: string | null) {
+      const app = Fastify();
+      app.setValidatorCompiler(validatorCompiler);
+      if (wsId) {
+        // Mirrors the real tenant hook in create-app.ts: x-workspace-id →
+        // request.workspaceId. No header means no scope to compare (the
+        // keyless loopback desktop path).
+        app.addHook("onRequest", async (request) => {
+          (request as any).workspaceId = wsId;
+        });
+      }
+      await channelMountRoutes(app);
+      await filesystemRoutes(app);
+      await app.ready();
+      return app;
+    }
+
+    function seedTwoWorkspaces(): void {
+      writeWorkspaces([
+        workspaceRecord("ws-a", { allowedMountRoots: [REPO_DIR] }),
+        workspaceRecord("ws-b", { allowedMountRoots: [REPO_DIR] }),
+      ]);
+      writeJson("channels.json", [channelRow("ch-a", { workspaceId: "ws-a" })]);
+      writeJson("categories.json", [
+        {
+          id: "cat-a",
+          name: "Team",
+          workspaceId: "ws-a",
+          folderPath: null,
+          ownedByAgentId: null,
+          embeddingProfileId: null,
+          createdBy: "system",
+          position: 0,
+          createdAt: "2026-01-01T00:00:00.000Z",
+        },
+      ]);
+      setRegistryFilePathForTests(TEST_REGISTRY);
+    }
+
+    it("T5: cross-workspace GET/PUT on channel, category and workspace mount routes → 403 (own → 200)", async () => {
+      seedTwoWorkspaces();
+      const app = await buildAppAs("ws-b");
+
+      for (const url of [
+        "/api/channels/ch-a/mount",
+        "/api/categories/cat-a/mount",
+        "/api/workspaces/ws-a/mount",
+      ]) {
+        const get = await app.inject({ method: "GET", url });
+        expect(get.statusCode, `GET ${url}`).toBe(403);
+        const put = await app.inject({ method: "PUT", url, payload: { folderPath: REPO_DIR } });
+        expect(put.statusCode, `PUT ${url}`).toBe(403);
+      }
+
+      // The denied PUT must not have written the mount column.
+      const rows = JSON.parse(
+        readFileSync(join(localStoreDirsForTests().crowdos, "channels.json"), "utf8"),
+      ) as Row[];
+      expect(rows.find((r) => r.id === "ch-a")?.folderPath ?? null).toBeNull();
+
+      await app.close();
+
+      // The owning workspace keeps full access on the same routes.
+      const owner = await buildAppAs("ws-a");
+      const ownPut = await owner.inject({
+        method: "PUT",
+        url: "/api/channels/ch-a/mount",
+        payload: { folderPath: REPO_DIR },
+      });
+      expect(ownPut.statusCode).toBe(200);
+      expect(ownPut.json().source).toBe("channel");
+      const ownGet = await owner.inject({ method: "GET", url: "/api/channels/ch-a/mount" });
+      expect(ownGet.statusCode).toBe(200);
+      expect(samePath(ownGet.json().mountedPath, REPO_DIR)).toBe(true);
+      await owner.close();
+    });
+
+    it("T5: cross-workspace browse/allowed-roots → 403; a scoped caller falls back to its own jail", async () => {
+      seedTwoWorkspaces();
+      const app = await buildAppAs("ws-b");
+
+      const crossRoots = await app.inject({ method: "GET", url: "/api/fs/allowed-roots?workspaceId=ws-a" });
+      expect(crossRoots.statusCode).toBe(403);
+      const crossBrowse = await app.inject({
+        method: "GET",
+        url: `/api/fs/browse?workspaceId=ws-a&path=${encodeURIComponent(REPO_DIR)}`,
+      });
+      expect(crossBrowse.statusCode).toBe(403);
+
+      // Same caller, own id → 200 with its own jail.
+      const ownRoots = await app.inject({ method: "GET", url: "/api/fs/allowed-roots?workspaceId=ws-b" });
+      expect(ownRoots.statusCode).toBe(200);
+      expect(ownRoots.json().roots).toEqual([REPO_DIR]);
+
+      // Scoped caller with NO query param → its own jail, never sandbox+home.
+      const scopedRoots = await app.inject({ method: "GET", url: "/api/fs/allowed-roots" });
+      expect(scopedRoots.statusCode).toBe(200);
+      expect(scopedRoots.json().roots).toEqual([REPO_DIR]);
+
+      // Unscoped caller (no tenant scope) keeps the documented default policy.
+      await app.close();
+      const anon = await buildAppAs(null);
+      const anonRoots = await anon.inject({ method: "GET", url: "/api/fs/allowed-roots" });
+      expect(anonRoots.statusCode).toBe(200);
+      expect(anonRoots.json().roots).toContain(TEST_ROOT);
+      await anon.close();
     });
   });
 });

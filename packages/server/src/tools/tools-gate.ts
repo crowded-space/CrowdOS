@@ -9,6 +9,21 @@ export { toolRegistry, resolveToolRoot } from "./tool-registry.js";
 export { Guard } from "./safety/guard.js";
 export type { ToolDefinition } from "./tool-types.js";
 
+/**
+ * SK-008: single source of truth for universal tool ids. Consumed by
+ * skill-service (resolved tools), tool-executor (fallback), and the
+ * tool-schema middleware (context injection) so the three can never drift.
+ */
+export const UNIVERSAL_TOOL_IDS = [
+  "open_memory",
+  "discard_memory_from_context",
+  "remember",
+  "lock_in",
+  "lock_out",
+  "open_detail",
+  "load_skill",
+];
+
 export const toolsGate = {
   get: (toolName: string) => toolRegistry.get(toolName),
   has: (toolName: string) => toolRegistry.has(toolName),
@@ -25,4 +40,7 @@ export const toolsGate = {
   getMcpStatus: (serverId: string) => mcpClientManager.getStatus(serverId),
   listMcpStatuses: () => mcpClientManager.listStatuses(),
   registerMcpServer: (config: McpServerConfig) => mcpClientManager.registerServer(config),
+  unregisterMcpServer: (serverId: string) => mcpClientManager.unregisterServer(serverId),
+  // TOLS-05: boot restore — repopulate sessions from mcp_servers.
+  restoreMcpServers: () => mcpClientManager.restoreServersFromDb(),
 };

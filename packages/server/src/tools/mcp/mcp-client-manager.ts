@@ -1,6 +1,6 @@
 ﻿import { spawn, type ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
-import type { McpFraming, McpServerConfig, McpServerStatus, McpRawTool } from "./mcp-types.js";
+import type { McpFraming, McpServerConfig, McpServerStatus, McpRawTool, McpTransport } from "./mcp-types.js";
 import {
   MCP_PROTOCOL_VERSION,
   DEFAULT_MCP_FRAMING,
@@ -12,6 +12,9 @@ import { toolRegistry } from "../tool-registry.js";
 import { killProcessTree } from "../safety/hardened-exec.js";
 import { isSensitiveKey, redactLogPayload } from "../../shared/core/redact.js";
 import { decryptRecordValues } from "../../shared/core/secret-box.js";
+import { eq } from "drizzle-orm";
+import { getDb, isDatabaseConfigured } from "../../shared/config/database.js";
+import { mcpServers } from "../../db/schema.js";
 
 const REQUEST_TIMEOUT_MS = 30000;
 const STDIN_BUFFER_MAX_BYTES = 10 * 1024 * 1024;
@@ -49,6 +52,8 @@ interface McpProcessSession {
   exited: boolean;
   framing: McpFraming;
   consecutiveFailures: number;
+  /** TOLS-06: bumped by disconnect; an in-flight connect aborts when it changes. */
+  epoch: number;
 }
 
 const DANGER_SEVERITY: Record<ToolDangerLevel, number> = { safe: 0, moderate: 1, dangerous: 2 };
@@ -150,13 +155,33 @@ function extractFrames(framing: McpFraming, buffer: Buffer): { messages: string[
   return { messages, rest: buffer.slice(pos) };
 }
 
+type mcpServerRow = typeof mcpServers.$inferSelect;
+
+/**
+ * TOLS-05: persisted row -> runtime config. envVars stay as stored (encrypted
+ * envelopes when written through the API); buildChildEnv decrypts at the single
+ * consumption point, so the round-trip is shape-preserving.
+ */
+function rowToServerConfig(row: mcpServerRow): McpServerConfig {
+  return {
+    id: row.id,
+    name: row.name,
+    transport: row.transport as McpTransport,
+    command: row.command ?? undefined,
+    args: row.args ?? [],
+    serverUrl: row.serverUrl ?? undefined,
+    envVars: row.envVars ?? {},
+    autoStart: row.autoStart,
+  };
+}
+
 export class McpClientManager extends EventEmitter {
   private sessions: Map<string, McpProcessSession> = new Map();
   // In-flight connects: two concurrent connect() calls for one server must
   // share one handshake, not spawn two children (orphan + double-register).
   private connecting: Map<string, Promise<McpServerStatus>> = new Map();
 
-  async registerServer(config: McpServerConfig): Promise<void> {
+  async registerServer(config: McpServerConfig, dbOverride?: any): Promise<void> {
     // Shape validation at the trust boundary. NOTE: stdio spawn of an
     // arbitrary command is inherent to MCP (servers ARE local processes) and
     // the HTTP layer is loopback-trusted single-user by design (see routes);
@@ -187,14 +212,104 @@ export class McpClientManager extends EventEmitter {
       exited: false,
       framing: config.framing ?? DEFAULT_MCP_FRAMING,
       consecutiveFailures: 0,
+      epoch: 0,
     };
 
     this.sessions.set(config.id, session);
+
+    // TOLS-05: persist the config so it survives restarts. Best-effort — a
+    // missing/unreachable DB must never fail registration (dual-boot invariant).
+    await this.persistServerConfig(config, dbOverride);
 
     if (config.autoStart !== false) {
       await this.connect(config.id).catch(err => {
         console.warn(`[MCP] Failed to auto-connect to ${config.id}:`, err.message);
       });
+    }
+  }
+
+  /** TOLS-05: upsert this server's mcp_servers row. Never throws. */
+  private async persistServerConfig(config: McpServerConfig, dbOverride?: any): Promise<void> {
+    try {
+      if (!dbOverride && !isDatabaseConfigured()) return;
+      const db = dbOverride ?? getDb();
+      const row = {
+        id: config.id,
+        name: config.name,
+        transport: config.transport,
+        command: config.command ?? null,
+        args: config.args ?? [],
+        serverUrl: config.serverUrl ?? null,
+        envVars: config.envVars ?? {},
+        autoStart: config.autoStart !== false,
+      };
+      await db
+        .insert(mcpServers)
+        .values(row)
+        .onConflictDoUpdate({
+          target: mcpServers.id,
+          set: {
+            name: row.name,
+            transport: row.transport,
+            command: row.command,
+            args: row.args,
+            serverUrl: row.serverUrl,
+            envVars: row.envVars,
+            autoStart: row.autoStart,
+            updatedAt: new Date(),
+          },
+        });
+    } catch (err: any) {
+      console.warn(`[MCP:${config.id}] config persistence failed (session stays in-memory):`, err?.message ?? err);
+    }
+  }
+
+  /** TOLS-05: delete the persisted row. Never throws. */
+  private async deletePersistedServerConfig(serverId: string, dbOverride?: any): Promise<void> {
+    try {
+      if (!dbOverride && !isDatabaseConfigured()) return;
+      const db = dbOverride ?? getDb();
+      await db.delete(mcpServers).where(eq(mcpServers.id, serverId));
+    } catch (err: any) {
+      console.warn(`[MCP:${serverId}] persisted config delete failed:`, err?.message ?? err);
+    }
+  }
+
+  /**
+   * TOLS-05: forget a server — disconnect, drop the session, delete its row.
+   * registerServer() re-registration stays an update; this is the delete path.
+   */
+  async unregisterServer(serverId: string, dbOverride?: any): Promise<void> {
+    await this.disconnect(serverId);
+    this.sessions.delete(serverId);
+    await this.deletePersistedServerConfig(serverId, dbOverride);
+  }
+
+  /**
+   * TOLS-05: repopulate sessions from mcp_servers at boot. Best-effort: no DB
+   * configured or unreachable => no-op; one bad row never aborts the rest.
+   * Re-registers through the same validated path (idempotent upsert).
+   * Returns the number of configs restored.
+   */
+  async restoreServersFromDb(dbOverride?: any): Promise<number> {
+    try {
+      if (!dbOverride && !isDatabaseConfigured()) return 0;
+      const db = dbOverride ?? getDb();
+      const rows: mcpServerRow[] = await db.select().from(mcpServers);
+      let restored = 0;
+      for (const row of rows) {
+        try {
+          await this.registerServer(rowToServerConfig(row), dbOverride);
+          restored += 1;
+        } catch (err: any) {
+          console.warn(`[MCP:${row.id}] boot restore failed:`, err?.message ?? err);
+        }
+      }
+      if (restored > 0) console.log(`[MCP] restored ${restored} server config(s) from mcp_servers`);
+      return restored;
+    } catch (err: any) {
+      console.warn("[MCP] boot restore skipped (database unavailable):", err?.message ?? err);
+      return 0;
     }
   }
 
@@ -210,6 +325,9 @@ export class McpClientManager extends EventEmitter {
     const inflight = this.connecting.get(serverId);
     if (inflight) return inflight;
 
+    // TOLS-06: disconnect epoch. A disconnect landing mid-connect must
+    // invalidate the in-flight task, or it resurrects a killed session.
+    const epoch = session.epoch;
     session.status = 'connecting';
     session.lastError = undefined;
     session.exited = false;
@@ -218,11 +336,14 @@ export class McpClientManager extends EventEmitter {
     try {
       const task = (async (): Promise<McpServerStatus> => {
         if (session.config.transport === 'stdio') {
-          await this.connectStdio(session);
+          await this.connectStdio(session, epoch);
         } else {
           throw new Error(`Transport '${session.config.transport}' not yet fully implemented in mock/prototype mode`);
         }
 
+        if (session.epoch !== epoch || session.exited) {
+          throw new Error(`MCP server '${serverId}' disconnected during connect`);
+        }
         session.consecutiveFailures = 0;
         session.status = 'connected';
         return this.getStatus(serverId)!;
@@ -234,6 +355,14 @@ export class McpClientManager extends EventEmitter {
         this.connecting.delete(serverId);
       }
     } catch (err: any) {
+      // TOLS-06: a disconnect that landed mid-connect owns the final state —
+      // it already killed the child, failed pending requests, and unregistered
+      // tools. Never overwrite 'disconnected' with 'error', and sweep anything
+      // the handshake managed to register before the abort was observed.
+      if (session.epoch !== epoch) {
+        this.cleanupTools(session);
+        throw err;
+      }
       session.status = 'error';
       session.lastError = err.message;
       this.failPending(session, err instanceof Error ? err : new Error(String(err)));
@@ -248,7 +377,7 @@ export class McpClientManager extends EventEmitter {
     }
   }
 
-  private async connectStdio(session: McpProcessSession): Promise<void> {
+  private async connectStdio(session: McpProcessSession, epoch: number): Promise<void> {
     const { command, args = [] } = session.config;
     if (!command) throw new Error(`Command required for stdio transport`);
 
@@ -323,6 +452,12 @@ export class McpClientManager extends EventEmitter {
     // 3. List tools
     const toolsRes = await this.sendJsonRpc(session, 'tools/list', {});
     const rawTools: McpRawTool[] = toolsRes?.tools || [];
+
+    // TOLS-06: abort before registering — a disconnect that landed while
+    // tools/list was in flight must not leave a dead server's tools behind.
+    if (session.epoch !== epoch || session.exited) {
+      throw new Error(`MCP server '${session.config.id}' disconnected during connect`);
+    }
 
     // 4. Register each tool
     for (const raw of rawTools) {
@@ -450,6 +585,11 @@ export class McpClientManager extends EventEmitter {
       if (session.exited || !session.process || !session.process.stdin) {
         return reject(new McpServerCrashedError(session.config.id, null, null, `MCP server '${session.config.id}' is not running`));
       }
+      // TOLS-03: the breaker status was label-only — requests to a
+      // tripped server were still sent. Refuse while tripped.
+      if (session.status === 'error') {
+        return reject(new McpServerCrashedError(session.config.id, null, null, `MCP server '${session.config.id}' is disabled by circuit breaker: ${session.lastError ?? 'consecutive failures'}`));
+      }
       const id = session.requestId++;
       const entry: McpPendingRequest = {
         resolve,
@@ -492,6 +632,9 @@ export class McpClientManager extends EventEmitter {
     const session = this.sessions.get(serverId);
     if (!session) return;
 
+    // TOLS-06: bump the epoch so an in-flight connect aborts instead of
+    // resurrecting this session.
+    session.epoch += 1;
     this.cleanupTools(session);
 
     if (session.process) {

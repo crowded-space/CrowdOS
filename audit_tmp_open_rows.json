@@ -1,0 +1,2168 @@
+[
+  {
+    "file": "audit\\cross-domain\\bug-ledger.csv",
+    "id": "XD-001",
+    "sev": "S2",
+    "loc": "packages/server/src/routes/search.ts:27,35-36,68,84"
+  },
+  {
+    "file": "audit\\cross-domain\\bug-ledger.csv",
+    "id": "XD-002",
+    "sev": "S2",
+    "loc": "packages/server/src/state/state-gate.ts:22-23,50-58; packages/server/src/runtime/runtime-executor.ts:239-252"
+  },
+  {
+    "file": "audit\\cross-domain\\bug-ledger.csv",
+    "id": "XD-003",
+    "sev": "S2",
+    "loc": "packages/server/src/memories/agent-memory-store.ts:374-380,596-603,649-656,704-711 vs memory-lifecycle.ts:79-97"
+  },
+  {
+    "file": "audit\\cross-domain\\bug-ledger.csv",
+    "id": "XD-004",
+    "sev": "S1",
+    "loc": "packages/server/src/routes/channels.ts:140-144"
+  },
+  {
+    "file": "audit\\cross-domain\\bug-ledger.csv",
+    "id": "XD-006",
+    "sev": "S3",
+    "loc": "packages/server/src/routes/workspace.ts:274-275; packages/server/scripts/check-gates.mjs KNOWN_VIOLATIONS"
+  },
+  {
+    "file": "audit\\cross-domain\\bug-ledger.csv",
+    "id": "XD-007",
+    "sev": "S1",
+    "loc": "packages/server/src/db/schema.ts:310; packages/server/src/messages/message-service.ts:493-504"
+  },
+  {
+    "file": "audit\\cross-domain\\bug-ledger.csv",
+    "id": "XD-008",
+    "sev": "S2",
+    "loc": "packages/server/src/routes/threads.ts:98-114"
+  },
+  {
+    "file": "audit\\cross-domain\\bug-ledger.csv",
+    "id": "XD-009",
+    "sev": "S3",
+    "loc": "packages/server/src/approvals/approval-sweeper.ts:41; packages/server/src/tools/tool-executor.ts:468,515,542,545,695,719,730,732; packages/server/src/routes/approvals.ts:79"
+  },
+  {
+    "file": "audit\\cross-domain\\bug-ledger.csv",
+    "id": "XD-012",
+    "sev": "S3",
+    "loc": "packages/server/src/observability/cost-ledger.ts:226"
+  },
+  {
+    "file": "audit\\cross-domain\\bug-ledger.csv",
+    "id": "XD-013",
+    "sev": "S2",
+    "loc": "packages/server/src/events/event-log-service.ts:84"
+  },
+  {
+    "file": "audit\\cross-domain\\bug-ledger.csv",
+    "id": "XD-014",
+    "sev": "S2",
+    "loc": "packages/server/src/routes/events.ts:39"
+  },
+  {
+    "file": "audit\\cross-domain\\bug-ledger.csv",
+    "id": "XD-015",
+    "sev": "S2",
+    "loc": "packages/server/src/routes/studio.ts:133-148"
+  },
+  {
+    "file": "audit\\cross-domain\\bug-ledger.csv",
+    "id": "XD-017",
+    "sev": "S2",
+    "loc": "packages/server/src/threads/thread-service.ts:4,28-33,113-140,149-151"
+  },
+  {
+    "file": "audit\\cross-domain\\bug-ledger.csv",
+    "id": "XD-018",
+    "sev": "S2",
+    "loc": "packages/server/src/shared/core/thread-sequence.ts:6-29; packages/server/src/threads/thread-service.ts:58"
+  },
+  {
+    "file": "audit\\cross-domain\\bug-ledger.csv",
+    "id": "XD-019",
+    "sev": "S3",
+    "loc": "packages/server/src/runtime/runtimes/research-runtime.ts:415-427,429-448"
+  },
+  {
+    "file": "audit\\cross-domain\\bug-ledger.csv",
+    "id": "XD-020",
+    "sev": "S3",
+    "loc": "packages/server/src/shared/core/sequence-number.ts:29-40; packages/server/src/messages/message-service.ts:500-505; packages/server/src/shared/core/workspace-sync.ts:194"
+  },
+  {
+    "file": "audit\\cross-domain\\bug-ledger.csv",
+    "id": "XD-021",
+    "sev": "S2",
+    "loc": "packages/server/src/shared/core/workspace-sync.ts:218,231,243,253-258,420-448"
+  },
+  {
+    "file": "audit\\cross-domain\\bug-ledger.csv",
+    "id": "XD-022",
+    "sev": "S3",
+    "loc": "packages/server/src/shared/sockets/register-socket-server.ts:10,27,756,886,892"
+  },
+  {
+    "file": "audit\\cross-domain\\bug-ledger.csv",
+    "id": "XD-023",
+    "sev": "S3",
+    "loc": "packages/server/src/runs/runs-service.ts:20-34; packages/server/src/state/state-gate.ts:29-47"
+  },
+  {
+    "file": "audit\\cross-domain\\bug-ledger.csv",
+    "id": "XD-024",
+    "sev": "S3",
+    "loc": "packages/server/src/messages/message-service.ts:27-38; packages/server/src/events/event-log-service.ts:49-61"
+  },
+  {
+    "file": "audit\\cross-domain\\bug-ledger.csv",
+    "id": "XD-025",
+    "sev": "S3",
+    "loc": "packages/server/src/messages/message-service.ts:82-89; packages/server/src/threads/thread-service.ts:59-76; packages/server/src/events/event-log-service.ts:120-125"
+  },
+  {
+    "file": "audit\\cross-domain\\bug-ledger.csv",
+    "id": "XD-026",
+    "sev": "S3",
+    "loc": "packages/server/src/shared/core/token-tracker.ts:98-110,243; packages/server/src/observability/cost-ledger.ts:80-143,314"
+  },
+  {
+    "file": "audit\\cross-domain\\bug-ledger.csv",
+    "id": "XD-027",
+    "sev": "S2",
+    "loc": "packages/server/src/queue/queues.ts:122-127; packages/server/src/runtime/runtime-executor.ts:75-108,205-212"
+  },
+  {
+    "file": "audit\\cross-domain\\bug-ledger.csv",
+    "id": "XD-028",
+    "sev": "S2",
+    "loc": "packages/server/src/tools/tool-executor.ts:468,515,542,545,695,719,730,732"
+  },
+  {
+    "file": "audit\\cross-domain\\bug-ledger.csv",
+    "id": "XD-029",
+    "sev": "S3",
+    "loc": "packages/server/src/shared/sockets/register-socket-server.ts:416-448"
+  },
+  {
+    "file": "audit\\cross-domain\\bug-ledger.csv",
+    "id": "XD-030",
+    "sev": "S3",
+    "loc": "packages/server/src/routes/threads.ts:98-108"
+  },
+  {
+    "file": "audit\\cross-domain\\bug-ledger.csv",
+    "id": "XD-031",
+    "sev": "S3",
+    "loc": "packages/server/src/threads/thread-service.ts:62-70; packages/server/src/approvals/approval-gate.ts:59-76"
+  },
+  {
+    "file": "audit\\cross-domain\\bug-ledger.csv",
+    "id": "XD-032",
+    "sev": "S3",
+    "loc": "packages/server/src/memories/agent-memory-store.ts:209-243; packages/server/src/observability/cost-ledger.ts:97-160"
+  },
+  {
+    "file": "audit\\domains\\agents\\bug-ledger.csv",
+    "id": "AGT-001",
+    "sev": "S2",
+    "loc": "packages/server/src/agents/agent-service.ts:486-504,511,593-619"
+  },
+  {
+    "file": "audit\\domains\\agents\\bug-ledger.csv",
+    "id": "AGT-003",
+    "sev": "S1",
+    "loc": "packages/server/src/shared/sockets/register-socket-server.ts:752; packages/server/src/shared/core/mention-parser.ts:8,44"
+  },
+  {
+    "file": "audit\\domains\\agents\\bug-ledger.csv",
+    "id": "AGT-004",
+    "sev": "S1",
+    "loc": "packages/server/src/routes/channels.ts:142"
+  },
+  {
+    "file": "audit\\domains\\agents\\bug-ledger.csv",
+    "id": "AGT-005",
+    "sev": "S2",
+    "loc": "packages/server/src/agents/agent-service.ts:521-525,548-552"
+  },
+  {
+    "file": "audit\\domains\\agents\\bug-ledger.csv",
+    "id": "AGT-006",
+    "sev": "S3",
+    "loc": "packages/server/src/agents/agent-service.ts:148 vs 186-223; 709-736"
+  },
+  {
+    "file": "audit\\domains\\agents\\bug-ledger.csv",
+    "id": "AGT-007",
+    "sev": "S3",
+    "loc": "packages/server/src/shared/core/workspace-sync.ts:231,438,442"
+  },
+  {
+    "file": "audit\\domains\\agents\\bug-ledger.csv",
+    "id": "AGT-008",
+    "sev": "S2",
+    "loc": "packages/server/src/agents/agent-service.ts:54-55,418; packages/server/src/db/schema.ts (agents)"
+  },
+  {
+    "file": "audit\\domains\\agents\\bug-ledger.csv",
+    "id": "AGT-009",
+    "sev": "S2",
+    "loc": "packages/server/src/agents/agent-service.ts:380; packages/server/src/agents/agent-validators.ts:60"
+  },
+  {
+    "file": "audit\\domains\\agents\\bug-ledger.csv",
+    "id": "AGT-010",
+    "sev": "S3",
+    "loc": "packages/server/src/agents/agent-service.ts:75-82,133,217-221"
+  },
+  {
+    "file": "audit\\domains\\agents\\bug-ledger.csv",
+    "id": "AGT-011",
+    "sev": "S3",
+    "loc": "packages/server/src/agents/agent-service.ts:625"
+  },
+  {
+    "file": "audit\\domains\\agents\\bug-ledger.csv",
+    "id": "AGT-012",
+    "sev": "S3",
+    "loc": "packages/server/src/agents/agent-service.ts:657-663"
+  },
+  {
+    "file": "audit\\domains\\agents\\bug-ledger.csv",
+    "id": "AGT-013",
+    "sev": "S3",
+    "loc": "packages/server/src/agents/agent-service.ts:657-663; packages/server/src/db/schema.ts runtimeStates"
+  },
+  {
+    "file": "audit\\domains\\agents\\bug-ledger.csv",
+    "id": "AGT-014",
+    "sev": "S2",
+    "loc": "packages/server/src/agents/agent-service.ts:463-469,499-502"
+  },
+  {
+    "file": "audit\\domains\\agents\\bug-ledger.csv",
+    "id": "AGT-015",
+    "sev": "S3",
+    "loc": "packages/server/src/agents/agent-service.ts:314"
+  },
+  {
+    "file": "audit\\domains\\agents\\bug-ledger.csv",
+    "id": "AGT-016",
+    "sev": "S2",
+    "loc": "packages/server/src/agents/agent-local-store.ts:353-381; packages/server/src/db/schema.ts agents PK"
+  },
+  {
+    "file": "audit\\domains\\agents\\bug-ledger.csv",
+    "id": "AGT-018",
+    "sev": "S3",
+    "loc": "packages/server/src/agents/agent-errors.ts:30-41,152-183"
+  },
+  {
+    "file": "audit\\domains\\agents\\bug-ledger.csv",
+    "id": "AGT-019",
+    "sev": "S3",
+    "loc": "packages/server/src/agents/agent-types.ts:15-19; grep spawnAgents/patchRuntime/accessAllChannels"
+  },
+  {
+    "file": "audit\\domains\\agents\\bug-ledger.csv",
+    "id": "AGT-020",
+    "sev": "S3",
+    "loc": "packages/server/src/agents/agent-local-store.ts:170; grep archivedAt"
+  },
+  {
+    "file": "audit\\domains\\agents\\bug-ledger.csv",
+    "id": "AGT-021",
+    "sev": "S3",
+    "loc": "packages/server/src/agents/* - grep logMetric/startSpan"
+  },
+  {
+    "file": "audit\\domains\\agents\\bug-ledger.csv",
+    "id": "AGT-022",
+    "sev": "S3",
+    "loc": "packages/server/src/db/schema.ts runtimeStates (agent_id index, non-unique); packages/server/src/agents/agent-service.ts:463-469,571-581; packages/server/src/shared/core/workspace-sync.ts:227-236"
+  },
+  {
+    "file": "audit\\domains\\agents\\bug-ledger.csv",
+    "id": "AGT-023",
+    "sev": "S3",
+    "loc": "packages/server/src/agents/agent-service.ts:361-362,374"
+  },
+  {
+    "file": "audit\\domains\\agents\\bug-ledger.csv",
+    "id": "AGT-024",
+    "sev": "S3",
+    "loc": "packages/server/src/shared/core/workspace-sync.ts:436-443 (drain) "
+  },
+  {
+    "file": "audit\\domains\\agents\\bug-ledger.csv",
+    "id": "AGT-025",
+    "sev": "S3",
+    "loc": "re-docs/Backend Docs/Domain Spec/Agents.md (Ports/Expect/Flow); re-docs/Backend Docs/Feature and Flow Spec/Agent profiles and roster.md (Open gaps)"
+  },
+  {
+    "file": "audit\\domains\\approvals\\bug-ledger.csv",
+    "id": "AP-002",
+    "sev": "S2",
+    "loc": "packages/server/src/approvals/approval-repository.ts:96-112"
+  },
+  {
+    "file": "audit\\domains\\approvals\\bug-ledger.csv",
+    "id": "AP-003",
+    "sev": "S2",
+    "loc": "packages/server/src/approvals/approval-sweeper.ts:12-19; packages/server/src/workspace/workspace-database-runtime.ts:168-196"
+  },
+  {
+    "file": "audit\\domains\\approvals\\bug-ledger.csv",
+    "id": "AP-004",
+    "sev": "S2",
+    "loc": "packages/server/src/routes/approvals.ts:86-95"
+  },
+  {
+    "file": "audit\\domains\\approvals\\bug-ledger.csv",
+    "id": "AP-005",
+    "sev": "S2",
+    "loc": "packages/server/src/approvals/approval-repository.ts:133-141; packages/client/components/workspace/messages/ApprovalCard.tsx:71"
+  },
+  {
+    "file": "audit\\domains\\approvals\\bug-ledger.csv",
+    "id": "AP-006",
+    "sev": "S3",
+    "loc": "packages/server/src/db/migrations/0012_workspace_mounts_threads_approvals.sql:11-15; packages/server/src/db/schema.ts:561-577"
+  },
+  {
+    "file": "audit\\domains\\approvals\\bug-ledger.csv",
+    "id": "AP-007",
+    "sev": "S3",
+    "loc": "re-docs/Backend Docs/Domain Spec/Approvals.md (Target: 'Expired rows carry decidedAt plus a system decidedBy value, never null'); packages/server/src/approvals/approval-repository.ts:164"
+  },
+  {
+    "file": "audit\\domains\\approvals\\bug-ledger.csv",
+    "id": "AP-008",
+    "sev": "S3",
+    "loc": "packages/server/src/approvals/approval-repository.ts:17-23,160-166"
+  },
+  {
+    "file": "audit\\domains\\approvals\\bug-ledger.csv",
+    "id": "AP-009",
+    "sev": "S2",
+    "loc": "packages/server/src/shared/sockets/register-socket-server.ts:1104-1160,1174-1185"
+  },
+  {
+    "file": "audit\\domains\\approvals\\bug-ledger.csv",
+    "id": "AP-010",
+    "sev": "S3",
+    "loc": "packages/server/src/shared/sockets/register-socket-server.ts:414-458; packages/server/src/tools/tool-executor.ts:399,476"
+  },
+  {
+    "file": "audit\\domains\\approvals\\bug-ledger.csv",
+    "id": "AP-011",
+    "sev": "S3",
+    "loc": "packages/server/src/approvals/approval-gate.ts:64-67; packages/server/scripts/check-gates.mjs:24-37; packages/server/src/create-app.ts:30; packages/server/src/worker.ts:45"
+  },
+  {
+    "file": "audit\\domains\\approvals\\bug-ledger.csv",
+    "id": "AP-013",
+    "sev": "S3",
+    "loc": "packages/server/src/approvals/approval-repository.ts:72-114"
+  },
+  {
+    "file": "audit\\domains\\approvals\\bug-ledger.csv",
+    "id": "AP-014",
+    "sev": "S3",
+    "loc": "packages/server/src/approvals/approval-types.ts:47-58 vs packages/server/src/shared/config/env.ts:214-215; packages/server/src/tools/tool-executor.ts:447-449,682-684"
+  },
+  {
+    "file": "audit\\domains\\approvals\\bug-ledger.csv",
+    "id": "AP-015",
+    "sev": "S3",
+    "loc": "packages/server/src/routes/safety.ts:35,102-120; packages/server/src/db/schema.ts:1067-1075; packages/server/src/db/migrations/0012:49-58"
+  },
+  {
+    "file": "audit\\domains\\approvals\\bug-ledger.csv",
+    "id": "AP-016",
+    "sev": "S2",
+    "loc": "packages/server/src/approvals/approval-sweeper.ts:14-19,62-71; packages/server/src/create-app.ts:379; packages/server/src/worker.ts:41-49"
+  },
+  {
+    "file": "audit\\domains\\approvals\\bug-ledger.csv",
+    "id": "AP-017",
+    "sev": "S3",
+    "loc": "packages/server/src/approvals/approval-sweeper.ts:44-53"
+  },
+  {
+    "file": "audit\\domains\\approvals\\bug-ledger.csv",
+    "id": "AP-018",
+    "sev": "S3",
+    "loc": "packages/server/src/approvals/approval-sweeper.ts:27-32"
+  },
+  {
+    "file": "audit\\domains\\artifacts\\bug-ledger.csv",
+    "id": "ART-1",
+    "sev": "S1",
+    "loc": "packages/client/stores/crowdOsStore.ts:3796-3799; packages/server/src/artifacts/artifacts-repository.ts:150-151,165-166"
+  },
+  {
+    "file": "audit\\domains\\artifacts\\bug-ledger.csv",
+    "id": "ART-3",
+    "sev": "S2",
+    "loc": "packages/server/src/queue/maintenance-worker.ts:93-102; packages/server/src/queue/repeatables.ts:16"
+  },
+  {
+    "file": "audit\\domains\\artifacts\\bug-ledger.csv",
+    "id": "ART-4",
+    "sev": "S2",
+    "loc": "packages/server/src/routes/artifacts.ts:42"
+  },
+  {
+    "file": "audit\\domains\\artifacts\\bug-ledger.csv",
+    "id": "ART-5",
+    "sev": "S2",
+    "loc": "packages/server/src/artifacts/artifacts-repository.ts:171-174"
+  },
+  {
+    "file": "audit\\domains\\artifacts\\bug-ledger.csv",
+    "id": "ART-6",
+    "sev": "S2",
+    "loc": "packages/server/src/artifacts/artifacts-repository.ts:87-96"
+  },
+  {
+    "file": "audit\\domains\\artifacts\\bug-ledger.csv",
+    "id": "ART-8",
+    "sev": "S2",
+    "loc": "packages/server/src/artifacts/artifacts-repository.ts:94-95"
+  },
+  {
+    "file": "audit\\domains\\artifacts\\bug-ledger.csv",
+    "id": "ART-9",
+    "sev": "S3",
+    "loc": "packages/server/src/artifacts/artifacts-gate.ts:6-15; re-docs/Backend Docs/Domain Spec/Artifacts.md"
+  },
+  {
+    "file": "audit\\domains\\artifacts\\bug-ledger.csv",
+    "id": "ART-10",
+    "sev": "S3",
+    "loc": "packages/client/src/api/client.ts:410-416; packages/client/stores/crowdOsStore.ts:3766-3786"
+  },
+  {
+    "file": "audit\\domains\\artifacts\\bug-ledger.csv",
+    "id": "ART-11",
+    "sev": "S3",
+    "loc": "packages/server/src/artifacts/artifacts-repository.ts:118-119"
+  },
+  {
+    "file": "audit\\domains\\artifacts\\bug-ledger.csv",
+    "id": "ART-12",
+    "sev": "S3",
+    "loc": "packages/server/src/artifacts/artifacts-repository.ts:179-187; packages/server/src/shared/config/env.ts:185"
+  },
+  {
+    "file": "audit\\domains\\artifacts\\bug-ledger.csv",
+    "id": "ART-13",
+    "sev": "S2",
+    "loc": "packages/server/src/artifacts/artifacts-repository.ts:122-123"
+  },
+  {
+    "file": "audit\\domains\\artifacts\\bug-ledger.csv",
+    "id": "ART-14",
+    "sev": "S3",
+    "loc": "packages/server/src/artifacts/artifacts-gate.test.ts:44,109,161"
+  },
+  {
+    "file": "audit\\domains\\channel-mounts\\bug-ledger.csv",
+    "id": "CM-001",
+    "sev": "S2",
+    "loc": "packages/server/src/channel-mounts/channel-mount-service.ts:161-221, 294-338"
+  },
+  {
+    "file": "audit\\domains\\channel-mounts\\bug-ledger.csv",
+    "id": "CM-002",
+    "sev": "S2",
+    "loc": "packages/server/src/channel-mounts/channel-mount-service.ts:47-66; packages/server/src/workspace/workspace-registry.ts:237-248"
+  },
+  {
+    "file": "audit\\domains\\channel-mounts\\bug-ledger.csv",
+    "id": "CM-003",
+    "sev": "S2",
+    "loc": "packages/server/src/routes/channel-mounts.ts:41-93; packages/server/src/create-app.ts:235-347"
+  },
+  {
+    "file": "audit\\domains\\channel-mounts\\bug-ledger.csv",
+    "id": "CM-004",
+    "sev": "S3",
+    "loc": "packages/server/src/channel-mounts/channel-mount-service.ts:141-159"
+  },
+  {
+    "file": "audit\\domains\\channel-mounts\\bug-ledger.csv",
+    "id": "CM-005",
+    "sev": "S3",
+    "loc": "packages/server/src/channel-mounts/channel-mount-service.ts:349-355, 358-368"
+  },
+  {
+    "file": "audit\\domains\\channel-mounts\\bug-ledger.csv",
+    "id": "CM-006",
+    "sev": "S3",
+    "loc": "packages/server/src/channel-mounts/channel-mount-service.ts:294-338; packages/server/src/workspace/workspace-registry.ts:267-325"
+  },
+  {
+    "file": "audit\\domains\\channel-mounts\\bug-ledger.csv",
+    "id": "CM-007",
+    "sev": "S3",
+    "loc": "packages/server/src/channel-mounts/channel-mount-service.ts:438-465; packages/server/src/channels/channel-service.ts:196-211"
+  },
+  {
+    "file": "audit\\domains\\channel-mounts\\bug-ledger.csv",
+    "id": "CM-008",
+    "sev": "S3",
+    "loc": "packages/server/src/channel-mounts/channel-mount-service.ts:627-662"
+  },
+  {
+    "file": "audit\\domains\\channel-mounts\\bug-ledger.csv",
+    "id": "CM-009",
+    "sev": "S3",
+    "loc": "packages/server/src/channel-mounts/channel-mount-service.ts:279-292"
+  },
+  {
+    "file": "audit\\domains\\channel-mounts\\bug-ledger.csv",
+    "id": "CM-010",
+    "sev": "S3",
+    "loc": "packages/server/src/channel-mounts/channel-mount-service.ts:311, 334; channel-mount-gate.test.ts:477-480"
+  },
+  {
+    "file": "audit\\domains\\channel-mounts\\bug-ledger.csv",
+    "id": "CM-011",
+    "sev": "S3",
+    "loc": "packages/server/src/channel-mounts/channel-mount-service.ts:505-526"
+  },
+  {
+    "file": "audit\\domains\\channel-mounts\\bug-ledger.csv",
+    "id": "CM-012",
+    "sev": "S3",
+    "loc": "packages/server/src/channel-mounts/channel-mount-service.ts:22-31, 114-120"
+  },
+  {
+    "file": "audit\\domains\\channel-mounts\\bug-ledger.csv",
+    "id": "CM-013",
+    "sev": "S3",
+    "loc": "packages/server/src/channel-mounts/channel-mount-service.ts:294-338 vs 216-219"
+  },
+  {
+    "file": "audit\\domains\\channel-mounts\\bug-ledger.csv",
+    "id": "CM-014",
+    "sev": "S3",
+    "loc": "packages/server/src/channel-mounts/channel-mount-service.ts:663-673"
+  },
+  {
+    "file": "audit\\domains\\channel-mounts\\bug-ledger.csv",
+    "id": "CM-015",
+    "sev": "S3",
+    "loc": "packages/server/src/channel-mounts/channel-mount-gate.ts:46-48; routes grep"
+  },
+  {
+    "file": "audit\\domains\\channel-mounts\\bug-ledger.csv",
+    "id": "CM-016",
+    "sev": "S3",
+    "loc": "packages/server/src/channel-mounts/pick-folder-win32.ps1; channel-mount-types.ts:50-86; routes/channel-mounts.ts:13"
+  },
+  {
+    "file": "audit\\domains\\channel-mounts\\bug-ledger.csv",
+    "id": "CM-017",
+    "sev": "S2",
+    "loc": "packages/server/src/shared/sockets/register-socket-server.ts:414-461; packages/server/src/routes/channel-mounts.ts:72"
+  },
+  {
+    "file": "audit\\domains\\channel-mounts\\bug-ledger.csv",
+    "id": "CM-018",
+    "sev": "S3",
+    "loc": "re-docs/Backend Docs/Domain Spec/ChannelMounts.md:33-41; re-docs/Backend Docs/Feature and Flow Spec/Mount resolution flow.md:8-20"
+  },
+  {
+    "file": "audit\\domains\\channel-mounts\\bug-ledger.csv",
+    "id": "CM-019",
+    "sev": "S3",
+    "loc": "packages/server/src/routes/channel-mounts.ts:69-74"
+  },
+  {
+    "file": "audit\\domains\\channel-mounts\\bug-ledger.csv",
+    "id": "CM-020",
+    "sev": "S3",
+    "loc": "packages/server/src/channel-mounts/channel-mount-service.ts:349-355, 371-398"
+  },
+  {
+    "file": "audit\\domains\\channel-mounts\\bug-ledger.csv",
+    "id": "CM-021",
+    "sev": "S3",
+    "loc": "packages/server/src/channel-mounts/channel-mount-service.ts:114-120"
+  },
+  {
+    "file": "audit\\domains\\channels\\bug-ledger.csv",
+    "id": "CHN-001",
+    "sev": "S2",
+    "loc": "packages/server/src/channels/channel-service.ts:418-485; packages/server/src/db/schema.ts:272-291"
+  },
+  {
+    "file": "audit\\domains\\channels\\bug-ledger.csv",
+    "id": "CHN-002",
+    "sev": "S2",
+    "loc": "packages/server/src/channels/channel-service.ts:366-373,385-393; packages/server/src/channels/channel-local-store.ts:296-304"
+  },
+  {
+    "file": "audit\\domains\\channels\\bug-ledger.csv",
+    "id": "CHN-003",
+    "sev": "S2",
+    "loc": "packages/server/src/channels/channel-service.ts:354-377; packages/server/src/channels/channel-local-store.ts:288-304"
+  },
+  {
+    "file": "audit\\domains\\channels\\bug-ledger.csv",
+    "id": "CHN-004",
+    "sev": "S3",
+    "loc": "packages/server/src/routes/channels.ts:63-67"
+  },
+  {
+    "file": "audit\\domains\\channels\\bug-ledger.csv",
+    "id": "CHN-005",
+    "sev": "S3",
+    "loc": "packages/server/src/channels/channel-service.ts:348-352; packages/server/src/routes/channels.ts:63-67"
+  },
+  {
+    "file": "audit\\domains\\channels\\bug-ledger.csv",
+    "id": "CHN-006",
+    "sev": "S3",
+    "loc": "packages/server/src/channels/channel-local-store.ts:170-192; packages/server/src/db/schema.ts:256-270"
+  },
+  {
+    "file": "audit\\domains\\channels\\bug-ledger.csv",
+    "id": "CHN-006b",
+    "sev": "S3",
+    "loc": "packages/server/src/channels/channel-local-store.ts:176; packages/server/src/routes/categories.ts:61-74"
+  },
+  {
+    "file": "audit\\domains\\channels\\bug-ledger.csv",
+    "id": "CHN-007",
+    "sev": "S2",
+    "loc": "packages/server/src/channels/channel-service.ts:39-51,345-347; packages/server/src/shared/core/local-file.ts:224-231"
+  },
+  {
+    "file": "audit\\domains\\channels\\bug-ledger.csv",
+    "id": "CHN-008",
+    "sev": "S2",
+    "loc": "packages/server/src/channels/channel-service.ts:564-574"
+  },
+  {
+    "file": "audit\\domains\\channels\\bug-ledger.csv",
+    "id": "CHN-009",
+    "sev": "S2",
+    "loc": "packages/server/src/shared/core/workspace-sync.ts:404-450,532,641; packages/server/src/channels/channel-service.ts:543-575"
+  },
+  {
+    "file": "audit\\domains\\channels\\bug-ledger.csv",
+    "id": "CHN-010",
+    "sev": "S3",
+    "loc": "packages/server/src/channels/channel-service.ts:512-522,547"
+  },
+  {
+    "file": "audit\\domains\\channels\\bug-ledger.csv",
+    "id": "CHN-011",
+    "sev": "S3",
+    "loc": "packages/server/src/channels/channel-service.ts:524-533"
+  },
+  {
+    "file": "audit\\domains\\channels\\bug-ledger.csv",
+    "id": "CHN-012",
+    "sev": "S3",
+    "loc": "packages/server/src/channels/channel-service.ts:543-575; packages/server/src/channels/channel-settings.test.ts:95-99"
+  },
+  {
+    "file": "audit\\domains\\channels\\bug-ledger.csv",
+    "id": "CHN-013",
+    "sev": "S3",
+    "loc": "packages/server/src/channels/channel-service.ts:311-341"
+  },
+  {
+    "file": "audit\\domains\\channels\\bug-ledger.csv",
+    "id": "CHN-014",
+    "sev": "S3",
+    "loc": "packages/server/src/channels/channel-service.ts:283-300,218-243"
+  },
+  {
+    "file": "audit\\domains\\channels\\bug-ledger.csv",
+    "id": "CHN-015",
+    "sev": "S3",
+    "loc": "packages/server/src/channels/channel-local-store.ts:420-440; packages/server/src/channels/channel-service.ts:58-95"
+  },
+  {
+    "file": "audit\\domains\\channels\\bug-ledger.csv",
+    "id": "CHN-016",
+    "sev": "S3",
+    "loc": "packages/server/src/channels/channel-service.ts:418-485,577-609; packages/server/src/routes/channels.ts:78,156"
+  },
+  {
+    "file": "audit\\domains\\channels\\bug-ledger.csv",
+    "id": "CHN-017",
+    "sev": "S3",
+    "loc": "packages/server/src/channels/channel-validators.ts:22-48; packages/server/src/channel-mounts/channel-mount-service.ts:645-650"
+  },
+  {
+    "file": "audit\\domains\\channels\\bug-ledger.csv",
+    "id": "CHN-018",
+    "sev": "S3",
+    "loc": "packages/server/src/channels/channel-validators.ts:41-48; packages/server/src/channel-mounts/channel-mount-service.ts:441,449,651"
+  },
+  {
+    "file": "audit\\domains\\channels\\bug-ledger.csv",
+    "id": "CHN-019",
+    "sev": "S3",
+    "loc": "packages/server/src/channels/channel-local-store.ts:213-227,386-418"
+  },
+  {
+    "file": "audit\\domains\\channels\\bug-ledger.csv",
+    "id": "CHN-020",
+    "sev": "S2",
+    "loc": "packages/server/src/routes/workspace.ts:274-278; packages/server/scripts/check-gates.mjs KNOWN_VIOLATIONS"
+  },
+  {
+    "file": "audit\\domains\\channels\\bug-ledger.csv",
+    "id": "CHN-021",
+    "sev": "S3",
+    "loc": "packages/server/src/shared/core/workspace-sync.ts:46,74,213-248,287-353,532-567,641"
+  },
+  {
+    "file": "audit\\domains\\channels\\bug-ledger.csv",
+    "id": "CHN-022",
+    "sev": "S3",
+    "loc": "packages/server/src/channels/channel-types.ts:24-38; packages/server/src/channels/channel-gate.ts:5-6,38"
+  },
+  {
+    "file": "audit\\domains\\channels\\bug-ledger.csv",
+    "id": "CHN-023",
+    "sev": "S3",
+    "loc": "re-docs/Backend Docs/Domain Spec/Channels.md (Relations/Ports); re-docs/Backend Docs/Feature and Flow Spec/Channels and archive.md"
+  },
+  {
+    "file": "audit\\domains\\channels\\bug-ledger.csv",
+    "id": "CHN-024",
+    "sev": "S3",
+    "loc": "packages/server/src/shared/sockets/register-socket-server.ts:701,808"
+  },
+  {
+    "file": "audit\\domains\\channels\\bug-ledger.csv",
+    "id": "CHN-025",
+    "sev": "S3",
+    "loc": "packages/server/src/db/schema.ts:256-291"
+  },
+  {
+    "file": "audit\\domains\\channels\\bug-ledger.csv",
+    "id": "CHN-026",
+    "sev": "S3",
+    "loc": "packages/server/src/channels/channel-service.ts:249-254,283-298"
+  },
+  {
+    "file": "audit\\domains\\channels\\bug-ledger.csv",
+    "id": "CHN-027",
+    "sev": "S3",
+    "loc": "packages/server/src/channels/channel-service.ts:409-416"
+  },
+  {
+    "file": "audit\\domains\\channels\\bug-ledger.csv",
+    "id": "CHN-028",
+    "sev": "S3",
+    "loc": "packages/server/src/channels/channel-service.ts:577-596"
+  },
+  {
+    "file": "audit\\domains\\channels\\bug-ledger.csv",
+    "id": "CHN-029",
+    "sev": "S3",
+    "loc": "packages/server/src/channels/channel-local-store.ts:201,214"
+  },
+  {
+    "file": "audit\\domains\\channels\\bug-ledger.csv",
+    "id": "CHN-030",
+    "sev": "S3",
+    "loc": "packages/server/src/channels/channel-service.ts:31-37,366-374"
+  },
+  {
+    "file": "audit\\domains\\channels\\bug-ledger.csv",
+    "id": "CHN-031",
+    "sev": "S3",
+    "loc": "packages/server/src/channels/channel-local-store.ts:354-374; packages/server/src/db/schema.ts:1046"
+  },
+  {
+    "file": "audit\\domains\\channels\\bug-ledger.csv",
+    "id": "CHN-032",
+    "sev": "S2",
+    "loc": "packages/server/src/channels/channel-service.ts:564-573"
+  },
+  {
+    "file": "audit\\domains\\channels\\bug-ledger.csv",
+    "id": "CHN-033",
+    "sev": "S2",
+    "loc": "packages/server/src/channels/channel-service.ts:394-406; packages/server/src/channels/channel-local-store.ts:288-304"
+  },
+  {
+    "file": "audit\\domains\\core\\bug-ledger.csv",
+    "id": "CORE-001",
+    "sev": "S3",
+    "loc": "packages/server/src/core/ (0 entries); packages/server/src/core/memory-builder.ts; packages/server/src/core/prompt-formatter.ts"
+  },
+  {
+    "file": "audit\\domains\\core\\bug-ledger.csv",
+    "id": "CORE-003",
+    "sev": "S3",
+    "loc": "Worktree: packages/server/src/core/memory-builder.ts + prompt-formatter.ts (unstaged ' D'); stale build output: packages/server/dist/core/memory-builder.js + prompt-formatter.js (gitignored)"
+  },
+  {
+    "file": "audit\\domains\\db\\bug-ledger.csv",
+    "id": "DB-008",
+    "sev": "S3",
+    "loc": "packages/server/src/db/seed.ts:158-165 and 173 (mojibake box-drawing)"
+  },
+  {
+    "file": "audit\\domains\\db\\bug-ledger.csv",
+    "id": "DB-010",
+    "sev": "S2",
+    "loc": "packages/server/src/db/channel-sequences.concurrency.test.ts:17 and 21"
+  },
+  {
+    "file": "audit\\domains\\event-broker\\bug-ledger.csv",
+    "id": "B1",
+    "sev": "Medium",
+    "loc": null
+  },
+  {
+    "file": "audit\\domains\\event-broker\\bug-ledger.csv",
+    "id": "B2",
+    "sev": "Low",
+    "loc": null
+  },
+  {
+    "file": "audit\\domains\\event-broker\\bug-ledger.csv",
+    "id": "B3",
+    "sev": "Medium",
+    "loc": null
+  },
+  {
+    "file": "audit\\domains\\event-broker\\bug-ledger.csv",
+    "id": "B4",
+    "sev": "High",
+    "loc": null
+  },
+  {
+    "file": "audit\\domains\\event-broker\\bug-ledger.csv",
+    "id": "B5",
+    "sev": "Low",
+    "loc": null
+  },
+  {
+    "file": "audit\\domains\\event-broker\\bug-ledger.csv",
+    "id": "B6",
+    "sev": "Low",
+    "loc": null
+  },
+  {
+    "file": "audit\\domains\\event-broker\\bug-ledger.csv",
+    "id": "B7",
+    "sev": "Medium",
+    "loc": null
+  },
+  {
+    "file": "audit\\domains\\filesystem\\bug-ledger.csv",
+    "id": "FS-001",
+    "sev": "S2",
+    "loc": "packages/server/src/Filesystem/local-filesystem.ts:171"
+  },
+  {
+    "file": "audit\\domains\\filesystem\\bug-ledger.csv",
+    "id": "FS-002",
+    "sev": "S3",
+    "loc": "packages/server/src/Filesystem/local-filesystem.ts:100-112"
+  },
+  {
+    "file": "audit\\domains\\filesystem\\bug-ledger.csv",
+    "id": "FS-003",
+    "sev": "S3",
+    "loc": "packages/server/src/Filesystem/local-filesystem.ts:25,123,141,153"
+  },
+  {
+    "file": "audit\\domains\\filesystem\\bug-ledger.csv",
+    "id": "FS-004",
+    "sev": "S3",
+    "loc": "packages/server/src/Filesystem/path-guard.ts:105"
+  },
+  {
+    "file": "audit\\domains\\filesystem\\bug-ledger.csv",
+    "id": "FS-005",
+    "sev": "S3",
+    "loc": "packages/server/src/Filesystem/index.ts:1"
+  },
+  {
+    "file": "audit\\domains\\filesystem\\bug-ledger.csv",
+    "id": "FS-006",
+    "sev": "S3",
+    "loc": "re-docs/Backend Docs/Domain Spec/Filesystem.md (Flow §4-7) vs local-filesystem.ts"
+  },
+  {
+    "file": "audit\\domains\\filesystem\\bug-ledger.csv",
+    "id": "FS-007",
+    "sev": "S3",
+    "loc": "packages/server/src/routes/filesystem.ts:122,147,165,190"
+  },
+  {
+    "file": "audit\\domains\\filesystem\\bug-ledger.csv",
+    "id": "FS-008",
+    "sev": "S3",
+    "loc": "packages/server/src/Filesystem/local-filesystem.ts:65-77"
+  },
+  {
+    "file": "audit\\domains\\filesystem\\bug-ledger.csv",
+    "id": "FS-009",
+    "sev": "S3",
+    "loc": "packages/server/src/Filesystem/local-filesystem.ts:100,126,192,212; :144"
+  },
+  {
+    "file": "audit\\domains\\filesystem\\bug-ledger.csv",
+    "id": "FS-010",
+    "sev": "S3",
+    "loc": "packages/server/src/Filesystem/*.test.ts"
+  },
+  {
+    "file": "audit\\domains\\memories\\bug-ledger.csv",
+    "id": "MEM-001",
+    "sev": "S2",
+    "loc": "packages/server/src/memories/memory-lifecycle.ts:77-94"
+  },
+  {
+    "file": "audit\\domains\\memories\\bug-ledger.csv",
+    "id": "MEM-002",
+    "sev": "S2",
+    "loc": "packages/server/src/memories/memory-retrieval.ts:163-179"
+  },
+  {
+    "file": "audit\\domains\\memories\\bug-ledger.csv",
+    "id": "MEM-003",
+    "sev": "S2",
+    "loc": "packages/server/src/memories/memory-local-store.ts:137-150"
+  },
+  {
+    "file": "audit\\domains\\memories\\bug-ledger.csv",
+    "id": "MEM-004",
+    "sev": "S3",
+    "loc": "packages/server/src/memories/memories-gate.ts:51 vs :79-111"
+  },
+  {
+    "file": "audit\\domains\\memories\\bug-ledger.csv",
+    "id": "MEM-005",
+    "sev": "S3",
+    "loc": "packages/server/src/memories/agent-memory-store.ts:282-284"
+  },
+  {
+    "file": "audit\\domains\\memories\\bug-ledger.csv",
+    "id": "MEM-006",
+    "sev": "S3",
+    "loc": "packages/server/src/memories/agent-memory-store.ts:88-89 vs :600"
+  },
+  {
+    "file": "audit\\domains\\memories\\bug-ledger.csv",
+    "id": "MEM-007",
+    "sev": "S2",
+    "loc": "packages/server/src/memories/memory-retrieval.ts:128-155"
+  },
+  {
+    "file": "audit\\domains\\memories\\bug-ledger.csv",
+    "id": "MEM-008",
+    "sev": "S3",
+    "loc": "packages/server/src/memories/embeddings.ts:312-360"
+  },
+  {
+    "file": "audit\\domains\\memories\\bug-ledger.csv",
+    "id": "MEM-009",
+    "sev": "S2",
+    "loc": "packages/server/src/memories/agent-memory-store.ts:209-217,236-243"
+  },
+  {
+    "file": "audit\\domains\\memories\\bug-ledger.csv",
+    "id": "MEM-010",
+    "sev": "S3",
+    "loc": "packages/server/src/memories/agent-memory-store.ts:503-507"
+  },
+  {
+    "file": "audit\\domains\\memories\\bug-ledger.csv",
+    "id": "MEM-011",
+    "sev": "S3",
+    "loc": "packages/server/src/memories/embeddings.ts:362-371"
+  },
+  {
+    "file": "audit\\domains\\memories\\bug-ledger.csv",
+    "id": "MEM-012",
+    "sev": "S2",
+    "loc": "packages/server/src/memories/agent-memory-store.ts:392-400"
+  },
+  {
+    "file": "audit\\domains\\memories\\bug-ledger.csv",
+    "id": "MEM-013",
+    "sev": "S3",
+    "loc": "packages/server/src/memories/memory-lifecycle.ts:196-214"
+  },
+  {
+    "file": "audit\\domains\\memories\\bug-ledger.csv",
+    "id": "MEM-014",
+    "sev": "S3",
+    "loc": "packages/server/src/memories/memory-local-store.ts:114-131; agent-memory-store.ts:387-389,605,658,713"
+  },
+  {
+    "file": "audit\\domains\\memories\\bug-ledger.csv",
+    "id": "MEM-015",
+    "sev": "S3",
+    "loc": "packages/server/src/memories/embeddings.ts:59-85"
+  },
+  {
+    "file": "audit\\domains\\memories\\bug-ledger.csv",
+    "id": "MEM-016",
+    "sev": "S3",
+    "loc": "packages/server/src/memories/agent-memory-store.ts:441-450"
+  },
+  {
+    "file": "audit\\domains\\memories\\bug-ledger.csv",
+    "id": "MEM-017",
+    "sev": "S3",
+    "loc": "packages/server/src/memories/memory-lifecycle.ts:224-250"
+  },
+  {
+    "file": "audit\\domains\\memories\\bug-ledger.csv",
+    "id": "MEM-018",
+    "sev": "S3",
+    "loc": "packages/server/src/memories/memories-gate.ts:92-100"
+  },
+  {
+    "file": "audit\\domains\\memories\\bug-ledger.csv",
+    "id": "MEM-019",
+    "sev": "S2",
+    "loc": "packages/server/src/memories/memory-retrieval.ts:52-57 vs 128-141"
+  },
+  {
+    "file": "audit\\domains\\memories\\bug-ledger.csv",
+    "id": "MEM-020",
+    "sev": "S3",
+    "loc": "packages/server/src/memories/agent-memory-store.ts:618-621,672-675"
+  },
+  {
+    "file": "audit\\domains\\messages\\bug-ledger.csv",
+    "id": "MSG-001",
+    "sev": "S2",
+    "loc": "packages/server/src/db/migrations/0000_baseline.sql:478; packages/server/src/db/schema.ts:310; packages/server/src/messages/message-service.ts:497"
+  },
+  {
+    "file": "audit\\domains\\messages\\bug-ledger.csv",
+    "id": "MSG-002",
+    "sev": "S1",
+    "loc": "packages/server/src/messages/message-service.ts:54-70, 459-463, 486-510"
+  },
+  {
+    "file": "audit\\domains\\messages\\bug-ledger.csv",
+    "id": "MSG-003",
+    "sev": "S3",
+    "loc": "packages/server/src/messages/message-service.ts:396, 438, 468; packages/server/src/messages/message-types.ts:11; packages/server/src/event-broker/event-types.ts:1"
+  },
+  {
+    "file": "audit\\domains\\messages\\bug-ledger.csv",
+    "id": "MSG-004",
+    "sev": "S2",
+    "loc": "packages/server/src/messages/message-service.ts:163-261, 335-349"
+  },
+  {
+    "file": "audit\\domains\\messages\\bug-ledger.csv",
+    "id": "MSG-005",
+    "sev": "S2",
+    "loc": "packages/server/src/messages/message-local-store.ts:88-94; packages/server/src/messages/message-service.ts:387-388, 497; packages/server/src/queue/scheduler-worker.ts:26-50"
+  },
+  {
+    "file": "audit\\domains\\messages\\bug-ledger.csv",
+    "id": "MSG-006",
+    "sev": "S3",
+    "loc": "packages/server/src/messages/message-service.ts:277-281, 300-304; packages/server/src/messages/message-local-store.ts:99-108"
+  },
+  {
+    "file": "audit\\domains\\messages\\bug-ledger.csv",
+    "id": "MSG-007",
+    "sev": "S1",
+    "loc": "packages/server/src/routes/messages.ts:15-43; packages/server/src/create-app.ts:235-318; packages/server/src/shared/sockets/register-socket-server.ts:551-568"
+  },
+  {
+    "file": "audit\\domains\\messages\\bug-ledger.csv",
+    "id": "MSG-008",
+    "sev": "S2",
+    "loc": "packages/server/src/messages/message-service.ts:121-137, 171-198"
+  },
+  {
+    "file": "audit\\domains\\messages\\bug-ledger.csv",
+    "id": "MSG-009",
+    "sev": "S2",
+    "loc": "packages/server/src/routes/threads.ts:98-114; packages/server/src/messages/message-service.ts:473, 525"
+  },
+  {
+    "file": "audit\\domains\\messages\\bug-ledger.csv",
+    "id": "MSG-010",
+    "sev": "S2",
+    "loc": "packages/server/src/messages/message-service.ts:310-321 vs 486-509"
+  },
+  {
+    "file": "audit\\domains\\messages\\bug-ledger.csv",
+    "id": "MSG-011",
+    "sev": "S2",
+    "loc": "packages/server/src/messages/message-service.ts:27-37"
+  },
+  {
+    "file": "audit\\domains\\messages\\bug-ledger.csv",
+    "id": "MSG-012",
+    "sev": "S2",
+    "loc": "packages/server/src/messages/message-service.ts:387-404; packages/server/src/shared/sockets/register-socket-server.ts:688, 738-749; packages/server/src/routes/threads.ts:92-93"
+  },
+  {
+    "file": "audit\\domains\\messages\\bug-ledger.csv",
+    "id": "MSG-013",
+    "sev": "S3",
+    "loc": "packages/server/src/messages/message-service.ts:139-140; packages/server/src/messages/message-gate.ts:17"
+  },
+  {
+    "file": "audit\\domains\\messages\\bug-ledger.csv",
+    "id": "MSG-014",
+    "sev": "S3",
+    "loc": "packages/server/src/messages/message-service.ts:291"
+  },
+  {
+    "file": "audit\\domains\\messages\\bug-ledger.csv",
+    "id": "MSG-015",
+    "sev": "S3",
+    "loc": "packages/server/src/messages/message-service.ts:307-321; packages/server/src/routes/messages.ts:30"
+  },
+  {
+    "file": "audit\\domains\\messages\\bug-ledger.csv",
+    "id": "MSG-016",
+    "sev": "S3",
+    "loc": "packages/server/src/messages/message-service.ts:99-119, 171-182"
+  },
+  {
+    "file": "audit\\domains\\messages\\bug-ledger.csv",
+    "id": "MSG-017",
+    "sev": "S3",
+    "loc": "packages/server/src/messages/message-service.ts:243-258"
+  },
+  {
+    "file": "audit\\domains\\messages\\bug-ledger.csv",
+    "id": "MSG-018",
+    "sev": "S2",
+    "loc": "packages/server/src/messages/message-service.ts:512-525; packages/server/src/shared/sockets/register-socket-server.ts:464-471"
+  },
+  {
+    "file": "audit\\domains\\messages\\bug-ledger.csv",
+    "id": "MSG-019",
+    "sev": "S3",
+    "loc": "packages/server/src/messages/message-service.ts:431-443"
+  },
+  {
+    "file": "audit\\domains\\messages\\bug-ledger.csv",
+    "id": "MSG-020",
+    "sev": "S2",
+    "loc": "packages/server/src/shared/core/workspace-sync.ts:403-450, 191-202; packages/server/src/messages/message-service.ts:494-510"
+  },
+  {
+    "file": "audit\\domains\\messages\\bug-ledger.csv",
+    "id": "MSG-021",
+    "sev": "S3",
+    "loc": "re-docs/Backend Docs/Domain Spec/Messages.md:45, 65, 88; re-docs/Backend Docs/_index.md:17"
+  },
+  {
+    "file": "audit\\domains\\messages\\bug-ledger.csv",
+    "id": "MSG-022",
+    "sev": "S3",
+    "loc": "packages/server/src/messages/message-local-store.ts:97-121; packages/server/src/messages/message-service.ts:310-321"
+  },
+  {
+    "file": "audit\\domains\\messages\\bug-ledger.csv",
+    "id": "MSG-023",
+    "sev": "S3",
+    "loc": "packages/server/src/state/state-gate.ts:51-55; packages/server/src/messages/message-local-store.ts:123-129"
+  },
+  {
+    "file": "audit\\domains\\messages\\bug-ledger.csv",
+    "id": "MSG-024",
+    "sev": "S3",
+    "loc": "packages/server/src/messages/message-service.ts:67-69, 512-523; packages/server/src/shared/core/outbox.ts:6"
+  },
+  {
+    "file": "audit\\domains\\messages\\bug-ledger.csv",
+    "id": "MSG-025",
+    "sev": "S3",
+    "loc": "packages/server/src/messages/message-service.ts:459-462; packages/server/src/shared/core/outbox.ts:38"
+  },
+  {
+    "file": "audit\\domains\\messages\\bug-ledger.csv",
+    "id": "MSG-026",
+    "sev": "S3",
+    "loc": "packages/server/src/shared/core/sequence-number.ts:6; packages/server/src/shared/core/thread-sequence.ts:4"
+  },
+  {
+    "file": "audit\\domains\\messages\\bug-ledger.csv",
+    "id": "MSG-027",
+    "sev": "S3",
+    "loc": "packages/server/src/messages/message-service.ts:199-224"
+  },
+  {
+    "file": "audit\\domains\\messages\\bug-ledger.csv",
+    "id": "MSG-028",
+    "sev": "S3",
+    "loc": "packages/server/src/messages/message-service.ts:183-198, 205-214"
+  },
+  {
+    "file": "audit\\domains\\messages\\bug-ledger.csv",
+    "id": "MSG-029",
+    "sev": "S3",
+    "loc": "packages/server/src/messages/message-pagination.test.ts:22; packages/server/src/test-setup.ts:182-217"
+  },
+  {
+    "file": "audit\\domains\\messages\\bug-ledger.csv",
+    "id": "MSG-030",
+    "sev": "S2",
+    "loc": "packages/server/src/messages/message-service.ts:352-366; packages/server/src/shared/sockets/register-socket-server.ts:730-749"
+  },
+  {
+    "file": "audit\\domains\\observability\\bug-ledger.csv",
+    "id": "OBS-001",
+    "sev": "S2",
+    "loc": "packages/server/src/observability/tracing.ts:47,78,200-206"
+  },
+  {
+    "file": "audit\\domains\\observability\\bug-ledger.csv",
+    "id": "OBS-002",
+    "sev": "S2",
+    "loc": "packages/server/src/observability/tracing.ts:83-102,144-151"
+  },
+  {
+    "file": "audit\\domains\\observability\\bug-ledger.csv",
+    "id": "OBS-003",
+    "sev": "S2",
+    "loc": "packages/server/src/observability/cost-ledger.ts:301-304,322"
+  },
+  {
+    "file": "audit\\domains\\observability\\bug-ledger.csv",
+    "id": "OBS-004",
+    "sev": "S2",
+    "loc": "packages/server/src/observability/cost-ledger.ts:305,308-315"
+  },
+  {
+    "file": "audit\\domains\\observability\\bug-ledger.csv",
+    "id": "OBS-005",
+    "sev": "S3",
+    "loc": "packages/server/src/observability/cost-ledger.ts:129-158"
+  },
+  {
+    "file": "audit\\domains\\observability\\bug-ledger.csv",
+    "id": "OBS-006",
+    "sev": "S3",
+    "loc": "packages/server/src/observability/cost-ledger.ts:96-129"
+  },
+  {
+    "file": "audit\\domains\\observability\\bug-ledger.csv",
+    "id": "OBS-007",
+    "sev": "S2",
+    "loc": "packages/server/src/observability/tracing.ts:129-130"
+  },
+  {
+    "file": "audit\\domains\\observability\\bug-ledger.csv",
+    "id": "OBS-008",
+    "sev": "S3",
+    "loc": "packages/server/src/observability/tracing.ts:191-198; packages/server/src/routes/observability.ts:93"
+  },
+  {
+    "file": "audit\\domains\\observability\\bug-ledger.csv",
+    "id": "OBS-009",
+    "sev": "S2",
+    "loc": "packages/server/src/observability/tracing.ts:107-141"
+  },
+  {
+    "file": "audit\\domains\\observability\\bug-ledger.csv",
+    "id": "OBS-010",
+    "sev": "S3",
+    "loc": "packages/server/src/observability/tracing.ts:133-141"
+  },
+  {
+    "file": "audit\\domains\\observability\\bug-ledger.csv",
+    "id": "OBS-011",
+    "sev": "S3",
+    "loc": "packages/server/src/observability/tracing.ts:141,188,193"
+  },
+  {
+    "file": "audit\\domains\\observability\\bug-ledger.csv",
+    "id": "OBS-012",
+    "sev": "S3",
+    "loc": "packages/server/src/routes/metrics.ts:12-27"
+  },
+  {
+    "file": "audit\\domains\\observability\\bug-ledger.csv",
+    "id": "OBS-013",
+    "sev": "S3",
+    "loc": "packages/server/src/observability/cost-ledger.ts:226"
+  },
+  {
+    "file": "audit\\domains\\observability\\bug-ledger.csv",
+    "id": "OBS-015",
+    "sev": "S3",
+    "loc": "re-docs/Backend Docs/Domain Spec/Observability.md; re-docs/Backend Docs/Feature and Flow Spec/Observability spans and cost ledger.md"
+  },
+  {
+    "file": "audit\\domains\\observability\\bug-ledger.csv",
+    "id": "OBS-016",
+    "sev": "S3",
+    "loc": "packages/server/src/shared/config/env.ts:240; packages/server/src/observability/tracing.ts:52"
+  },
+  {
+    "file": "audit\\domains\\observability\\bug-ledger.csv",
+    "id": "OBS-017",
+    "sev": "S3",
+    "loc": "packages/server/src/observability/observability-gate.ts:12-21"
+  },
+  {
+    "file": "audit\\domains\\observability\\bug-ledger.csv",
+    "id": "OBS-018",
+    "sev": "S3",
+    "loc": "packages/server/src/tools/tool-executor.ts:325; packages/server/src/runtime/kernel/runtime-kernel.ts:68,191; packages/server/src/runtime/kernel/context-assembler.ts:49"
+  },
+  {
+    "file": "audit\\domains\\observability\\bug-ledger.csv",
+    "id": "OBS-019",
+    "sev": "S3",
+    "loc": "packages/server/src/observability/observability-gate.ts:12-21 vs tracing.test.ts"
+  },
+  {
+    "file": "audit\\domains\\runs\\bug-ledger.csv",
+    "id": "RUN-001",
+    "sev": "S2",
+    "loc": "packages/server/src/runs/runs-repository.ts:125"
+  },
+  {
+    "file": "audit\\domains\\runs\\bug-ledger.csv",
+    "id": "RUN-002",
+    "sev": "S2",
+    "loc": "packages/server/src/runs/runs-repository.ts:144-149"
+  },
+  {
+    "file": "audit\\domains\\runs\\bug-ledger.csv",
+    "id": "RUN-003",
+    "sev": "S2",
+    "loc": "packages/server/src/runtime/runtimes/coding-runtime.ts:228-243, 308-355"
+  },
+  {
+    "file": "audit\\domains\\runs\\bug-ledger.csv",
+    "id": "RUN-004",
+    "sev": "S2",
+    "loc": "packages/server/src/runs/runs-repository.ts:241-262; call sites tool-registry.ts:288,336,414; coding-runtime.ts:243,355"
+  },
+  {
+    "file": "audit\\domains\\runs\\bug-ledger.csv",
+    "id": "RUN-005",
+    "sev": "S3",
+    "loc": "packages/server/src/db/schema.ts:976-981 vs runs-repository.ts:238 and runs-service.ts:49"
+  },
+  {
+    "file": "audit\\domains\\runs\\bug-ledger.csv",
+    "id": "RUN-006",
+    "sev": "S2",
+    "loc": "packages/server/src/routes/runs.ts:30-33, 48-54; register-socket-server.ts:1002-1038"
+  },
+  {
+    "file": "audit\\domains\\runs\\bug-ledger.csv",
+    "id": "RUN-007",
+    "sev": "S1",
+    "loc": "packages/server/src/runs/runs-repository.ts:51-71; call sites: runtime-executor.ts:88,136,197; register-socket-server.ts:882; routes/runs.ts:9"
+  },
+  {
+    "file": "audit\\domains\\runs\\bug-ledger.csv",
+    "id": "RUN-008",
+    "sev": "S3",
+    "loc": "packages/server/src/runs/runs-repository.ts:106-131"
+  },
+  {
+    "file": "audit\\domains\\runs\\bug-ledger.csv",
+    "id": "RUN-009",
+    "sev": "S3",
+    "loc": "packages/server/src/runs/runs-gate.ts:31-33,49; runs-repository.ts:134-149,289-300"
+  },
+  {
+    "file": "audit\\domains\\runs\\bug-ledger.csv",
+    "id": "RUN-010",
+    "sev": "S3",
+    "loc": "packages/server/src/runs/runs-repository.ts:158-213"
+  },
+  {
+    "file": "audit\\domains\\runs\\bug-ledger.csv",
+    "id": "RUN-011",
+    "sev": "S3",
+    "loc": "packages/server/src/runs/orphan-sweep.ts:26-42; runtime-executor.ts:136"
+  },
+  {
+    "file": "audit\\domains\\runs\\bug-ledger.csv",
+    "id": "RUN-012",
+    "sev": "S3",
+    "loc": "packages/server/src/observability/cost-ledger.ts:226"
+  },
+  {
+    "file": "audit\\domains\\runs\\bug-ledger.csv",
+    "id": "RUN-013",
+    "sev": "S3",
+    "loc": "packages/server/src/runs/runs-repository.ts:283-287"
+  },
+  {
+    "file": "audit\\domains\\runs\\bug-ledger.csv",
+    "id": "RUN-014",
+    "sev": "S3",
+    "loc": "packages/server/src/runtime/runtimes/research-runtime.ts:398-456; runtime-executor.ts:136"
+  },
+  {
+    "file": "audit\\domains\\runs\\bug-ledger.csv",
+    "id": "RUN-015",
+    "sev": "S3",
+    "loc": "packages/server/src/runs/orphan-sweep.ts:67-78"
+  },
+  {
+    "file": "audit\\domains\\runs\\bug-ledger.csv",
+    "id": "RUN-016",
+    "sev": "S3",
+    "loc": "packages/server/src/db/migrations/0001_runs_table.sql:18; 0014_p18_missing_indexes.sql (no runs entry); orphan-sweep.ts:67-78; runs-repository.ts:289-300"
+  },
+  {
+    "file": "audit\\domains\\runs\\bug-ledger.csv",
+    "id": "RUN-017",
+    "sev": "S3",
+    "loc": "packages/server/src/runs/run-state-machine.ts:1-18 vs packages/server/src/db/schema.ts:50-68"
+  },
+  {
+    "file": "audit\\domains\\runs\\bug-ledger.csv",
+    "id": "RUN-018",
+    "sev": "S3",
+    "loc": "packages/server/src/runs/runs-repository.ts:172,203; grep checkpointSeq"
+  },
+  {
+    "file": "audit\\domains\\runs\\bug-ledger.csv",
+    "id": "RUN-019",
+    "sev": "S3",
+    "loc": "packages/server/src/db/schema.ts:972; routes/runs.ts:15; register-socket-server.ts:984; grep historyRef"
+  },
+  {
+    "file": "audit\\domains\\runs\\bug-ledger.csv",
+    "id": "RUN-020",
+    "sev": "S3",
+    "loc": "packages/server/src/runs/runs-service.ts:36,47; orphan-sweep.ts:58"
+  },
+  {
+    "file": "audit\\domains\\runs\\bug-ledger.csv",
+    "id": "RUN-021",
+    "sev": "S3",
+    "loc": "packages/server/src/runs/runs-service.ts:23-34; orphan-sweep.ts:46-56"
+  },
+  {
+    "file": "audit\\domains\\runs\\bug-ledger.csv",
+    "id": "RUN-022",
+    "sev": "S3",
+    "loc": "packages/server/src/runs/orphan-sweep.ts:8-24"
+  },
+  {
+    "file": "audit\\domains\\runs\\bug-ledger.csv",
+    "id": "RUN-023",
+    "sev": "S3",
+    "loc": "packages/server/src/runs/runs-repository.ts:234-238"
+  },
+  {
+    "file": "audit\\domains\\runs\\bug-ledger.csv",
+    "id": "RUN-024",
+    "sev": "S3",
+    "loc": "packages/server/src/shared/sockets/register-socket-server.ts:1055-1058"
+  },
+  {
+    "file": "audit\\domains\\runs\\bug-ledger.csv",
+    "id": "RUN-025",
+    "sev": "S3",
+    "loc": "packages/server/src/runs/runs-service.ts:13-19"
+  },
+  {
+    "file": "audit\\domains\\runs\\bug-ledger.csv",
+    "id": "RUN-026",
+    "sev": "S2",
+    "loc": "packages/server/src/runtime/runtime-executor.ts:104-108; queue/queues.ts:30-35 (attempts:3)"
+  },
+  {
+    "file": "audit\\domains\\runs\\bug-ledger.csv",
+    "id": "RUN-027",
+    "sev": "S3",
+    "loc": "re-docs/Backend Docs/Feature and Flow Spec/Durable runs and checkpoints.md (Open gaps); Compensation undo flow.md (How it works step 5, admin-only claim); Domain Spec/Runs.md (line refs)"
+  },
+  {
+    "file": "audit\\domains\\runs\\bug-ledger.csv",
+    "id": "RUN-028",
+    "sev": "S3",
+    "loc": "packages/server/src/db/schema.ts:990 vs runs-repository.ts:86-92"
+  },
+  {
+    "file": "audit\\domains\\runs\\bug-ledger.csv",
+    "id": "RUN-029",
+    "sev": "S3",
+    "loc": "packages/server/src/db/schema.ts:551-552 vs packages/server/src/db/migrations/0024_delegations_drop_child_run_fk.sql"
+  },
+  {
+    "file": "audit\\domains\\runs\\bug-ledger.csv",
+    "id": "RUN-030",
+    "sev": "S2",
+    "loc": "packages/server/src/runs/orphan-sweep.ts:14-18 (comment); queue/queues.ts:119-123; register-socket-server.ts:994"
+  },
+  {
+    "file": "audit\\domains\\runs\\bug-ledger.csv",
+    "id": "RUN-031",
+    "sev": "S2",
+    "loc": "packages/server/src/runtime/runtimes/research-runtime.ts:414-427; queue/run-worker.ts:93-104"
+  },
+  {
+    "file": "audit\\domains\\search-providers\\bug-ledger.csv",
+    "id": "SP-01",
+    "sev": "S2",
+    "loc": null
+  },
+  {
+    "file": "audit\\domains\\search-providers\\bug-ledger.csv",
+    "id": "SP-02",
+    "sev": "S3",
+    "loc": null
+  },
+  {
+    "file": "audit\\domains\\search-providers\\bug-ledger.csv",
+    "id": "SP-03",
+    "sev": "S3",
+    "loc": null
+  },
+  {
+    "file": "audit\\domains\\search-providers\\bug-ledger.csv",
+    "id": "SP-04",
+    "sev": "S3",
+    "loc": null
+  },
+  {
+    "file": "audit\\domains\\search-providers\\bug-ledger.csv",
+    "id": "SP-05",
+    "sev": "S3",
+    "loc": null
+  },
+  {
+    "file": "audit\\domains\\search-providers\\bug-ledger.csv",
+    "id": "SP-06",
+    "sev": "S3",
+    "loc": null
+  },
+  {
+    "file": "audit\\domains\\search-providers\\bug-ledger.csv",
+    "id": "SP-07",
+    "sev": "S3",
+    "loc": null
+  },
+  {
+    "file": "audit\\domains\\search-providers\\bug-ledger.csv",
+    "id": "SP-08",
+    "sev": "S3",
+    "loc": null
+  },
+  {
+    "file": "audit\\domains\\search-providers\\bug-ledger.csv",
+    "id": "SP-09",
+    "sev": "S3",
+    "loc": null
+  },
+  {
+    "file": "audit\\domains\\search-providers\\bug-ledger.csv",
+    "id": "SP-10",
+    "sev": "S3",
+    "loc": null
+  },
+  {
+    "file": "audit\\domains\\shared\\bug-ledger.csv",
+    "id": "SH-005",
+    "sev": "S3",
+    "loc": "packages/server/src/shared/sockets/register-socket-server.ts:327-341"
+  },
+  {
+    "file": "audit\\domains\\shared\\bug-ledger.csv",
+    "id": "SH-007",
+    "sev": "S2",
+    "loc": "packages/server/src/shared/sockets/register-socket-server.test.ts:setup deps seam"
+  },
+  {
+    "file": "audit\\domains\\skills\\bug-ledger.csv",
+    "id": "SK-001",
+    "sev": "S1",
+    "loc": "packages/server/src/routes/studio.ts:152-154,165"
+  },
+  {
+    "file": "audit\\domains\\skills\\bug-ledger.csv",
+    "id": "SK-002",
+    "sev": "S2",
+    "loc": "packages/server/src/tools/tool-executor.ts:337-355; packages/server/src/skills/skill-service.ts:87-105,231-287"
+  },
+  {
+    "file": "audit\\domains\\skills\\bug-ledger.csv",
+    "id": "SK-003",
+    "sev": "S2",
+    "loc": "packages/server/src/skills/skill-service.ts:71-82,173-195,231-287; packages/server/src/shared/config/database.ts:29-46"
+  },
+  {
+    "file": "audit\\domains\\skills\\bug-ledger.csv",
+    "id": "SK-004",
+    "sev": "S3",
+    "loc": "packages/server/src/skills/skill-validators.ts:16; packages/server/src/skills/markdown-skill-types.ts:26-28; re-docs/Backend Docs/Domain Spec/Skills.md (Decisions: taxonomy CLOSED)"
+  },
+  {
+    "file": "audit\\domains\\skills\\bug-ledger.csv",
+    "id": "SK-005",
+    "sev": "S3",
+    "loc": "packages/server/src/skills/markdown-skill-store.ts:71-79,126-131,139-166; packages/server/src/runtime/kernel/middlewares/skill-context-middleware.ts:71-77"
+  },
+  {
+    "file": "audit\\domains\\skills\\bug-ledger.csv",
+    "id": "SK-006",
+    "sev": "S3",
+    "loc": "packages/server/src/runtime/kernel/middlewares/skill-context-middleware.ts:12-20,73-77"
+  },
+  {
+    "file": "audit\\domains\\skills\\bug-ledger.csv",
+    "id": "SK-007",
+    "sev": "S3",
+    "loc": "packages/server/src/runtime/kernel/middlewares/skill-context-middleware.ts:58-60,78-80"
+  },
+  {
+    "file": "audit\\domains\\skills\\bug-ledger.csv",
+    "id": "SK-008",
+    "sev": "S3",
+    "loc": "packages/server/src/skills/skill-service.ts:259-267; packages/server/src/tools/tool-executor.ts:358-359; packages/server/src/runtime/kernel/middlewares/tool-schema-middleware.ts:49"
+  },
+  {
+    "file": "audit\\domains\\skills\\bug-ledger.csv",
+    "id": "SK-009",
+    "sev": "S3",
+    "loc": "packages/server/src/skills/skill-service.ts:135-163"
+  },
+  {
+    "file": "audit\\domains\\skills\\bug-ledger.csv",
+    "id": "SK-010",
+    "sev": "S3",
+    "loc": "packages/server/src/skills/skill-service.ts:90"
+  },
+  {
+    "file": "audit\\domains\\skills\\bug-ledger.csv",
+    "id": "SK-011",
+    "sev": "S3",
+    "loc": "packages/server/src/skills/markdown-skill-store.ts:139-166"
+  },
+  {
+    "file": "audit\\domains\\skills\\bug-ledger.csv",
+    "id": "SK-012",
+    "sev": "S3",
+    "loc": "packages/server/src/skills/markdown-skill-parser.ts:150-157"
+  },
+  {
+    "file": "audit\\domains\\skills\\bug-ledger.csv",
+    "id": "SK-013",
+    "sev": "S3",
+    "loc": "packages/server/src/skills/markdown-skill-store.ts:97-103; packages/server/src/skills/skill-service.ts:71-82"
+  },
+  {
+    "file": "audit\\domains\\state\\bug-ledger.csv",
+    "id": "STATE-002",
+    "sev": "S2",
+    "loc": "packages/server/src/state/state-gate.ts:3-5; packages/server/src/tools/tool-executor.ts:468,515,542,545,695,719,730,732; packages/server/src/approvals/approval-sweeper.ts:41; packages/server/src/routes/approvals.ts:79; packages/server/src/shared/sockets/register-socket-server.ts:1160; packages/server/src/runtime/runtimes/research-runtime.ts:404-405,454-456"
+  },
+  {
+    "file": "audit\\domains\\state\\bug-ledger.csv",
+    "id": "STATE-003",
+    "sev": "S2",
+    "loc": "packages/server/src/state/state-gate.ts:28; packages/server/src/runs/runs-repository.ts:126-131; packages/server/src/runs/apply-transition.test.ts (RUN-001 cases)"
+  },
+  {
+    "file": "audit\\domains\\state\\bug-ledger.csv",
+    "id": "STATE-004",
+    "sev": "S3",
+    "loc": "packages/server/src/state/state-gate.ts:59-63; packages/server/src/runtime/kernel/runtime-kernel.ts:198; packages/server/src/messages/message-service.ts:443,475,527"
+  },
+  {
+    "file": "audit\\domains\\state\\bug-ledger.csv",
+    "id": "STATE-005",
+    "sev": "S2",
+    "loc": "packages/server/src/state/state-gate.ts:24-56"
+  },
+  {
+    "file": "audit\\domains\\state\\bug-ledger.csv",
+    "id": "STATE-006",
+    "sev": "S3",
+    "loc": "packages/server/src/state/state-gate.ts:39-51; packages/server/src/runs/runs-service.ts:23-37; packages/server/src/runs/orphan-sweep.ts:46-57"
+  },
+  {
+    "file": "audit\\domains\\state\\bug-ledger.csv",
+    "id": "STATE-007",
+    "sev": "S2",
+    "loc": "packages/server/src/state/ (no *.test.ts); packages/server/src/runtime/runtime-executor.ts:239-248"
+  },
+  {
+    "file": "audit\\domains\\state\\bug-ledger.csv",
+    "id": "STATE-008",
+    "sev": "S3",
+    "loc": "packages/server/src/state/state-gate.ts:36,54; packages/server/src/runs/runs-service.ts:35"
+  },
+  {
+    "file": "audit\\domains\\state\\bug-ledger.csv",
+    "id": "STATE-009",
+    "sev": "S3",
+    "loc": "packages/server/src/state/state-gate.ts:23,59"
+  },
+  {
+    "file": "audit\\domains\\threads\\bug-ledger.csv",
+    "id": "THR-001",
+    "sev": "S0",
+    "loc": "packages/server/src/routes/index.ts:3-53; packages/server/src/routes/threads.ts:33"
+  },
+  {
+    "file": "audit\\domains\\threads\\bug-ledger.csv",
+    "id": "THR-002",
+    "sev": "S1",
+    "loc": "packages/server/src/db/schema.ts:310; packages/server/src/db/migrations/0000_baseline.sql:478; packages/server/src/messages/message-service.ts:493-504"
+  },
+  {
+    "file": "audit\\domains\\threads\\bug-ledger.csv",
+    "id": "THR-003",
+    "sev": "S1",
+    "loc": "packages/server/src/threads/thread-service.ts:9,65-67,71,101,115,123,131,161; packages/server/src/shared/config/database.ts:45-53,293-318; packages/server/src/shared/core/local-mode-guard.ts:6-7"
+  },
+  {
+    "file": "audit\\domains\\threads\\bug-ledger.csv",
+    "id": "THR-004",
+    "sev": "S2",
+    "loc": "packages/server/src/threads/thread-service.ts:11-30,38-60"
+  },
+  {
+    "file": "audit\\domains\\threads\\bug-ledger.csv",
+    "id": "THR-005",
+    "sev": "S2",
+    "loc": "packages/server/src/db/schema.ts:297; packages/server/src/db/migrations/0012_workspace_mounts_threads_approvals.sql:10; packages/server/src/threads/thread-service.ts:122-128"
+  },
+  {
+    "file": "audit\\domains\\threads\\bug-ledger.csv",
+    "id": "THR-006",
+    "sev": "S2",
+    "loc": "packages/server/src/threads/thread-service.ts:100-112; packages/server/src/routes/threads.ts:15-18"
+  },
+  {
+    "file": "audit\\domains\\threads\\bug-ledger.csv",
+    "id": "THR-007",
+    "sev": "S2",
+    "loc": "packages/server/src/routes/threads.ts:118-122; packages/server/src/queue/repeatables.ts:10-19; packages/server/src/worker.ts:42-49"
+  },
+  {
+    "file": "audit\\domains\\threads\\bug-ledger.csv",
+    "id": "THR-008",
+    "sev": "S2",
+    "loc": "packages/server/src/routes/threads.ts:119; packages/server/src/create-app.ts:334-347"
+  },
+  {
+    "file": "audit\\domains\\threads\\bug-ledger.csv",
+    "id": "THR-009",
+    "sev": "S3",
+    "loc": "packages/server/src/threads/thread-service.ts:100-111"
+  },
+  {
+    "file": "audit\\domains\\threads\\bug-ledger.csv",
+    "id": "THR-010",
+    "sev": "S3",
+    "loc": "packages/server/src/routes/threads.ts:98-108; packages/server/src/threads/thread-service.ts:160-165"
+  },
+  {
+    "file": "audit\\domains\\threads\\bug-ledger.csv",
+    "id": "THR-011",
+    "sev": "S3",
+    "loc": "packages/server/src/threads/thread-service.ts:138-146"
+  },
+  {
+    "file": "audit\\domains\\threads\\bug-ledger.csv",
+    "id": "THR-012",
+    "sev": "S3",
+    "loc": "packages/server/src/threads/thread-service.ts:77-90"
+  },
+  {
+    "file": "audit\\domains\\threads\\bug-ledger.csv",
+    "id": "THR-013",
+    "sev": "S3",
+    "loc": "packages/server/src/threads/thread-service.ts:91-97; packages/server/src/routes/threads.ts:35-42"
+  },
+  {
+    "file": "audit\\domains\\threads\\bug-ledger.csv",
+    "id": "THR-014",
+    "sev": "S3",
+    "loc": "packages/server/src/threads/thread-service.ts:106-109,118"
+  },
+  {
+    "file": "audit\\domains\\threads\\bug-ledger.csv",
+    "id": "THR-015",
+    "sev": "S2",
+    "loc": "packages/server/src/threads/thread-service.ts:4,13-15,28,149-151"
+  },
+  {
+    "file": "audit\\domains\\threads\\bug-ledger.csv",
+    "id": "THR-016",
+    "sev": "S2",
+    "loc": "packages/server/src/shared/core/thread-sequence.ts:6-29; packages/server/src/messages/message-service.ts:433-435; packages/server/src/threads/thread-service.ts:58"
+  },
+  {
+    "file": "audit\\domains\\threads\\bug-ledger.csv",
+    "id": "THR-017",
+    "sev": "S3",
+    "loc": "packages/server/src/messages/message-service.ts:363,433-435; packages/server/src/routes/threads.ts:98-108"
+  },
+  {
+    "file": "audit\\domains\\threads\\bug-ledger.csv",
+    "id": "THR-018",
+    "sev": "S3",
+    "loc": "packages/client/components/workspace/ThreadDrawer.tsx:161; packages/server/src/shared/sockets/register-socket-server.ts (no thread handlers; repo-wide grep for thread:join = client only)"
+  },
+  {
+    "file": "audit\\domains\\threads\\bug-ledger.csv",
+    "id": "THR-019",
+    "sev": "S3",
+    "loc": "packages/server/src/threads/thread-service.ts (no broker); packages/server/src/routes/threads.ts:109-115; re-docs/Backend Docs/Domain Spec/Threads.md:100,113"
+  },
+  {
+    "file": "audit\\domains\\threads\\bug-ledger.csv",
+    "id": "THR-020",
+    "sev": "S3",
+    "loc": "packages/server/src/threads/thread-service.ts:91-96; packages/server/src/db/migrations/0012_workspace_mounts_threads_approvals.sql:71-73"
+  },
+  {
+    "file": "audit\\domains\\threads\\bug-ledger.csv",
+    "id": "THR-021",
+    "sev": "S3",
+    "loc": "re-docs/Backend Docs/Domain Spec/Threads.md:110-114; re-docs/Backend Docs/Feature and Flow Spec/Thread lifecycle flow.md:11-17; packages/server/src/threads/thread-service.ts:2,5"
+  },
+  {
+    "file": "audit\\domains\\threads\\bug-ledger.csv",
+    "id": "THR-022",
+    "sev": "S3",
+    "loc": "packages/server/src/routes/threads.ts:83-93"
+  },
+  {
+    "file": "audit\\domains\\threads\\bug-ledger.csv",
+    "id": "THR-023",
+    "sev": "S3",
+    "loc": "packages/server/src/routes/threads.ts:95-96,101-104"
+  },
+  {
+    "file": "audit\\domains\\threads\\bug-ledger.csv",
+    "id": "THR-024",
+    "sev": "S3",
+    "loc": "packages/server/src/routes/threads.ts:109-114"
+  },
+  {
+    "file": "audit\\domains\\threads\\bug-ledger.csv",
+    "id": "THR-025",
+    "sev": "S2",
+    "loc": "packages/server/src/threads/thread-service.ts:9,65-67,71,101,115,123,131,161; packages/server/src/create-app.ts:235-303; packages/server/src/shared/config/database.ts:316-318"
+  },
+  {
+    "file": "audit\\domains\\threads\\bug-ledger.csv",
+    "id": "THR-026",
+    "sev": "S3",
+    "loc": "packages/server/src/threads/thread-service.ts:2,5; packages/server/src/routes/threads.ts:15-18; packages/server/src/threads/thread-types.ts:1"
+  },
+  {
+    "file": "audit\\domains\\threads\\bug-ledger.csv",
+    "id": "THR-027",
+    "sev": "S3",
+    "loc": "packages/server/src/threads/thread-service.ts:10,26,43; re-docs/Backend Docs/Domain Spec/Threads.md:110"
+  },
+  {
+    "file": "audit\\domains\\threads\\bug-ledger.csv",
+    "id": "THR-028",
+    "sev": "S3",
+    "loc": "packages/server/src/threads/thread-service.ts:8-36,44-45"
+  },
+  {
+    "file": "audit\\domains\\threads\\bug-ledger.csv",
+    "id": "THR-029",
+    "sev": "S3",
+    "loc": "packages/server/src/messages/message-service.ts:293-304; packages/server/src/messages/message-local-store.ts:102-104; packages/server/src/threads/thread-service.ts:147-152"
+  },
+  {
+    "file": "audit\\domains\\threads\\bug-ledger.csv",
+    "id": "THR-030",
+    "sev": "S3",
+    "loc": "packages/server/src/threads/thread-service.ts:74-84,135-146; packages/server/src/messages/message-service.ts:149-158"
+  },
+  {
+    "file": "audit\\domains\\threads\\bug-ledger.csv",
+    "id": "THR-031",
+    "sev": "S3",
+    "loc": "packages/server/src/threads/thread-service.ts:23-25; packages/server/src/routes/threads.ts:47-49"
+  },
+  {
+    "file": "audit\\domains\\tools\\bug-ledger.csv",
+    "id": "TOLS-01",
+    "sev": "S2",
+    "loc": "tool-registry.ts:436-464; tool-executor.ts:755"
+  },
+  {
+    "file": "audit\\domains\\tools\\bug-ledger.csv",
+    "id": "TOLS-02",
+    "sev": "S2",
+    "loc": "tool-registry.ts:278-433 (FS handlers); tool-executor.ts:792-807"
+  },
+  {
+    "file": "audit\\domains\\tools\\bug-ledger.csv",
+    "id": "TOLS-03",
+    "sev": "S2",
+    "loc": "mcp-client-manager.ts:426-432,448-475"
+  },
+  {
+    "file": "audit\\domains\\tools\\bug-ledger.csv",
+    "id": "TOLS-04",
+    "sev": "S3",
+    "loc": "tool-registry.ts:81,182-199,751,762,768"
+  },
+  {
+    "file": "audit\\domains\\tools\\bug-ledger.csv",
+    "id": "TOLS-05",
+    "sev": "S2",
+    "loc": "schema.ts:875; migrations/0000_baseline.sql:224; bootstrap.ts:407; mcp-client-manager.ts:154"
+  },
+  {
+    "file": "audit\\domains\\tools\\bug-ledger.csv",
+    "id": "TOLS-06",
+    "sev": "S2",
+    "loc": "mcp-client-manager.ts:201-249,491-504"
+  },
+  {
+    "file": "audit\\domains\\tools\\bug-ledger.csv",
+    "id": "TOLS-07",
+    "sev": "S3",
+    "loc": "tool-executor.ts:336-356"
+  },
+  {
+    "file": "audit\\domains\\tools\\bug-ledger.csv",
+    "id": "TOLS-09",
+    "sev": "S3",
+    "loc": "tool-executor.ts:137-144; event-broker.ts:110-116"
+  },
+  {
+    "file": "audit\\domains\\tools\\bug-ledger.csv",
+    "id": "TOLS-10",
+    "sev": "S3",
+    "loc": "tool-executor.ts:195-198"
+  },
+  {
+    "file": "audit\\domains\\tools\\bug-ledger.csv",
+    "id": "TOLS-11",
+    "sev": "S3",
+    "loc": "tool-registry.ts:809-812"
+  },
+  {
+    "file": "audit\\domains\\tools\\bug-ledger.csv",
+    "id": "TOLS-12",
+    "sev": "S3",
+    "loc": "tool-registry.flags.test.ts:17"
+  },
+  {
+    "file": "audit\\domains\\tools\\bug-ledger.csv",
+    "id": "TOLS-13",
+    "sev": "S3",
+    "loc": "tool-executor.ts:686 vs 452-464; 508-511 vs 697-735"
+  },
+  {
+    "file": "audit\\domains\\tools\\bug-ledger.csv",
+    "id": "TOLS-15",
+    "sev": "S3",
+    "loc": "mcp-client-manager.ts:220-224; mcp-types.ts:3"
+  },
+  {
+    "file": "audit\\domains\\tools\\bug-ledger.csv",
+    "id": "TOLS-19",
+    "sev": "S3",
+    "loc": "tool-registry.ts:182-199"
+  },
+  {
+    "file": "audit\\domains\\workspace\\bug-ledger.csv",
+    "id": "WS-001",
+    "sev": "S2",
+    "loc": "packages/server/src/shared/auth/pin-gate.ts:117-129; packages/server/src/workspace/workspace-pin.ts:85-148"
+  },
+  {
+    "file": "audit\\domains\\workspace\\bug-ledger.csv",
+    "id": "WS-002",
+    "sev": "S2",
+    "loc": "packages/server/src/workspace/workspace-pin.ts:96-116,129-148"
+  },
+  {
+    "file": "audit\\domains\\workspace\\bug-ledger.csv",
+    "id": "WS-003",
+    "sev": "S2",
+    "loc": "packages/server/src/workspace/workspace-database.ts:648-691"
+  },
+  {
+    "file": "audit\\domains\\workspace\\bug-ledger.csv",
+    "id": "WS-004",
+    "sev": "S2",
+    "loc": "packages/server/src/shared/core/workspace-sync.ts:8-15,477-482; packages/server/src/shared/config/database.ts:168-172"
+  },
+  {
+    "file": "audit\\domains\\workspace\\bug-ledger.csv",
+    "id": "WS-005",
+    "sev": "S2",
+    "loc": "packages/server/src/workspace/workspace-registry.ts:237-249; packages/server/src/shared/auth/pin-gate.ts:106-129"
+  },
+  {
+    "file": "audit\\domains\\workspace\\bug-ledger.csv",
+    "id": "WS-006",
+    "sev": "S2",
+    "loc": "packages/server/src/routes/workspace.ts:185-337"
+  },
+  {
+    "file": "audit\\domains\\workspace\\bug-ledger.csv",
+    "id": "WS-007",
+    "sev": "S3",
+    "loc": "packages/server/src/workspace/workspace-database-runtime.ts:91-136"
+  },
+  {
+    "file": "audit\\domains\\workspace\\bug-ledger.csv",
+    "id": "WS-008",
+    "sev": "S3",
+    "loc": "packages/server/src/workspace/workspace-database-runtime.ts:168-195"
+  },
+  {
+    "file": "audit\\domains\\workspace\\bug-ledger.csv",
+    "id": "WS-009",
+    "sev": "S3",
+    "loc": "packages/server/src/workspace/workspace-database-runtime.ts:24,103; workspace-database.ts:155-225"
+  },
+  {
+    "file": "audit\\domains\\workspace\\bug-ledger.csv",
+    "id": "WS-010",
+    "sev": "S3",
+    "loc": "packages/server/src/workspace/workspace-gate.ts:1-135"
+  },
+  {
+    "file": "audit\\domains\\workspace\\bug-ledger.csv",
+    "id": "WS-011",
+    "sev": "S3",
+    "loc": "re-docs/Backend Docs/Domain Spec/Workspace.md (Expect, Flow 5/6/11, Gaps)"
+  },
+  {
+    "file": "audit\\domains\\workspace\\bug-ledger.csv",
+    "id": "WS-012",
+    "sev": "S3",
+    "loc": "packages/server/src/workspace/workspace-pin.ts:69-78"
+  },
+  {
+    "file": "audit\\domains\\workspace\\bug-ledger.csv",
+    "id": "WS-013",
+    "sev": "S2",
+    "loc": "packages/server/src/routes/workspace.ts:185-260,382-436; packages/server/src/create-app.ts:57-90"
+  },
+  {
+    "file": "audit\\domains\\workspace\\bug-ledger.csv",
+    "id": "WS-014",
+    "sev": "S3",
+    "loc": "packages/server/src/routes/workspace.ts:48-83,459-494"
+  },
+  {
+    "file": "audit\\domains\\workspace\\bug-ledger.csv",
+    "id": "WS-015",
+    "sev": "S3",
+    "loc": "packages/server/src/routes/workspace.ts:274-279"
+  },
+  {
+    "file": "audit\\domains\\workspace\\bug-ledger.csv",
+    "id": "WS-016",
+    "sev": "S3",
+    "loc": "packages/server/src/workspace/workspace-database.ts:488-646"
+  },
+  {
+    "file": "audit\\domains\\workspace\\bug-ledger.csv",
+    "id": "WS-017",
+    "sev": "S3",
+    "loc": "packages/server/src/routes/workspace.ts:394-436; packages/server/src/shared/core/workspace-sync.ts:454-505,520-523"
+  },
+  {
+    "file": "audit\\domains\\workspace\\bug-ledger.csv",
+    "id": "WS-018",
+    "sev": "S3",
+    "loc": "packages/server/src/shared/core/local-file.ts:166-210; packages/server/src/routes/workspace.ts:520-540"
+  },
+  {
+    "file": "audit\\domains\\workspace\\bug-ledger.csv",
+    "id": "WS-019",
+    "sev": "S3",
+    "loc": "packages/server/src/workspace/workspace-paths.ts:98-110"
+  },
+  {
+    "file": "audit\\domains\\workspace\\bug-ledger.csv",
+    "id": "WS-020",
+    "sev": "S3",
+    "loc": "packages/server/src/workspace/workspace-registry.ts:145-150; packages/server/src/shared/core/local-file.ts:106-113"
+  },
+  {
+    "file": "audit\\domains\\workspace\\bug-ledger.csv",
+    "id": "WS-021",
+    "sev": "S3",
+    "loc": "packages/server/src/workspace/workspace-database.ts:65-89,227-249"
+  },
+  {
+    "file": "audit\\domains\\workspace\\bug-ledger.csv",
+    "id": "WS-022",
+    "sev": "S3",
+    "loc": "packages/server/src/workspace/workspace-database-runtime.ts:115-136,168-195"
+  },
+  {
+    "file": "audit\\domains\\workspace\\bug-ledger.csv",
+    "id": "WS-023",
+    "sev": "S3",
+    "loc": "packages/server/src/routes/workspace.ts:832-895"
+  },
+  {
+    "file": "audit\\domains\\workspace\\bug-ledger.csv",
+    "id": "WS-024",
+    "sev": "S3",
+    "loc": "packages/server/src/workspace/workspace-runtime.ts:154-186"
+  },
+  {
+    "file": "audit\\domains\\workspace\\bug-ledger.csv",
+    "id": "WS-025",
+    "sev": "S3",
+    "loc": "packages/server/src/workspace/workspace-registry.ts:161-170"
+  },
+  {
+    "file": "audit\\domains\\workspace\\bug-ledger.csv",
+    "id": "WS-026",
+    "sev": "S3",
+    "loc": "check-gates output; channel-mounts/channel-mount-chain.test.ts:13,15; channel-mounts/channel-mount-gate.test.ts:21,473,490; Filesystem/entry-visibility.test.ts:24; routes/observability.test.ts:50; shared/auth/pin-gate.test.ts:31"
+  },
+  {
+    "file": "audit\\domains\\workspace\\bug-ledger.csv",
+    "id": "WS-027",
+    "sev": "S3",
+    "loc": "packages/server/src/routes/workspace.ts:496-550"
+  },
+  {
+    "file": "audit\\domains\\workspace\\bug-ledger.csv",
+    "id": "WS-029",
+    "sev": "S3",
+    "loc": "packages/server/src/workspace/workspace-database.ts:458-466"
+  },
+  {
+    "file": "audit\\domains\\workspace\\bug-ledger.csv",
+    "id": "WS-030",
+    "sev": "S3",
+    "loc": "packages/server/src/workspace/workspace-database.ts:338-341"
+  }
+]

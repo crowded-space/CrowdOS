@@ -4,7 +4,7 @@ import { observabilityGate, clampObsLimit, OBS_LIMIT_MAX } from "../observabilit
 import type { CostDashboard, CostLedgerEntry, PerRunCostRollup } from "../observability/observability-gate.js";
 import { authGate } from "../shared/auth/auth-gate.js";
 import { tierContextFor } from "../workspace/workspace-gate.js";
-import { resolveTier, isConnectionError, NO_DATABASE_CODE } from "../shared/config/database.js";
+import { resolveTier, isConnectionError, isSchemaMismatchError, NO_DATABASE_CODE } from "../shared/config/database.js";
 
 const traceQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(OBS_LIMIT_MAX).optional(),
@@ -75,11 +75,16 @@ const emptyVerify = () => ({
   localMode: true as const,
 });
 
-/** Degrade ONLY connection-class failures (outage), never logic errors. */
+/** Degrade connection-class failures (outage) and unprovisioned-schema
+ * failures (stale BYODB) — never genuine logic errors. */
 async function withOutageDegradation<T>(run: () => Promise<T>, fallback: () => T): Promise<T> {
   try {
     return await run();
   } catch (err) {
+    if (isSchemaMismatchError(err)) {
+      console.warn("[observability] tenant PG schema missing; serving empty cost shape");
+      return fallback();
+    }
     if (isConnectionError(err) || (err as { code?: unknown })?.code === NO_DATABASE_CODE) {
       return fallback();
     }

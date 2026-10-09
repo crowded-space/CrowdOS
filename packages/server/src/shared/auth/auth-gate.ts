@@ -65,9 +65,9 @@ function extractApiKey(request: FastifyRequest): string {
     return authHeader.slice(7).trim();
   }
   const headerKey = (request.headers["x-api-key"] as string) || "";
-  if (headerKey) return headerKey.trim();
-  const queryKey = (request.query as Record<string, unknown> | null)?.api_key;
-  return typeof queryKey === "string" ? queryKey.trim() : "";
+  // B5: query-key channel dropped. ?api_key leaks keys into server logs,
+  // browser history, and referers. Bearer / x-api-key headers only.
+  return headerKey.trim();
 }
 
 function sendUnauthorized(reply: FastifyReply): void {

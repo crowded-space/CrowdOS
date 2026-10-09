@@ -77,9 +77,13 @@ export async function sweepOrphanedRuns(broker: EventBroker): Promise<number> {
         .limit(50)
         .for("update", { skipLocked: true });
       for (const run of stale) {
+        // Keep every transition on the owning workspace's handle: without the
+        // row scope a split-DB sweep can read from one database and write
+        // through another. Workspace-less rows keep the legacy unscoped path.
+        const scope = run.workspaceId ? { workspaceId: run.workspaceId } : {};
         // Self-heal stranded intermediate states from a prior crashed sweep.
         if (run.status === "orphaned") {
-          const healed = await applyTransition(run.id, "resumable", { reason: "orphan_marked_resumable" });
+          const healed = await applyTransition(run.id, "resumable", { reason: "orphan_marked_resumable", ...scope });
           if (healed && healed.changed) {
             emitStatus(broker, healed.row, healed.from, healed.to, healed.reason);
             swept++;
@@ -87,17 +91,17 @@ export async function sweepOrphanedRuns(broker: EventBroker): Promise<number> {
           continue;
         }
         if (run.status === "cancelling") {
-          const healed = await applyTransition(run.id, "cancelled", { reason: "cancel_sweep_heal" });
+          const healed = await applyTransition(run.id, "cancelled", { reason: "cancel_sweep_heal", ...scope });
           if (healed && healed.changed) {
             emitStatus(broker, healed.row, healed.from, healed.to, healed.reason);
             swept++;
           }
           continue;
         }
-        const toOrphan = await applyTransition(run.id, "orphaned", { reason: "orphan_sweep_stale" });
+        const toOrphan = await applyTransition(run.id, "orphaned", { reason: "orphan_sweep_stale", ...scope });
         if (!toOrphan || !toOrphan.changed) continue;
         emitStatus(broker, toOrphan.row, toOrphan.from, toOrphan.to, toOrphan.reason);
-        const toResumable = await applyTransition(run.id, "resumable", { reason: "orphan_marked_resumable" });
+        const toResumable = await applyTransition(run.id, "resumable", { reason: "orphan_marked_resumable", ...scope });
         if (toResumable && toResumable.changed) {
           emitStatus(broker, toResumable.row, toResumable.from, toResumable.to, toResumable.reason);
         }

@@ -105,7 +105,9 @@ interface WorkspacePinEntry {
 /** Load (id, hash) pairs for workspaces. Empty array when DB is unavailable. */
 async function loadWorkspacePinEntries(): Promise<WorkspacePinEntry[]> {
   try {
-    const { listWorkspaceRecords } = await import("../../workspace/workspace-registry.js");
+    // Facade rule: route through the Workspace gate, never the registry
+    // internals (dynamic import keeps the Shared->Workspace edge lazy).
+    const { listWorkspaceRecords } = await import("../../workspace/workspace-gate.js");
     const records = await listWorkspaceRecords();
     return records.map((r) => ({ id: r.id, hash: r.screenLockPinHash ?? null }));
   } catch {

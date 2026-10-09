@@ -1,6 +1,6 @@
-import { and, eq, isNull, or, sql } from "drizzle-orm";
+import { and, eq, isNull, ne, or, sql } from "drizzle-orm";
 import { randomUUID } from "node:crypto";
-import { getDb, dualWrite } from "../shared/config/database.js";
+import { getDb, dualWrite, isSchemaMismatchError, isNoDatabaseError } from "../shared/config/database.js";
 import { tierContextFor } from "../workspace/workspace-gate.js";
 import { categories, channels, channelSettings } from "../db/schema.js";
 import type { CreateChannelBody, UpdateChannelBody } from "./channel-validators.js";
@@ -16,6 +16,7 @@ import {
   localGetCategory,
   localGetChannel,
   localListCategoriesWithChannels,
+  localChannelListSnapshot,
   localListChannels,
   localRemoveCategory,
   localUpdateCategory,
@@ -36,22 +37,70 @@ async function pgCatchNull<T>(fn: () => Promise<T>): Promise<T | null> {
   }
 }
 
-export async function categoryExists(categoryId: string, dbOverride?: any): Promise<boolean> {
+// CHN-007: optional workspace scope. Unscoped keeps legacy behavior for
+// existing callers; scoped rejects cross-workspace parent references.
+export async function categoryExists(categoryId: string, dbOverride?: any, workspaceId?: string | null): Promise<boolean> {
   if (dbOverride) {
+  try {
     const category = await dbOverride.query.categories.findFirst({
       where: eq(categories.id, categoryId),
     });
-    return Boolean(category);
+    if (!category) return false;
+    if (workspaceId && (category as any).workspaceId && (category as any).workspaceId !== workspaceId) return false;
+    return true;
+  } catch (err) {
+    if (!isSchemaMismatchError(err)) throw err;
+    console.warn(`[channels] tenant PG schema missing; categoryExists served locally`);
   }
-  if (await localCategoryExists(categoryId)) return true;
+  }
+  const local = await localCategoryExists(categoryId).catch(() => false);
+  if (local && !workspaceId) return true;
+  if (local && workspaceId) {
+    try {
+      const { localListCategoriesWithChannels } = await import("./channel-local-store.js");
+      const cats = await (localListCategoriesWithChannels as (o: unknown) => Promise<any[]> )({ workspaceId });
+      if (cats.some((c) => c.id === categoryId)) return true;
+    } catch {}
+  }
+  if (workspaceId) {
+    const tenant = await pgCatchNull(() => resolveCategoryForRead(categoryId, workspaceId));
+    if (tenant) return true;
+    // A scoped miss stays scoped: the global pool must not rescue a category
+    // that does not belong to this workspace.
+    return false;
+  }
   const found = await pgCatchNull(() =>
     getDb().query.categories.findFirst({ where: eq(categories.id, categoryId) }),
   );
-  return Boolean(found);
+  if (!found) return false;
+  return true;
+}
+
+async function resolveCategoryForRead(categoryId: string, workspaceId?: string | null) {
+  if (!workspaceId) {
+    return getDb().query.categories.findFirst({ where: eq(categories.id, categoryId) });
+  }
+  const { dbForWorkspace } = await import("../shared/config/database.js");
+  try {
+    const db = await dbForWorkspace(workspaceId);
+    return db.query.categories.findFirst({ where: eq(categories.id, categoryId) });
+  } catch (err) {
+    // Local-only workspace: no tenant database exists, so behave exactly
+    // like a miss on the replica leg and let the local tier decide.
+    if (isNoDatabaseError(err)) return null;
+    throw err;
+  }
 }
 
 export async function getCategoryById(id: string, dbOverride?: any): Promise<any | null> {
-  if (dbOverride) return dbOverride.query.categories.findFirst({ where: eq(categories.id, id) });
+  if (dbOverride) {
+    try {
+      return await dbOverride.query.categories.findFirst({ where: eq(categories.id, id) });
+    } catch (err) {
+      if (!isSchemaMismatchError(err)) throw err;
+      console.warn(`[channels] tenant PG schema missing; getCategoryById served locally`);
+    }
+  }
   return (await localGetCategory(id)) ?? (await pgCatchNull(() => getDb().query.categories.findFirst({ where: eq(categories.id, id) })));
 }
 
@@ -59,7 +108,8 @@ export async function listCategories(opts?: { limit?: number; offset?: number; w
   const limit = Math.min(200, Math.max(1, opts?.limit ?? 200));
   const offset = Math.max(0, opts?.offset ?? 0);
   if (opts?.db) {
-    return opts.db.query.categories.findMany({
+  try {
+    return await opts.db.query.categories.findMany({
       with: {
         channels: {
           orderBy: (table: any, { asc }: any) => [asc(table.position)],
@@ -70,6 +120,10 @@ export async function listCategories(opts?: { limit?: number; offset?: number; w
       limit,
       offset,
     });
+  } catch (err) {
+    if (!isSchemaMismatchError(err)) throw err;
+    console.warn(`[channels] tenant PG schema missing; serving local categories`);
+  }
   }
   const [pgCats, localCats] = await Promise.all([
     pgCatchNull(() =>      getDb().query.categories.findMany({
@@ -117,10 +171,26 @@ export async function createCategory(
     createdAt: now,
   };
   if (dbOverride) {
+  try {
     const [res] = await dbOverride.insert(categories).values(pgValues).returning();
     return res;
+  } catch (err) {
+    if (!isSchemaMismatchError(err)) throw err;
+    console.warn(`[channels] tenant PG schema missing; createCategory served locally`);
+  }
   }
   const ctx = await tierContextFor(body.workspaceId ?? null);
+  // CHN-006: pre-check so a duplicate never reaches dualWrite (which would
+  // run the PG leg even when local returns a guard union).
+  if (body.workspaceId) {
+    try {
+      const { localListCategoriesWithChannels } = await import("./channel-local-store.js");
+      const cats = await (localListCategoriesWithChannels as (o: unknown) => Promise<any[]> )({ workspaceId: body.workspaceId });
+      if (cats.some((c) => String(c.name).trim().toLowerCase() === String(body.name).trim().toLowerCase())) {
+        return { error: "duplicate_name", name: body.name } as const;
+      }
+    } catch {}
+  }
   return dualWrite({
     ctx,
     entity: "category",
@@ -149,6 +219,7 @@ export async function updateCategory(
   dbOverride?: any,
 ) {
   if (dbOverride) {
+  try {
     const db = dbOverride;
     const updateData: Partial<typeof categories.$inferInsert> = {};
     if (patch.name !== undefined) updateData.name = patch.name;
@@ -159,6 +230,10 @@ export async function updateCategory(
     if (patch.fsMounts !== undefined) updateData.fsMounts = patch.fsMounts;
     const [updated] = await db.update(categories).set(updateData).where(eq(categories.id, id)).returning();
     return updated ?? null;
+  } catch (err) {
+    if (!isSchemaMismatchError(err)) throw err;
+    console.warn(`[channels] tenant PG schema missing; updateCategory ${id} served locally`);
+  }
   }
   const existing = await getCategoryById(id);
   if (!existing) return null;
@@ -187,12 +262,17 @@ export async function updateCategory(
 
 export async function removeCategory(id: string, dbOverride?: any): Promise<boolean> {
   if (dbOverride) {
+  try {
     const { withTransaction } = await import("../shared/config/database.js");
     const deleted = await withTransaction(async (tx: any) => {
       await tx.delete(channels).where(eq(channels.categoryId, id));
       return tx.delete(categories).where(eq(categories.id, id)).returning();
     });
     return deleted.length > 0;
+  } catch (err) {
+    if (!isSchemaMismatchError(err)) throw err;
+    console.warn(`[channels] tenant PG schema missing; removeCategory ${id} served locally`);
+  }
   }
   const existing = await getCategoryById(id);
   if (!existing) return false;
@@ -215,35 +295,63 @@ export async function removeCategory(id: string, dbOverride?: any): Promise<bool
   });
 }
 
-function mergeChannelLists(pgRows: any[], localRows: any[], limit: number, cursor: string | null): any[] {
+const MAX_NUMERIC_CHANNEL_OFFSET = 10_000;
+const CHANNEL_DB_PAGE_SIZE = 200;
+const CHANNEL_OFFSET_LIMIT_MESSAGE =
+  `Numeric channel offsets are limited to ${MAX_NUMERIC_CHANNEL_OFFSET}; use a position:id cursor for deeper pages.`;
+
+class ChannelOffsetLimitError extends RangeError {
+  constructor() {
+    super(CHANNEL_OFFSET_LIMIT_MESSAGE);
+    this.name = "ChannelOffsetLimitError";
+  }
+}
+
+function compareChannelOrder(a: any, b: any): number {
+  const positionDelta = (a.position ?? 0) - (b.position ?? 0);
+  if (positionDelta !== 0) return positionDelta;
+  if (a.id === b.id) return 0;
+  return a.id < b.id ? -1 : 1;
+}
+
+function mergeChannelRows(pgRows: any[], localRows: any[], cursor: string | null): any[] {
   const byId = new Map<string, any>();
   for (const r of pgRows) byId.set(r.id, r);
   for (const r of localRows) byId.set(r.id, r);
-  const merged = [...byId.values()].sort((a, b) => {
-    const pos = (a.position ?? 0) - (b.position ?? 0);
-    if (pos !== 0) return pos;
-    return a.id < b.id ? -1 : 1;
-  });
+  const merged = [...byId.values()].sort(compareChannelOrder);
   if (cursor) {
     const sep = cursor.indexOf(":");
     if (sep > 0) {
       const pos = Number(cursor.slice(0, sep));
       const cid = cursor.slice(sep + 1);
       if (Number.isFinite(pos) && cid) {
-        const idx = merged.findIndex(
-          (r) => (r.position ?? 0) > pos || ((r.position ?? 0) === pos && r.id > cid),
-        );
-        return (idx === -1 ? [] : merged.slice(idx)).slice(0, limit);
+        return merged.filter((r) => (r.position ?? 0) > pos || ((r.position ?? 0) === pos && r.id > cid));
       }
     }
-    const parsed = Number(cursor);
-    if (Number.isFinite(parsed) && parsed >= 0) return merged.slice(Math.floor(parsed), Math.floor(parsed) + limit);
   }
-  return merged.slice(0, limit);
+  return merged;
+}
+
+function channelKeysetCursor(cursor?: string | null): { position: number; id: string } | null {
+  if (!cursor) return null;
+  const sep = cursor.indexOf(":");
+  if (sep <= 0) return null;
+  const position = Number(cursor.slice(0, sep));
+  const id = cursor.slice(sep + 1);
+  return Number.isFinite(position) && id ? { position, id } : null;
+}
+
+function channelNumericOffset(cursor?: string | null): number | null {
+  if (!cursor) return null;
+  const parsed = Number(cursor);
+  return Number.isFinite(parsed) && parsed >= 0 ? Math.floor(parsed) : null;
 }
 
 export async function listChannels(opts?: { limit?: number; cursor?: string | null; workspaceId?: string | null; db?: any }) {
   const limit = Math.min(200, Math.max(1, opts?.limit ?? 200));
+  const cursor = opts?.cursor ?? null;
+  const keysetCursor = channelKeysetCursor(cursor);
+  const numericOffset = channelNumericOffset(cursor);
   if (opts?.db) {
     const db = opts.db;
     // §30 tenant scope: a named workspace serves scoped + legacy-global rows;
@@ -252,23 +360,17 @@ export async function listChannels(opts?: { limit?: number; cursor?: string | nu
       opts.workspaceId && opts.workspaceId.trim()
         ? or(eq(channels.workspaceId, opts.workspaceId), isNull(channels.workspaceId))
         : undefined;
-    let offset: number | undefined;
     let keyset: ReturnType<typeof and> | undefined;
-    if (opts?.cursor) {
-      const raw = String(opts.cursor);
-      const sep = raw.indexOf(":");
-      if (sep > 0) {
-        const pos = Number(raw.slice(0, sep));
-        const id = raw.slice(sep + 1);
-        if (Number.isFinite(pos) && id) {
-          keyset = and(isNull(channels.archivedAt), sql`(${channels.position}, ${channels.id}) > (${pos}, ${id})`) as any;
-        }
-      } else {
-        const parsed = Number(raw);
-        if (Number.isFinite(parsed) && parsed >= 0) offset = Math.floor(parsed);
-      }
+    if (keysetCursor) {
+      keyset = and(
+        isNull(channels.archivedAt),
+        sql`(${channels.position}, ${channels.id}) > (${keysetCursor.position}, ${keysetCursor.id})`,
+      ) as any;
     }
-    return db.query.channels.findMany({
+    // Unprovisioned tenant schema (stale BYODB): the replica cannot
+    // answer, so fall through to the local-first union below instead of 500.
+    try {
+      return await db.query.channels.findMany({
       where: and(
         ...[
           keyset ?? isNull(channels.archivedAt),
@@ -277,27 +379,80 @@ export async function listChannels(opts?: { limit?: number; cursor?: string | nu
       ) as any,
       orderBy: (table: any, { asc }: any) => [asc(table.position), asc(table.id)],
       limit,
-      ...(offset ? { offset } : {}),
-    });
+      ...(numericOffset ? { offset: numericOffset } : {}),
+      });
+    } catch (err) {
+      if (!isSchemaMismatchError(err)) throw err;
+      console.warn(`[channels] tenant PG schema missing; serving local list`);
+    }
   }
-  const [pgRows, localRows] = await Promise.all([
-    pgCatchNull(() =>      getDb().query.channels.findMany({
-        where: opts?.workspaceId && opts.workspaceId.trim()
-          ? (and(
-              isNull(channels.archivedAt),
-              or(eq(channels.workspaceId, opts.workspaceId), isNull(channels.workspaceId)),
-            ) as any)
-          : isNull(channels.archivedAt),
-        orderBy: (table: any, { asc }: any) => [asc(table.position), asc(table.id)],
-        limit: 200,
-      }),
-    ).then((rows) => rows ?? []),
-    // §30 tenant scope: a named workspace serves that scope's rows + legacy
-    // globals, mirroring the db-override path; no header keeps the legacy
-    // default-folder read.
-    localListChannels({ limit: 200, workspaceId: opts?.workspaceId ?? null }),
-  ]);
-  return mergeChannelLists(pgRows, localRows, limit, opts?.cursor ?? null);
+  // Direct DB callers retain PostgreSQL OFFSET behavior. Only an in-memory
+  // union needs the cap to bound its merge window; schema fallback reaches it.
+  if (numericOffset !== null && numericOffset > MAX_NUMERIC_CHANNEL_OFFSET) {
+    throw new ChannelOffsetLimitError();
+  }
+  // Legacy offsets remain available through 10,000. Larger result pages
+  // should use `(position, id)` cursors instead of growing an in-memory merge.
+  const targetCount = numericOffset === null ? limit : numericOffset + limit;
+  const localSnapshot = await localChannelListSnapshot({
+    limit: targetCount,
+    cursor: keysetCursor ? cursor : null,
+    workspaceId: opts?.workspaceId ?? null,
+  });
+  // One Local file read supplies both the visible page and shadow IDs. Check
+  // only this bounded PG candidate batch; no IDs become SQL bind parameters.
+  const localIdSnapshot = localSnapshot.ids;
+  const localRows = localSnapshot.rows;
+  const pgRows: any[] = [];
+  let scanCursor = keysetCursor;
+
+  while (true) {
+    const batch = await pgCatchNull(() => getDb().query.channels.findMany({
+      where: and(
+        ...[
+          isNull(channels.archivedAt),
+          ...(opts?.workspaceId && opts.workspaceId.trim()
+            ? [or(eq(channels.workspaceId, opts.workspaceId), isNull(channels.workspaceId))]
+            : []),
+          ...(scanCursor
+            ? [sql`(${channels.position}, ${channels.id}) > (${scanCursor.position}, ${scanCursor.id})`]
+            : []),
+        ] as any[],
+      ) as any,
+      orderBy: (table: any, { asc }: any) => [asc(table.position), asc(table.id)],
+      limit: CHANNEL_DB_PAGE_SIZE,
+    })).then((rows) => rows ?? []);
+
+    if (batch.length === 0) break;
+    const candidateIds = new Set(batch.map((row: any) => row.id as string));
+    const shadowedIds = new Set([...candidateIds].filter((id) => localIdSnapshot.has(id)));
+    pgRows.push(...batch.filter((row: any) => !shadowedIds.has(row.id)));
+
+    const lastScanned = batch[batch.length - 1];
+    const nextCursor = { position: Number(lastScanned.position), id: String(lastScanned.id) };
+    if (
+      !Number.isFinite(nextCursor.position) ||
+      !nextCursor.id ||
+      (scanCursor && compareChannelOrder(nextCursor, scanCursor) <= 0)
+    ) {
+      throw new Error("Channel list query did not advance its keyset cursor");
+    }
+    scanCursor = nextCursor;
+
+    const candidates = mergeChannelRows(pgRows, localRows, keysetCursor ? cursor : null);
+    if (
+      candidates.length >= targetCount &&
+      compareChannelOrder(scanCursor, candidates[targetCount - 1]) >= 0
+    ) {
+      break;
+    }
+    if (batch.length < CHANNEL_DB_PAGE_SIZE) break;
+  }
+
+  const merged = mergeChannelRows(pgRows, localRows, keysetCursor ? cursor : null);
+  return numericOffset === null
+    ? merged.slice(0, limit)
+    : merged.slice(numericOffset, numericOffset + limit);
 }
 
 export async function createChannel(body: CreateChannelBody, dbOverride?: any, workspaceId?: string | null) {
@@ -309,13 +464,18 @@ export async function createChannel(body: CreateChannelBody, dbOverride?: any, w
     ? String(workspaceId).trim()
     : (categoryId ? ((await getCategoryById(categoryId).catch(() => null)) as { workspaceId?: string | null } | null)?.workspaceId ?? null : null);
   if (dbOverride) {
+  try {
     const db = dbOverride;
     const [categoryOk, existingSameName] = await Promise.all([
       categoryId ? categoryExists(categoryId, db) : Promise.resolve(true),
       db.query.channels.findFirst({
-        where: (table: any, { and, eq, isNull }: any) => and(
-          eq(table.name, body.name.trim().toLowerCase()),
-          categoryId ? eq(table.categoryId, categoryId) : isNull(table.categoryId)
+        // CHN-002/003 (db-handle parity): compare lower(name) on both sides and
+        // skip archived rows, matching the service path. Workspace scoping of
+        // this legacy path is still open (CHN-013).
+        where: (table: any, { and, eq, isNull, sql }: any) => and(
+          sql`lower(${table.name}) = ${body.name.trim().toLowerCase()}`,
+          categoryId ? eq(table.categoryId, categoryId) : isNull(table.categoryId),
+          isNull(table.archivedAt),
         )
       }),
     ]);
@@ -339,10 +499,15 @@ export async function createChannel(body: CreateChannelBody, dbOverride?: any, w
       })
       .returning();
     return { channel: res } as const;
+  } catch (err) {
+    if (!isSchemaMismatchError(err)) throw err;
+    console.warn(`[channels] tenant PG schema missing; createChannel served locally`);
+  }
   }
 
   // Union-aware guards across both tiers.
-  if (categoryId && !(await categoryExists(categoryId))) {
+  // CHN-007: scope the parent-category check to the resolved workspace.
+  if (categoryId && !(await categoryExists(categoryId, undefined, wsResolved))) {
     return { error: "category", categoryId } as const;
   }
   if (!(wsResolved && String(wsResolved).trim())) {
@@ -364,10 +529,16 @@ export async function createChannel(body: CreateChannelBody, dbOverride?: any, w
       );
     })(),
     pgCatchNull(() =>      getDb().query.channels.findFirst({
-        where: (table: any, { and, eq, isNull }: any) => and(
-          eq(table.name, body.name.trim().toLowerCase()),
+        // CHN-002: compare lower(name) on BOTH sides. Rows store the name
+        // verbatim, so eq(name, lower(input)) missed case variants.
+        // CHN-003: archived rows are reusable names on both tiers, so the PG
+        // guard must skip them exactly like the local scan (localListChannels
+        // filters archivedAt === null) and localCreateChannel do.
+        where: (table: any, { and, eq, isNull, sql }: any) => and(
+          sql`lower(${table.name}) = ${body.name.trim().toLowerCase()}`,
           categoryId ? eq(table.categoryId, categoryId) : isNull(table.categoryId),
           eq(table.workspaceId, ws),
+          isNull(table.archivedAt),
         ),
       }),
     ).then((r) => Boolean(r)),
@@ -408,15 +579,22 @@ export async function createChannel(body: CreateChannelBody, dbOverride?: any, w
 
 export async function getChannel(id: string, dbOverride?: any) {
   if (dbOverride) {
-    return dbOverride.query.channels.findFirst({
+    try {
+      return await dbOverride.query.channels.findFirst({
       where: eq(channels.id, id),
     });
+    } catch (err) {
+      // Unprovisioned tenant schema (stale BYODB): answer from local.
+      if (!isSchemaMismatchError(err)) throw err;
+      console.warn(`[channels] tenant PG schema missing; getChannel ${id} served locally`);
+    }
   }
   return (await localGetChannel(id)) ?? (await pgCatchNull(() => getDb().query.channels.findFirst({ where: eq(channels.id, id) })));
 }
 
 export async function updateChannel(id: string, body: UpdateChannelBody, dbOverride?: any) {
   if (dbOverride) {
+  try {
     const db = dbOverride;
     const [existing, categoryOk] = await Promise.all([
       getChannel(id, db),
@@ -442,6 +620,10 @@ export async function updateChannel(id: string, body: UpdateChannelBody, dbOverr
       .where(eq(channels.id, id))
       .returning();
     return { channel: updated } as const;
+  } catch (err) {
+    if (!isSchemaMismatchError(err)) throw err;
+    console.warn(`[channels] tenant PG schema missing; updateChannel ${id} served locally`);
+  }
   }
 
   const existing = await getChannel(id);
@@ -450,7 +632,38 @@ export async function updateChannel(id: string, body: UpdateChannelBody, dbOverr
   if (patch.categoryId && !(await categoryExists(patch.categoryId))) {
     return { error: "category", categoryId: patch.categoryId } as const;
   }
+  // CHN-001: renames need the same duplicate-name guard as creates.
+  // Without it a rename silently collides into an existing (name, category).
+  if (typeof patch.name === "string" && patch.name.trim() && patch.name.trim() !== (existing as any).name) {
+    const targetCat = patch.categoryId !== undefined ? patch.categoryId : (existing as any).categoryId ?? null;
+    const ws = (existing as any).workspaceId ?? null;
+    const [localRows, pgClash] = await Promise.all([
+      localListChannels({ limit: 200, workspaceId: ws }),
+      // Tier parity: the local scan only sees local rows, so a PG-only
+      // (legacy) duplicate would let the rename through in dual mode.
+      pgCatchNull(() =>
+        getDb().query.channels.findFirst({
+          where: (table: any, { and, eq, isNull, ne, sql }: any) => and(
+            sql`lower(${table.name}) = ${patch.name.trim().toLowerCase()}`,
+            targetCat ? eq(table.categoryId, targetCat) : isNull(table.categoryId),
+            isNull(table.archivedAt),
+            ne(table.id, id),
+          ),
+        }),
+      ).then((r) => Boolean(r)),
+    ]);
+    const localClash = localRows.some(
+      (r: any) => r.id !== id && String(r.name).trim().toLowerCase() === patch.name.trim().toLowerCase() && (r.categoryId ?? null) === targetCat,
+    );
+    if (localClash || pgClash) return { error: "duplicate_name", name: patch.name } as const;
+  }
   const ctx = await tierContextFor(existing.workspaceId ?? null);
+  // EVT-04: channel mutation may change ownership — drop the memoized
+  // events workspace so the next record re-resolves.
+  try {
+    const { eventsGate } = await import("../events/events-gate.js");
+    (eventsGate as unknown as { invalidateChannelWorkspace?: (id: string) => void }).invalidateChannelWorkspace?.(id);
+  } catch {}
   const full = { ...existing };
   if (patch.categoryId !== undefined) full.categoryId = patch.categoryId;
   if (patch.folderPath !== undefined) full.folderPath = patch.folderPath;
@@ -518,19 +731,25 @@ async function settingsWorkspaceScope(channelId: string, explicit?: string | nul
   } catch {
     // fall through to the default scope
   }
+  // CHN-010: the default fallback is now LOUD. A temporarily-unreadable
+  // channel row used to silently misfile pins into the default scope.
+  console.warn(`[channels] settings scope for ${channelId} unresolved; using default scope`);
   return DEFAULT_WORKSPACE_SCOPE;
 }
 
 export async function getChannelSettings(channelId: string, dbOverride?: any, workspaceId?: string | null) {
   const scope = await settingsWorkspaceScope(channelId, workspaceId);
-  const local = await localGetChannelSettings(channelId, scope);
-  if (local || dbOverride) {
-    if (local) return local;
+  // CHN-011: an explicit handle pins PG first (was: local won even with a
+  // db override, unlike every other op). Local stays the fallback.
+  if (dbOverride) {
     const row = await dbOverride.query.channelSettings.findFirst({
       where: and(eq(channelSettings.channelId, channelId), eq(channelSettings.workspaceId, scope)),
-    });
-    return row ?? null;
+    }).catch(() => null);
+    if (row) return row;
   }
+  const local = await localGetChannelSettings(channelId, scope);
+  if (local) return local;
+  if (dbOverride) return null;
   const pg = await pgCatchNull(() =>
     getDb().query.channelSettings.findFirst({
       where: and(eq(channelSettings.channelId, channelId), eq(channelSettings.workspaceId, scope)),
@@ -552,6 +771,7 @@ export async function updateChannelSettings(channelId: string, patch: ChannelSet
   const scopeWhere = (table: typeof channelSettings) =>
     and(eq(table.channelId, channelId), eq(table.workspaceId, scope));
   if (dbOverride) {
+  try {
     const db = dbOverride;
     const existing = await db.query.channelSettings.findFirst({ where: scopeWhere(channelSettings) });
     if (!existing) {
@@ -560,22 +780,55 @@ export async function updateChannelSettings(channelId: string, patch: ChannelSet
     }
     const [updated] = await db.update(channelSettings).set(values as any).where(scopeWhere(channelSettings)).returning();
     return { settings: updated } as const;
+  } catch (err) {
+    if (!isSchemaMismatchError(err)) throw err;
+    console.warn(`[channels] tenant PG schema missing; updateChannelSettings served locally`);
   }
-  await pgCatchNull(async () => {
-    const db = getDb();
-    const existing = await db.query.channelSettings.findFirst({ where: scopeWhere(channelSettings) });
-    if (!existing) {
-      await db.insert(channelSettings).values({ channelId, workspaceId: scope, ...values } as any);
-    } else {
-      await db.update(channelSettings).set(values as any).where(scopeWhere(channelSettings));
-    }
+  }
+  // CHN-032/CHN-008: settings now run through dualWrite like every other
+  // write — local commit FIRST, PG replica second, and a failed replica leg
+  // is queued on the outbox (replayed by CHN-009) with dualWrite's warn.
+  // Was: PG attempted first, local second, no queue, no convergence path.
+  const ctx = await tierContextFor(scope);
+  // Partial patch semantics: only supplied pins ride the PG leg (and the
+  // outbox row), so an unspecified pin is never nulled in PG. Absent keys
+  // insert as NULL, exactly like the pre-dualWrite upsert did.
+  const pgSet: Record<string, unknown> = { updatedAt: new Date() };
+  if (patch.pinnedRuntime !== undefined) pgSet.pinnedRuntime = patch.pinnedRuntime;
+  if (patch.activeAgentId !== undefined) pgSet.activeAgentId = patch.activeAgentId;
+  if (patch.defaultAgentId !== undefined) pgSet.defaultAgentId = patch.defaultAgentId;
+  const replicaRow: Record<string, unknown> = {
+    channelId,
+    workspaceId: scope,
+    ...pgSet,
+    updatedAt: new Date().toISOString(),
+  };
+  const settings = await dualWrite({
+    ctx,
+    entity: "channelSettings",
+    op: "upsert",
+    id: channelId,
+    row: replicaRow,
+    pgWrite: async () => {
+      const db = getDb();
+      // Column-split ownership: fs_policy/safety_settings belong to the
+      // safety routes — the pin upsert must never clobber them.
+      await db
+        .insert(channelSettings)
+        .values({ channelId, workspaceId: scope, ...pgSet } as any)
+        .onConflictDoUpdate({
+          target: [channelSettings.channelId, channelSettings.workspaceId],
+          set: pgSet as any,
+        });
+    },
+    localWrite: () => localUpsertChannelSettings(channelId, patch, scope),
   });
-  const settings = await localUpsertChannelSettings(channelId, patch, scope);
   return { settings } as const;
 }
 
 export async function deleteChannel(id: string, dbOverride?: any) {
   if (dbOverride) {
+    try {
     const db = dbOverride;
     const existing = await getChannel(id, db);
     if (!existing) return { notFound: true } as const;
@@ -588,6 +841,11 @@ export async function deleteChannel(id: string, dbOverride?: any) {
       .returning();
     if (deleted.length === 0) return { notFound: true } as const;
     return { deleted: true } as const;
+    } catch (err) {
+      // Unprovisioned tenant schema: fall through to the local-first path.
+      if (!isSchemaMismatchError(err)) throw err;
+      console.warn(`[channels] tenant PG schema missing; deleteChannel ${id} served locally`);
+    }
   }
   const existing = await getChannel(id);
   if (!existing) return { notFound: true } as const;
@@ -607,4 +865,58 @@ export async function deleteChannel(id: string, dbOverride?: any) {
     },
     localWrite: () => localDeleteChannel(id),
   });
+}
+
+// ─── Local workspace seeding (gate port for routes/workspace.ts) ────────
+// CHN-020: Workspace provisioning used to dynamic-import channel-local-store
+// directly, making this domain's internals a de-facto cross-domain API. This
+// port owns the seed shape; the route switches to it in the integration step.
+
+/**
+ * Seed the default category + #general channel into a LOCAL workspace folder.
+ * Idempotent: an existing (name, category) pair returns the existing rows
+ * instead of duplicating, so repeated provisioning never piles up rows.
+ */
+export async function seedLocalChannelPresets(workspaceId: string): Promise<{ category: any; channel: any }> {
+  if (!workspaceId || !String(workspaceId).trim()) {
+    throw new Error("seedLocalChannelPresets: workspaceId is required");
+  }
+  const ws = String(workspaceId).trim();
+  let category = (await localListCategoriesWithChannels({ workspaceId: ws }))
+    .find((c: any) => String(c.name).trim().toLowerCase() === "general") ?? null;
+  if (!category) {
+    category = await localCreateCategory({ name: "General", workspaceId: ws, createdBy: "system", position: 0 });
+  }
+  const channel =
+    (await localGetChannelByName("general", category.id, ws)) ??
+    (await (async () => {
+      const created = await localCreateChannel({
+        name: "general",
+        type: "standard",
+        createdBy: "system",
+        categoryId: category.id,
+        workspaceId: ws,
+        position: 0,
+      });
+      // A concurrent seed may have won the race: fall back to the row.
+      if ((created as any).channel) return (created as any).channel;
+      return await localGetChannelByName("general", category.id, ws);
+    })());
+  return { category, channel };
+}
+
+/** First non-archived local row with this (lowercased) name, or null. */
+async function localGetChannelByName(
+  name: string,
+  categoryId: string | null,
+  workspaceId: string,
+): Promise<any | null> {
+  const rows = await localListChannels({ limit: 200, workspaceId });
+  return (
+    rows.find(
+      (r: any) =>
+        String(r.name).trim().toLowerCase() === name.trim().toLowerCase() &&
+        (r.categoryId ?? null) === categoryId,
+    ) ?? null
+  );
 }

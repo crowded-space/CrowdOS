@@ -28,7 +28,10 @@ export function markAgentIdle(agentId: string): void {
   locallyWorkingAgents.delete(agentId);
 }
 
-async function touchWorkingAgents(): Promise<void> {
+// Q-1: exported so the bullmq maintenance worker (handleHeartbeatTouch, via
+// typeof check) can actually touch. Module-private meant the repeatable was
+// a silent no-op and live agents risked orphan-sweep.
+export async function touchWorkingAgents(): Promise<void> {
   if (locallyWorkingAgents.size === 0) return;
   // Agents owns runtime_states writes; Shared keeps only the in-mem lease.
   const { agentGate } = await import("../../agents/agent-gate.js");

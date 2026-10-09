@@ -21,3 +21,23 @@ export function logMetric(fields: MetricLogFields): void {
   });
   console.log(JSON.stringify(safe));
 }
+
+export interface WarnLogFields {
+  stage: string;
+  [key: string]: unknown;
+}
+
+/**
+ * Structured warn sibling of logMetric (SH-005): same one-JSON-line +
+ * redaction contract, emitted on console.warn with level "warn" so operators
+ * can filter fail-open degradation without parsing every metric line.
+ */
+export function logWarn(fields: WarnLogFields): void {
+  const safe = redactSecrets({
+    ts: new Date().toISOString(),
+    level: "warn",
+    msg: "warn",
+    ...fields,
+  });
+  console.warn(JSON.stringify(safe));
+}

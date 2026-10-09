@@ -1,7 +1,7 @@
 # SCL-1: Artillery — 8h soak (nightly)
-# Run nightly: BASE_URL=http://localhost:3001 SOAK_DURATION=28800 npx artillery run load/artillery/soak.yml
+# Run nightly: BASE_URL=http://localhost:12077 SOAK_DURATION=28800 npx artillery run load/artillery/soak.yml
 config:
-  target: "{{ $env.BASE_URL || 'http://localhost:3001' }}"
+  target: "{{ $env.BASE_URL || 'http://localhost:12077' }}"
   phases:
     - duration: "{{ $env.SOAK_DURATION || 120 }}"
       arrivalRate: 20

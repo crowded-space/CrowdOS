@@ -2,6 +2,7 @@ import type { FastifyInstance } from "fastify";
 
 import { getMetricsSnapshot } from "../shared/core/perf-metrics.js";
 import { observabilityGate } from "../observability/observability-gate.js";
+import { eventsGate } from "../events/events-gate.js";
 
 /**
  * OBS-1: GET /metrics — perfMetrics latency snapshot (p50/p95 per stage).
@@ -15,7 +16,11 @@ export async function metricsRoutes(app: FastifyInstance) {
     const traceStats = (() => {
       try { return observabilityGate.getTraceStats(); } catch { return null; }
     })();
-    return { metrics: getMetricsSnapshot(), traces: traceStats };
+    // EVT-08: event-log counters (appended/skipped/failed) for alerting.
+    const eventLog = (() => {
+      try { return eventsGate.stats; } catch { return null; }
+    })();
+    return { metrics: getMetricsSnapshot(), traces: traceStats, eventLog };
   });
 
   // Alias under /api for client parity (frontend fetches /api/metrics via proxy)
@@ -23,6 +28,9 @@ export async function metricsRoutes(app: FastifyInstance) {
     const traceStats = (() => {
       try { return observabilityGate.getTraceStats(); } catch { return null; }
     })();
-    return { metrics: getMetricsSnapshot(), traces: traceStats };
+    const eventLog = (() => {
+      try { return eventsGate.stats; } catch { return null; }
+    })();
+    return { metrics: getMetricsSnapshot(), traces: traceStats, eventLog };
   });
 }

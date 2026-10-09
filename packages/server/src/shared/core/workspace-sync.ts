@@ -31,7 +31,7 @@ import {
 import { agentGate, type LocalAgentRow } from "../../agents/agent-gate.js";
 import { globalBroker } from "../sockets/register-socket-server.js";
 import { LibrarianRuntime } from "./librarian-runtime.js";
-import { agents, categories, channelSequences, channels, messages, workspaces } from "../../db/schema.js";
+import { agents, categories, channelSequences, channelSettings, channels, messages, workspaces } from "../../db/schema.js";
 import {
   mutateJsonArray,
   mutateJsonObject,
@@ -43,7 +43,7 @@ import {
 } from "./local-file.js";
 import { resolveWorkspaceAgentsDir } from "./local-file.js";
 import { readOutbox, removeOutboxIds, type OutboxEntry } from "./outbox.js";
-import type { LocalChannelRow, LocalCategoryRow } from "../../channels/channel-local-store.js";
+import type { LocalChannelRow, LocalChannelSettingsRow, LocalCategoryRow } from "../../channels/channel-local-store.js";
 import type { LocalMessageRow } from "../../messages/message-local-store.js";
 
 export interface PairingResult {
@@ -204,11 +204,12 @@ async function repairPgCounter(db: any, channelId: string, maxSeq: number): Prom
 export async function pushWorkspaceToDb(workspaceId: string, opts: { pruneExtras?: boolean } = {}): Promise<{
   categories: number;
   channels: number;
+  settings: number;
   agents: number;
   messages: number;
 }> {
   const db = await tenantDb(workspaceId);
-  const counts = { categories: 0, channels: 0, agents: 0, messages: 0 };
+  const counts = { categories: 0, channels: 0, settings: 0, agents: 0, messages: 0 };
 
   const allCats = (await readJsonArray<LocalCategoryRow>("categories.json", workspaceId).catch(() => []))
     .filter((c) => (c.workspaceId ?? "default") === workspaceId);
@@ -234,6 +235,14 @@ export async function pushWorkspaceToDb(workspaceId: string, opts: { pruneExtras
     });
     counts.agents++;
   }
+  // AGT-007: synced rows bypass service mutations; invalidate the roster so
+  // the next list() is fresh.
+  if (counts.agents > 0) {
+    try {
+      const { agentGate } = await import("../../agents/agent-gate.js");
+      (agentGate as unknown as { invalidateRosterCache?: () => void }).invalidateRosterCache?.();
+    } catch {}
+  }
 
   const allChannels = (await readJsonArray<LocalChannelRow>("channels.json", workspaceId).catch(() => []))
     .filter((c) => (c.workspaceId ?? "default") === workspaceId);
@@ -245,6 +254,26 @@ export async function pushWorkspaceToDb(workspaceId: string, opts: { pruneExtras
       set: withoutId(row),
     });
     counts.channels++;
+  }
+
+  // CHN-009: settings pins are their own entity now (outbox replay + push).
+  // Push only rows whose channel is in this workspace's pushed set — an
+  // orphan pin would violate the channel_id FK and abort the whole push.
+  const channelIds = new Set(allChannels.map((c) => c.id));
+  const allSettings = (await readJsonArray<LocalChannelSettingsRow>("channel-settings.json", workspaceId).catch(() => []))
+    .filter((s) => (s.workspaceId ?? "default") === workspaceId && channelIds.has(s.channelId));
+  for (const s of allSettings) {
+    const row = reviveDates({ ...s }, ["updatedAt"]);
+    // Column-split ownership: only the pin columns are pushed; fs_policy /
+    // safety_settings stay with the safety routes.
+    await (db as any)
+      .insert(channelSettings)
+      .values(row)
+      .onConflictDoUpdate({
+        target: [channelSettings.channelId, channelSettings.workspaceId],
+        set: withoutId(row),
+      });
+    counts.settings++;
   }
 
   for (const c of allChannels) {
@@ -271,6 +300,7 @@ export async function pushWorkspaceToDb(workspaceId: string, opts: { pruneExtras
 export async function pullWorkspaceFromDb(workspaceId: string, opts: { force?: boolean } = {}): Promise<{
   categories: number;
   channels: number;
+  settings: number;
   agents: number;
   messages: number;
 }> {
@@ -279,7 +309,7 @@ export async function pullWorkspaceFromDb(workspaceId: string, opts: { force?: b
     if (!local.empty) throw new Error("Local workspace is not empty; use force to overwrite (flush-local).");
   }
   const db = await tenantDb(workspaceId);
-  const counts = { categories: 0, channels: 0, agents: 0, messages: 0 };
+  const counts = { categories: 0, channels: 0, settings: 0, agents: 0, messages: 0 };
 
   const dbCats = await (db as any).query.categories.findMany({
     where: eq(categories.workspaceId, workspaceId),
@@ -352,6 +382,28 @@ export async function pullWorkspaceFromDb(workspaceId: string, opts: { force?: b
     return [...rest, ...pulled];
   }, workspaceId);
 
+  // CHN-009: pull settings pins for this workspace's channels too, so a
+  // flush-local / import round-trip keeps the pins (was: local-only pins
+  // survived a flush but PG-side pins never came back).
+  const pulledChannelIds = new Set(dbChannels.map((c: any) => c.id));
+  const dbSettings = (await (db as any).query.channelSettings.findMany({
+    where: eq(channelSettings.workspaceId, workspaceId),
+  }).catch(() => []))
+    .filter((s: any) => pulledChannelIds.has(s.channelId));
+  await mutateJsonArray<LocalChannelSettingsRow>("channel-settings.json", (rows) => {
+    const rest = rows.filter((r) => (r.workspaceId ?? "default") !== workspaceId);
+    const pulled: LocalChannelSettingsRow[] = dbSettings.map((s: any) => ({
+      channelId: s.channelId,
+      workspaceId: s.workspaceId ?? workspaceId,
+      pinnedRuntime: s.pinnedRuntime ?? null,
+      activeAgentId: s.activeAgentId ?? null,
+      defaultAgentId: s.defaultAgentId ?? null,
+      updatedAt: new Date(s.updatedAt).toISOString(),
+    }));
+    counts.settings = pulled.length;
+    return [...rest, ...pulled];
+  }, workspaceId);
+
   for (const c of dbChannels) {
     const pgRows = await (db as any).query.messages.findMany({
       where: eq(messages.channelId, c.id),
@@ -389,6 +441,7 @@ export async function pullWorkspaceFromDb(workspaceId: string, opts: { force?: b
 export async function convergeWorkspace(workspaceId: string): Promise<{
   categories: number;
   channels: number;
+  settings: number;
   agents: number;
   messages: number;
 }> {
@@ -436,16 +489,58 @@ async function replayEntry(db: any, entry: OutboxEntry): Promise<void> {
     case "agent": {
       if (entry.op === "delete") {
         await db.delete(agents).where(eq(agents.id, entry.rowId));
+        try {
+          const { agentGate } = await import("../../agents/agent-gate.js");
+          (agentGate as unknown as { invalidateRosterCache?: () => void }).invalidateRosterCache?.();
+        } catch {}
         return;
       }
       const full = await mergeOver('agent');
       await db.insert(agents).values(full).onConflictDoUpdate({ target: agents.id, set: withoutId(full) });
+      try {
+        const { agentGate } = await import("../../agents/agent-gate.js");
+        (agentGate as unknown as { invalidateRosterCache?: () => void }).invalidateRosterCache?.();
+      } catch {}
       return;
     }
     case "message": {
       if (entry.op === "delete") return; // messages are immutable; tombstones are no-ops
       // Insert-ignore by id (PK): seq collisions across tiers must not drop rows.
       await db.insert(messages).values(row).onConflictDoNothing({ target: messages.id });
+      // MSG-020: repair the PG counter upward as part of the replay (same
+      // GREATEST upsert as repairPgCounter and the append replica leg). The
+      // failed replica leg may have been the only writer of channel_sequences
+      // for this seq, so a later PG-side allocateSequence would reissue it and
+      // the reissued row would be silently dropped by the targeted
+      // onConflictDoNothing.
+      const replaySeq = Number((row as any)?.sequenceNumber);
+      const replayChannelId = (row as any)?.channelId;
+      if (typeof replayChannelId === "string" && Number.isFinite(replaySeq)) {
+        await repairPgCounter(db, replayChannelId, replaySeq);
+      }
+      return;
+    }
+    case "channelSettings": {
+      // CHN-009: settings pins replay into the (channel_id, workspace_id)
+      // composite-PK row. Upsert only the pin columns — fs_policy /
+      // safety_settings stay with the safety routes (column-split ownership),
+      // so a replay never clobbers them.
+      if (entry.op === "delete") return; // pins are upsert-only; no tombstone exists
+      const pinRow = (row ?? {}) as Record<string, unknown>;
+      // Partial rows (single-pin patches) merge over the existing PG row so
+      // replay never nulls a pin it does not carry.
+      const set: Record<string, unknown> = { updatedAt: new Date() };
+      for (const key of ["pinnedRuntime", "activeAgentId", "defaultAgentId"] as const) {
+        if (key in pinRow) set[key] = pinRow[key] ?? null;
+      }
+      await db
+        .insert(channelSettings)
+        .values({
+          channelId: entry.rowId,
+          workspaceId: (pinRow.workspaceId ?? entry.workspaceId ?? "default") as string,
+          ...set,
+        })
+        .onConflictDoUpdate({ target: [channelSettings.channelId, channelSettings.workspaceId], set });
       return;
     }
   }

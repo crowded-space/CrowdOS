@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { ArrowRight, AtSign, Check, Clock, Inbox, RotateCcw, ShieldAlert, TriangleAlert, Undo2 } from 'lucide-react';
+import { ArrowRight, AtSign, Check, Clock, Inbox, RotateCcw, ShieldAlert, TriangleAlert, Undo2, X } from 'lucide-react';
 import { useCrowdOSStore } from '@/stores/crowdOsStore';
 import { useShallow } from 'zustand/react/shallow';
 
@@ -56,6 +56,13 @@ export function OperationsInbox(): React.JSX.Element {
     setInboxError(null);
     decideApproval(approvalId, 'approved').catch(function (err) {
       setInboxError(err instanceof Error ? err.message : 'Failed to approve');
+    }).finally(function () { setApproveBusy(null); });
+  };
+  const handleDeny = function (approvalId: string) {
+    setApproveBusy(approvalId);
+    setInboxError(null);
+    decideApproval(approvalId, 'denied').catch(function (err) {
+      setInboxError(err instanceof Error ? err.message : 'Failed to deny');
     }).finally(function () { setApproveBusy(null); });
   };
   const handleRetry = function (key: string, runId: string | null) {
@@ -119,6 +126,15 @@ export function OperationsInbox(): React.JSX.Element {
                           className="h-7 px-2 rounded-lg border border-zinc-700 bg-zinc-800 text-zinc-200 hover:bg-zinc-700 disabled:opacity-40 inline-flex items-center gap-1 text-[11px] font-mono transition cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500/30"
                         >
                           <Check size={12} aria-hidden="true" />Approve
+                        </button>
+                        <button
+                          onClick={function () { handleDeny(req.id); }}
+                          disabled={busy}
+                          title="Deny this request"
+                          aria-label={'Deny ' + req.id}
+                          className="h-7 px-2 rounded-lg border border-zinc-700 bg-zinc-900 text-zinc-200 hover:bg-zinc-800 disabled:opacity-40 inline-flex items-center gap-1 text-[11px] font-mono transition cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500/30"
+                        >
+                          <X size={12} aria-hidden="true" />Deny
                         </button>
                         <button
                           onClick={function () { if (req.channelId && req.channelId !== activeChannelId) void setActiveChannel(req.channelId); }}

@@ -2,7 +2,7 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { setLocalStoreDirForTests } from "../shared/core/local-file.js";
 import { env } from "../shared/config/env.js";
@@ -96,6 +96,49 @@ describe("§30 channel settings are workspace-scoped", () => {
     // the "default" placeholder, so the legacy call shape keeps working.
     await channelGate.updateSettings("ch-orphan", { pinnedRuntime: "agentic" });
     const row = await channelGate.getSettings("ch-orphan");
-    expect(row).toMatchObject({ channelId: "ch-orphan", workspaceId: "default", pinnedRuntime: "agentic" });
+    expect(row).toMatchObject({ channelId: "ch-orphan", workspaceId: "default", pinnedRuntime: "agentic" }); // gate permissive; route enforces CHN-012
+    
+  });
+});
+
+// CHN-011: an explicit db handle pins PG first (was: local won even with an
+// override, unlike every other op). Local stays the fallback.
+describe("CHN-011: db override pins PG first for settings reads", () => {
+  it("returns the PG row over an existing local row", async () => {
+    await channelGate.updateSettings("ch-db", { pinnedRuntime: "coding" }, undefined, "ws-db");
+    const fakeDb = {
+      query: {
+        channelSettings: {
+          findFirst: async () => ({
+            channelId: "ch-db", workspaceId: "ws-db", pinnedRuntime: "research",
+            activeAgentId: null, defaultAgentId: null, updatedAt: new Date(),
+          }),
+        },
+      },
+    };
+    const got = await channelGate.getSettings("ch-db", fakeDb, "ws-db");
+    expect(got?.pinnedRuntime).toBe("research");
+  });
+
+  it("falls back to the local row when the handle has no PG row", async () => {
+    await channelGate.updateSettings("ch-db2", { pinnedRuntime: "coding" }, undefined, "ws-db");
+    const fakeDb = { query: { channelSettings: { findFirst: async () => null } } };
+    const got = await channelGate.getSettings("ch-db2", fakeDb, "ws-db");
+    expect(got?.pinnedRuntime).toBe("coding");
+  });
+});
+
+// CHN-010: an unresolved scope degrades to the documented default LOUDLY
+// (was: silent misfiling), so operators can see the fallback in logs.
+describe("CHN-010: unresolved scope warns before falling back to default", () => {
+  it("emits the scope warning once when the channel row is unresolvable", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      await channelGate.updateSettings("ch-no-row", { pinnedRuntime: "coding" });
+      const calls = warn.mock.calls.map((c) => String(c[0]));
+      expect(calls.some((m) => m.includes("settings scope") && m.includes("ch-no-row") && m.includes("default"))).toBe(true);
+    } finally {
+      warn.mockRestore();
+    }
   });
 });

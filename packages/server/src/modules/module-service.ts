@@ -115,7 +115,9 @@ export async function findReferencingAgents(moduleType: ModuleType, moduleId: st
   const { agentRegistry } = await import("../agents/agent-gate.js");
   // null/undefined = legacy cross-workspace search (both legs: PG has no
   // workspace filter, local fans out); a named scope stays tenant-scoped.
-  const roster = await agentRegistry.list(workspaceId == null ? {} : { workspaceId });
+  // M-05: guard lookups need the full roster — the default 200 cap
+  // under-reported blockers and the delete could cascade after a partial 409.
+  const roster = await agentRegistry.list({ ...(workspaceId == null ? {} : { workspaceId }), limit: 10000 });
   return referrersOf(roster, moduleType, moduleId);
 }
 
@@ -164,8 +166,9 @@ export interface ModuleReferenceIds {
 
 // Single choke point for module-reference validation (Agents calls this via gate).
 // ponytail: check-then-use TOCTOU remains (delete between validate and insert
-// still races); full fix needs DB onDelete:cascade / FK constraint — out of
-// scope, see schema.ts follow-up.
+// still races). M-02: schema.ts:224-228 ALREADY carries the FKs (instruction
+// NOT NULL + cascade; others set null), so the 409 guard is safety-critical,
+// not advisory — a raced delete cascades instead of failing.
 export async function validateModuleReferences(ids: ModuleReferenceIds, dbOverride?: any, workspaceId?: string | null): Promise<void> {
   // Local tier: PG rows don't exist here, so validate against the local store.
   // Opt-in via workspaceId (Agents passes it on create); absent scope keeps
@@ -232,8 +235,11 @@ export async function testConnectionHelper(
   try {
     if (provider === "google") {
       try {
+        if (!modelName) {
+          return { success: false, message: "Missing model name for provider google" };
+        }
         const testModule = {
-          modelName: modelName || "gemini-2.0-flash",
+          modelName,
           apiKey: apiKey || "",
           baseUrl: endpointUrl || ""
         };
@@ -279,7 +285,7 @@ export async function testConnectionHelper(
           "Authorization": `Bearer ${apiKey}`
         },
         body: JSON.stringify({
-          model: modelName || "gpt-4o-mini",
+          model: modelName,
           messages: [{ role: "user", content: "ping" }],
           max_tokens: 1
         }),
@@ -301,7 +307,7 @@ export async function testConnectionHelper(
           "anthropic-version": "2023-06-01"
         },
         body: JSON.stringify({
-          model: modelName || "claude-3-5-sonnet-20241022",
+          model: modelName,
           messages: [{ role: "user", content: "ping" }],
           max_tokens: 1
         }),
@@ -331,6 +337,26 @@ export async function testConnectionHelper(
         return { success: false, message: `Ollama API returned status ${response.status}` };
       }
     } else {
+      // M-01: custom providers have no fixed probe endpoint. Validate the
+      // endpoint shape (reachable URL + model name) instead of reporting a
+      // misleading Unknown provider error.
+      if (provider === "custom") {
+        if (!endpointUrl) {
+          return { success: false, message: "Custom provider needs an endpointUrl to probe." };
+        }
+        try {
+          const parsed = new URL(endpointUrl);
+          if (!/^https?:$/.test(parsed.protocol)) {
+            return { success: false, message: `Custom endpointUrl must be http(s): ${endpointUrl}` };
+          }
+        } catch {
+          return { success: false, message: `Custom endpointUrl is not a valid URL: ${endpointUrl}` };
+        }
+        if (!modelName) {
+          return { success: false, message: "Custom provider needs a model name." };
+        }
+        return { success: true, message: "Custom endpoint shape validated (no live probe for custom providers).", offline: true };
+      }
       return { success: false, message: `Unknown provider "${provider}": no probe endpoint, configuration not validated.` };
     }
   } catch (error: any) {

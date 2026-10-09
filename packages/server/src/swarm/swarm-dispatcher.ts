@@ -236,7 +236,8 @@ export async function dispatchSwarmTasks(input: DispatchInput): Promise<Map<stri
     for (const t of newlyBlocked) {
       status.set(t.id, "blocked");
       const reason = `blocked: dependency failed (${t.dependsOn.filter((d) => failedIds.has(d)).join(",")})`;
-      results.set(t.id, { taskId: t.id, status: "failed", error: reason });
+      // SW-05: map agrees with the persisted row status.
+      results.set(t.id, { taskId: t.id, status: "blocked", error: reason });
       // Persist as "blocked" (not "failed"): the row's own status is what a
       // reader sees after the run, and "blocked" is in the swarm_task_status enum.
       await persistStatus(t.id, "blocked", reason);
@@ -253,7 +254,7 @@ export async function dispatchSwarmTasks(input: DispatchInput): Promise<Map<stri
         if (status.get(t.id) !== "pending") continue;
         status.set(t.id, "blocked");
         const reason = `blocked: unsatisfied dependencies ${t.dependsOn.join(",")}`;
-        results.set(t.id, { taskId: t.id, status: "failed", error: reason });
+        results.set(t.id, { taskId: t.id, status: "blocked", error: reason });
         await persistStatus(t.id, "blocked", reason);
       }
       break;

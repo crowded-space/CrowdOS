@@ -47,6 +47,14 @@ export class TtlCache<T> {
       }
     }
   }
+  /** Invalidate every key ending with the given suffix (SK-003 cross-scope). */
+  invalidateSuffix(suffix: string): void {
+    for (const key of [...this.store.keys()]) {
+      if (key.endsWith(suffix)) {
+        this.store.delete(key);
+      }
+    }
+  }
 
   clear(): void {
     this.store.clear();

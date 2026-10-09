@@ -62,7 +62,7 @@ export class ContextPipelineManager {
   }
 
   invalidateModelModuleCache(moduleId?: string): void {
-    if (moduleId) modelModuleCache.delete(moduleId);
+    if (moduleId) modelModuleCache.invalidatePrefix(`${dbScopeKey()}:${moduleId}:`);
     else modelModuleCache.clear();
   }
 
@@ -75,18 +75,10 @@ export class ContextPipelineManager {
   }
 
   private async _assemble(ctx: ContextBuildContext): Promise<ContextPacket & { _modelConfig: ModelModuleConfig }> {
-    const defaultEnvApiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
-    let modelConfig: ModelModuleConfig = ctx.modelConfig || {
-      provider: "google",
-      modelName: "gemini-2.0-flash",
-      apiKey: defaultEnvApiKey,
-      temperature: 0.7,
-      maxOutputTokens: 2048,
-      topP: 0.95,
-    };
+    let modelConfig: ModelModuleConfig | null = ctx.modelConfig ?? null;
 
     if (!ctx.modelConfig && ctx.agent.modelModuleId) {
-      const moduleKey = `${dbScopeKey()}:${ctx.agent.modelModuleId}`;
+      const moduleKey = `${dbScopeKey()}:${ctx.agent.modelModuleId}:${ctx.workspaceId}`;
       const cached = modelModuleCache.get(moduleKey);
       if (cached) {
         modelConfig = cached;
@@ -96,7 +88,7 @@ export class ContextPipelineManager {
         let row: any = null;
         try {
           const { moduleGate } = await import("../../modules/module-gate.js");
-          row = await moduleGate.model.get(ctx.agent.modelModuleId);
+          row = await moduleGate.model.get(ctx.agent.modelModuleId, ctx.workspaceId);
         } catch {
           row = null;
         }
@@ -116,13 +108,24 @@ export class ContextPipelineManager {
             modelName: row.modelName,
             apiKey: storedKey || envApiKey || undefined,
             endpointUrl: row.endpointUrl ?? undefined,
-            temperature: row.temperature,
-            maxOutputTokens: row.maxOutputTokens,
+            temperature: row.temperature ?? undefined,
+            maxOutputTokens: row.maxOutputTokens ?? undefined,
             topP: row.topP ?? 0.95,
           };
           modelModuleCache.set(moduleKey, modelConfig);
         }
       }
+    }
+
+    if (!modelConfig) {
+      throw Object.assign(
+        new Error(
+          ctx.agent.modelModuleId
+            ? `Model module not found: ${ctx.agent.modelModuleId} (workspace ${ctx.workspaceId}). Register a provider and bind the agent to it instead of relying on a default.`
+            : `Agent ${ctx.agent.name} has no model module. Register a provider and bind the agent to it instead of relying on a default.`,
+        ),
+        { code: "MODEL_MODULE_NOT_CONFIGURED", statusCode: 400 },
+      );
     }
 
     // MODEL-1: routing decision at the single module resolution point. Chat,

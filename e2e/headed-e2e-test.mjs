@@ -37,8 +37,8 @@ async function runHeadedE2ETest() {
     // -------------------------------------------------------------
     // Step 1: Portal & Initialization
     // -------------------------------------------------------------
-    console.log('\n📍 [Step 1] Navigating to http://localhost:3000...');
-    await page.goto('http://localhost:3000', { waitUntil: 'domcontentloaded' });
+    console.log('\n📍 [Step 1] Navigating to http://localhost:22077...');
+    await page.goto('http://localhost:22077', { waitUntil: 'domcontentloaded' });
     await page.waitForTimeout(1500);
 
     await page.screenshot({ path: path.join(screenshotsDir, '01_portal_initial.png') });

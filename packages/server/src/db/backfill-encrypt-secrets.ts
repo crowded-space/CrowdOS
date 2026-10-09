@@ -1,3 +1,5 @@
+import { pathToFileURL } from "node:url";
+
 import { config as loadEnv } from "dotenv";
 loadEnv();
 
@@ -25,10 +27,18 @@ interface ColumnStat {
 
 const APPLY = process.argv.includes("--apply");
 
-async function backfillApiKeyColumn(
+// DB-001: --apply is meaningless without a key — encrypt() no-ops and the old
+// counter still reported success. The gate below refuses that mode; this helper
+// is also used for the dry-run key status line.
+export function hasEncryptionKey(source: Record<string, string | undefined> = process.env): boolean {
+  return Boolean(source.CREDENTIALS_ENCRYPTION_KEY?.trim());
+}
+
+export async function backfillApiKeyColumn(
   table: string,
   rows: { id: string; apiKey: string | null }[],
-  persist: (id: string, sealed: string) => Promise<void>
+  persist: (id: string, sealed: string) => Promise<void>,
+  apply: boolean = APPLY
 ): Promise<ColumnStat> {
   const stat: ColumnStat = { table, column: "api_key", scanned: rows.length, alreadyEncrypted: 0, plaintextFound: 0, encryptedNow: 0 };
 
@@ -39,8 +49,13 @@ async function backfillApiKeyColumn(
       continue;
     }
     stat.plaintextFound++;
-    if (APPLY) {
-      await persist(row.id, encrypt(row.apiKey));
+    if (apply) {
+      const sealed = encrypt(row.apiKey);
+      // DB-001: only persist/count when the stored value actually changes —
+      // without a key encrypt() returns the input unchanged, so an
+      // unconditional encryptedNow++ was a false success signal.
+      if (sealed === row.apiKey) continue;
+      await persist(row.id, sealed);
       stat.encryptedNow++;
     }
   }
@@ -48,6 +63,19 @@ async function backfillApiKeyColumn(
 }
 
 async function main(): Promise<void> {
+  // DB-001: fail fast before touching the DB — an --apply run without the key
+  // would write nothing and still print "Encrypted N row(s)".
+  if (APPLY && !hasEncryptionKey()) {
+    console.error(redactLogPayload({
+      stage: "backfill-secrets",
+      mode: "apply",
+      status: "skipped-no-key",
+      msg: "CREDENTIALS_ENCRYPTION_KEY is not set; refusing --apply (no value would change). Set the key and re-run.",
+    }));
+    process.exitCode = 1;
+    return;
+  }
+
   const db = getDb();
   const stats: ColumnStat[] = [];
 
@@ -94,8 +122,11 @@ async function main(): Promise<void> {
     }
     if (touched && APPLY) {
       const sealedMap = Object.fromEntries(entries.map(([k, v]) => [k, v ? encrypt(v) : v]));
-      await db.update(mcpServers).set({ envVars: sealedMap, updatedAt: new Date() }).where(eq(mcpServers.id, row.id));
-      mcpStat.encryptedNow++;
+      const changed = entries.some(([k, v]) => Boolean(v) && sealedMap[k] !== v);
+      if (changed) {
+        await db.update(mcpServers).set({ envVars: sealedMap, updatedAt: new Date() }).where(eq(mcpServers.id, row.id));
+        mcpStat.encryptedNow++;
+      }
     }
   }
   stats.push(mcpStat);
@@ -106,22 +137,30 @@ async function main(): Promise<void> {
 
   const totalPlaintext = stats.reduce((acc, s) => acc + s.plaintextFound, 0);
   if (!APPLY) {
+    const keyPresent = hasEncryptionKey();
     console.log(redactLogPayload({
       stage: "backfill-secrets",
-      msg: totalPlaintext > 0
-        ? `DRY RUN: ${totalPlaintext} credential value(s) would be encrypted. Re-run with --apply to write envelopes.`
-        : "DRY RUN: nothing to encrypt.",
+      keyStatus: keyPresent ? "present" : "missing",
+      msg: !keyPresent
+        ? "DRY RUN: CREDENTIALS_ENCRYPTION_KEY is not set — --apply will refuse to run until the key is configured."
+        : totalPlaintext > 0
+          ? `DRY RUN: ${totalPlaintext} credential value(s) would be encrypted. Re-run with --apply to write envelopes.`
+          : "DRY RUN: nothing to encrypt.",
     }));
   } else {
     console.log(redactLogPayload({ stage: "backfill-secrets", msg: `Done. Encrypted ${stats.reduce((a, s) => a + s.encryptedNow, 0)} row(s)/map(s).` }));
   }
 }
 
-main()
-  .catch((error) => {
-    console.error(error);
-    process.exitCode = 1;
-  })
-  .finally(async () => {
-    await closeDatabaseConnection();
-  });
+const invokedDirectly = process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
+
+if (invokedDirectly) {
+  main()
+    .catch((error) => {
+      console.error(error);
+      process.exitCode = 1;
+    })
+    .finally(async () => {
+      await closeDatabaseConnection();
+    });
+}

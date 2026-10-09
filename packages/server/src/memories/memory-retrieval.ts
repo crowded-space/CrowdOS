@@ -4,11 +4,15 @@ import { agentMemoryNotes } from "../db/schema.js";
 import { isSuppressionActive, resolveMemoryDb } from "./memory-lifecycle.js";
 import { numEnv } from "./memory-env.js";
 import { memorySessionDiscards } from "./memory-session-discards.js";
-import { listMemoryPreviews, type MemoryNotePreview } from "./agent-memory-store.js";
+import { listMemoryPreviews, resolveAgentId, type MemoryNotePreview } from "./agent-memory-store.js";
 import { readLocalMemoryNotes, scoreLocalNote } from "./memory-local-store.js";
 import { wrapUntrusted } from "../shared/core/untrusted-wrapper.js";
+import { logMetric } from "../shared/core/structured-log.js";
 
 const DEFAULT_RETRIEVAL_WINDOW = 60;
+
+/** Canonical UUID form: ids in this shape are already resolved keys. */
+const UUID_FORM = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 function retrievalWindowSize(): number {
   return Math.floor(numEnv("MEM_RETRIEVAL_WINDOW", DEFAULT_RETRIEVAL_WINDOW));
@@ -50,11 +54,30 @@ export interface RetrievalInput {
  * heuristic lanes (weight via EMBEDDING_HYBRID_WEIGHT).
  */
 export async function retrieveMemoryCandidates(input: RetrievalInput): Promise<MemoryCandidate[]> {
-  const discarded = new Set(memorySessionDiscards.listDiscarded(input.agentId, input.channelId));
+  // MEM-019: session discards are keyed by the id form the writer used (the
+  // tool path passes the caller's ctx.agentId — a resolved UUID in
+  // production). Normalize alias inputs through resolveAgentId so read and
+  // write key-spaces agree; UUID inputs are already keys and skip the lookup,
+  // keeping the hot path at a single notes query.
+  let resolvedAgentId = input.agentId;
+  if (!UUID_FORM.test(input.agentId)) {
+    resolvedAgentId = await resolveAgentId(input.agentId, { workspaceId: input.workspaceId }).catch(
+      () => input.agentId,
+    );
+  }
+  // Read both key forms: the tool write path keys on the id it receives
+  // (resolved UUID in production); the resolved key covers alias callers,
+  // the raw key covers any alias-keyed legacy discard.
+  const discarded = new Set([
+    ...memorySessionDiscards.listDiscarded(resolvedAgentId, input.channelId),
+    ...(resolvedAgentId === input.agentId
+      ? []
+      : memorySessionDiscards.listDiscarded(input.agentId, input.channelId)),
+  ]);
 
   // Degraded (§18): no PG — score the local mirror with the naive matcher.
   const db = await resolveMemoryDb({ workspaceId: input.workspaceId });
-  if (!db) return retrieveLocalCandidates(input, discarded);
+  if (!db) return retrieveLocalCandidates({ ...input, agentId: resolvedAgentId }, discarded);
   let notes: MemoryNotePreview[];
   try {
     // PERF-2: bounded hot-path window. Candidate set is capped SQL-side to the
@@ -64,7 +87,7 @@ export async function retrieveMemoryCandidates(input: RetrievalInput): Promise<M
     const windowSize = retrievalWindowSize();
     notes = (await db.query.agentMemoryNotes.findMany({
       where: and(
-        eq(agentMemoryNotes.agentId, input.agentId),
+        eq(agentMemoryNotes.agentId, resolvedAgentId),
         eq(agentMemoryNotes.lifecycleStatus, "active"),
       ),
       orderBy: (table, { desc }) => [desc(table.importanceScore), desc(table.noteTimestamp)],
@@ -127,11 +150,15 @@ export async function retrieveMemoryCandidates(input: RetrievalInput): Promise<M
   // similarity into the heuristic score. Weight 0 => heuristic only (legacy).
   const embeddingEnabled = String(process.env.EMBEDDING_ENABLED ?? "false").trim().toLowerCase() === "true";
   if (embeddingEnabled && input.userMessageText) {
+    const weightRaw = process.env.EMBEDDING_HYBRID_WEIGHT?.trim();
+    const weight = weightRaw ? Math.min(1, Math.max(0, Number(weightRaw))) : 0.5;
+    if (weightRaw && !Number.isFinite(weight)) {
+      // MEM-007: a malformed weight used to disable the lane with no telemetry.
+      logMetric({ stage: "memory.retrieval.invalid_hybrid_weight", agentId: resolvedAgentId, value: weightRaw.slice(0, 32) });
+    }
     try {
       const { embedText, cosineSimilarity, getCachedEmbeddingVector } = await import("./embeddings.js");
       const queryEmbedding = (await embedText(input.userMessageText, { workspaceId: input.workspaceId })).vector;
-      const weightRaw = process.env.EMBEDDING_HYBRID_WEIGHT?.trim();
-      const weight = weightRaw ? Math.min(1, Math.max(0, Number(weightRaw))) : 0.5;
       if (Number.isFinite(weight) && weight > 0) {
         for (const note of notes) {
           const stored = (note as unknown as { embedding?: unknown }).embedding;
@@ -151,7 +178,15 @@ export async function retrieveMemoryCandidates(input: RetrievalInput): Promise<M
           }
         }
       }
-    } catch {}
+    } catch (laneErr: any) {
+      // MEM-007: silent lane failure hid hybrid→heuristic degradation.
+      // Retrieval still returns heuristics; operators can now see it.
+      logMetric({
+        stage: "memory.retrieval.semantic_lane_failed",
+        agentId: resolvedAgentId,
+        reason: String(laneErr?.message ?? laneErr).slice(0, 120),
+      });
+    }
   }
 
   return Array.from(candidates.values())
@@ -161,8 +196,11 @@ export async function retrieveMemoryCandidates(input: RetrievalInput): Promise<M
 
 /** Degraded local candidate search (no lanes, no vectors — naive substring). */
 async function retrieveLocalCandidates(input: RetrievalInput, discarded: Set<string>): Promise<MemoryCandidate[]> {
-  const rows = (await readLocalMemoryNotes(input.agentId).catch(() => []))
+  // MEM-002: parity with the PG path — suppressed notes stay hidden in
+  // degraded mode. MEM-003: scope the mirror read to the caller's workspace.
+  const rows = (await readLocalMemoryNotes(input.agentId, input.workspaceId ?? null).catch(() => []))
     .filter((r) => r.lifecycleStatus === "active")
+    .filter((r) => !isSuppressionActive(r))
     .filter((r) => !discarded.has(r.id));
   return rows
     .map((r) => {

@@ -132,8 +132,8 @@ Source of truth: `CrowdOS.md` §34. Summary:
 
 From the codebase (`package.json`, `docker-compose.yml`):
 
-- **Client** — React 19 + Vite + TailwindCSS v4 + Zustand + `socket.io-client` (`packages/client`, dev port `3000`)
-- **Server** — Node.js + Fastify 5 + TypeScript + Drizzle ORM + Socket.io + BullMQ 6 (`packages/server`, default port `3001`)
+- **Client** — React 19 + Vite + TailwindCSS v4 + Zustand + `socket.io-client` (`packages/client`, dev port `22077`)
+- **Server** — Node.js + Fastify 5 + TypeScript + Drizzle ORM + Socket.io + BullMQ 6 (`packages/server`, default port `12077`)
 - **Coding engine** — `@crowdspace/pi-core` (in-repo fork backing the Coding Runtime)
 - **Shared contracts** — `@crowdspace/shared`
 - **Desktop** — Electron shell, Windows-first (`packages/desktop`)
@@ -149,7 +149,7 @@ npm run db:bootstrap   # push schema + seed (needs Postgres)
 npm run dev            # api + worker + client
 ```
 
-Defaults: API `http://localhost:3001`, client `http://localhost:3000` (both configurable via `PORT` / `CLIENT_ORIGIN`). Copy `.env.example` for the full option set — `QUEUE_MODE=inline` needs no Redis; set `QUEUE_MODE=bullmq` + `REDIS_URL` for durable queue delivery.
+Defaults: API `http://localhost:12077`, client `http://localhost:22077` (both configurable via `PORT` / `CLIENT_ORIGIN`). Copy `.env.example` for the full option set — `QUEUE_MODE=inline` needs no Redis; set `QUEUE_MODE=bullmq` + `REDIS_URL` for durable queue delivery.
 
 ---
 

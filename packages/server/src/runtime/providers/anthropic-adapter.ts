@@ -13,7 +13,10 @@ export class AnthropicAdapter implements IProviderAdapter {
     onChunk?: (chunk: { content: string; thoughts?: string; isThoughts?: boolean }) => void,
     options?: { signal?: AbortSignal }
   ): Promise<LLMResponse> {
-    const modelName = config.modelName || 'claude-sonnet-4-20250514'
+    const modelName = config.modelName
+    if (!modelName) {
+      throw new Error('[AnthropicAdapter] Missing model name. Bind the agent to a model module with an explicit model.')
+    }
     const apiKey = config.apiKey || process.env.ANTHROPIC_API_KEY || ''
 
     const messages: Array<{ role: string; content: any }> = []

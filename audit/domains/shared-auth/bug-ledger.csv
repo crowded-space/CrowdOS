@@ -1,0 +1,9 @@
+id,severity,class,file,line,evidence,next
+B1,High,authz-bypass-pattern,packages/server/src/routes/tools.ts,9,adminPreHandler undefined unless WORKSPACE_ADMIN_TOKEN set - route ships unguarded,verify all privileged routes mount requireAdmin unconditionally
+B2,High,authz-bypass-pattern,packages/server/src/routes/observability.ts,99,same conditional admin pattern across 5 routes,verify same as B1
+B3,Medium,facade-violation,packages/server/src/shared/auth/pin-gate.ts,111,dynamic import past workspace-gate to workspace-registry,route via workspace-gate
+B4,Medium,facade-violation,packages/server/src/shared/sockets/register-socket-server.test.ts,84,direct api-key-service import past auth-gate,import via authGate
+B5,Medium,query-key-auth,packages/server/src/shared/auth/auth-gate.ts,69,api_key query param accepted - leaks keys into logs,drop query channel or confirm redaction
+B6,Medium,pin-cache-window,packages/server/src/shared/auth/pin-gate.ts,124,15s TTL pin entries cache - rotation visibility window,confirm invalidation covers all writers
+B7,Low,gate-not-thin,packages/server/src/shared/auth/auth-gate.ts,47,method-narrowing logic lives in gate not service,extract to service keep gate wire-only
+B8,Low,naming-drift,packages/server/src/shared/auth/api-key-service.ts,37,PascalCase ApiKeyRecord vs AGENTS.md camelCase rule,record as frozen-drift decision

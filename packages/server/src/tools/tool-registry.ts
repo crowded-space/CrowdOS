@@ -153,6 +153,17 @@ export async function resolveToolRoot(ctx?: { channelId?: string; workspaceId?: 
   return Guard.getWorkspaceDir(ctx?.workspaceId);
 }
 
+/**
+ * TOLS-02: FS mutation handlers must refuse once the executor's combined
+ * caller/timeout signal has fired — the race may already have reported
+ * failure, and a late mutation would still land on disk.
+ */
+function assertNotAborted(ctx: ToolExecutionContext | undefined, toolId: string): void {
+  if (ctx?.abortSignal?.aborted) {
+    throw new Error(`Tool "${toolId}" aborted — refusing filesystem mutation after the executor race settled.`);
+  }
+}
+
 export class ToolRegistry {
   private tools: Map<string, ToolDefinition> = new Map();
 
@@ -177,25 +188,6 @@ export class ToolRegistry {
       console.warn(`[tools] re-registering "${tool.name}": ${prevId} -> ${nextId}.`);
     }
     this.tools.set(tool.name, tool);
-  }
-
-  cancelSchedule(id: string): boolean {
-    const rec = activeSchedules.get(id);
-    if (!rec) return false;
-    if (rec.timer) clearTimeout(rec.timer);
-    if (rec.interval) clearInterval(rec.interval);
-    // BullMQ repeatable: best-effort scheduler removal; map delete is the local guarantee.
-    void (async () => {
-      try {
-        const { queueGate } = await import("../queue/queue-gate.js");
-        if (queueGate.mode() === "bullmq") {
-          const q = queueGate.getSchedulerQueue() as unknown as { removeJobScheduler?: (jid: string) => Promise<unknown> } | null;
-          await q?.removeJobScheduler?.(id);
-        }
-      } catch {}
-    })();
-    activeSchedules.delete(id);
-    return true;
   }
 
   unregister(toolName: string): boolean {
@@ -278,6 +270,10 @@ export class ToolRegistry {
       handler: async (args, ctx) => {
         try {
           const resolved = await Guard.validatePath(args.path, await resolveToolRoot(ctx));
+          // TOLS-02: FS mutations are abort-aware. The executor's Promise.race
+          // can settle timeout/abort while the handler is still mid-write, so a
+          // post-race call must refuse and in-flight ops must observe the signal.
+          assertNotAborted(ctx, "write_file");
           if (ctx?.runId) {
             try {
               const { runsGate } = await import("../runs/runs-gate.js");
@@ -286,10 +282,16 @@ export class ToolRegistry {
               try { prior = await fs.readFile(resolved, "utf8"); existed = true; } catch { existed = false; }
               const inverse = runsGate.buildCompensationInverse({ existed, priorContent: prior, path: args.path });
               await runsGate.addCompensation(ctx.runId as string, { toolName: "write_file", targetPath: args.path, inverseOp: inverse });
-            } catch {}
+            } catch (jerr: any) {
+              // RUN-004: journaling is best-effort but must never fail silently —
+              // a swallowed insert failure means undo is silently unavailable.
+              console.warn(`[tools] compensation journal failed for ${args.path}:`, jerr?.message || jerr);
+            }
           }
           await fs.mkdir(path.dirname(resolved), { recursive: true });
-          await fs.writeFile(resolved, args.content, "utf8");
+          // TOLS-02: pass the combined caller/timeout signal into the write so an
+          // abort that lands mid-write rejects the op instead of landing late.
+          await fs.writeFile(resolved, args.content, { encoding: "utf8", signal: ctx?.abortSignal });
           
           globalBroker?.emit("sandbox:updated", {
             sandboxId: ctx?.workspaceId || "default-sandbox",
@@ -328,13 +330,18 @@ export class ToolRegistry {
       handler: async (args, ctx) => {
         try {
           const resolved = await Guard.validatePath(args.path, await resolveToolRoot(ctx));
+          // TOLS-02: same abort contract as write_file.
+          assertNotAborted(ctx, "edit_file");
           const original = await fs.readFile(resolved, "utf8");
           if (ctx?.runId) {
             try {
               const { runsGate } = await import("../runs/runs-gate.js");
               const inverse = runsGate.buildCompensationInverse({ existed: true, priorContent: original, path: args.path });
               await runsGate.addCompensation(ctx.runId as string, { toolName: "edit_file", targetPath: args.path, inverseOp: inverse });
-            } catch {}
+            } catch (jerr: any) {
+              // RUN-004: same observability contract as write_file.
+              console.warn(`[tools] compensation journal failed for ${args.path}:`, jerr?.message || jerr);
+            }
           }
           if (!original.includes(String(args.targetContent))) {
             return { success: false, output: "", error: `Target content not found in ${args.path}` };
@@ -342,7 +349,7 @@ export class ToolRegistry {
           // Function replacement-string semantics: `$&`/`$1` in the replacement
           // must stay literal, else a target containing `$&` corrupts the edit.
           const updated = original.replace(String(args.targetContent), () => String(args.replacementContent));
-          await fs.writeFile(resolved, updated, "utf8");
+          await fs.writeFile(resolved, updated, { encoding: "utf8", signal: ctx?.abortSignal });
           return { success: true, output: `Edited ${args.path}` };
         } catch (err: any) {
           return { success: false, output: "", error: err.message || String(err) };
@@ -403,6 +410,8 @@ export class ToolRegistry {
       handler: async (args, ctx) => {
         try {
           const resolved = await Guard.validatePath(args.path, await resolveToolRoot(ctx));
+          // TOLS-02: same abort contract as write_file (unlink has no signal option).
+          assertNotAborted(ctx, "delete_file");
           if (ctx?.runId) {
             try {
               const { runsGate } = await import("../runs/runs-gate.js");
@@ -413,9 +422,13 @@ export class ToolRegistry {
                 const inverse = runsGate.buildCompensationInverse({ existed: true, priorContent: prior, path: args.path });
                 await runsGate.addCompensation(ctx.runId as string, { toolName: "delete_file", targetPath: args.path, inverseOp: inverse });
               }
-            } catch {}
+            } catch (jerr: any) {
+              // RUN-004: same observability contract as write_file.
+              console.warn(`[tools] compensation journal failed for ${args.path}:`, jerr?.message || jerr);
+            }
           }
           await fs.unlink(resolved);
+
 
           globalBroker?.emit("sandbox:updated", {
             sandboxId: ctx?.workspaceId || "default-sandbox",
@@ -449,6 +462,9 @@ export class ToolRegistry {
       },
       dangerLevel: "dangerous",
       authLevelRequired: 1,
+      // TOLS-01: plumb the intended 300s to the executor race (was default
+      // 30s despite the handler passing 300000 to execHardened).
+      timeoutMs: 300000,
       handler: async (args, ctx) => {
         Guard.validateCommand(args.command);
         const cwd = await resolveToolRoot(ctx);

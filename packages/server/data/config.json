@@ -1,8 +1,8 @@
 {
   "NODE_ENV": "development",
   "CONFIG_STRICT": true,
-  "PORT": 3001,
-  "CLIENT_ORIGIN": "http://localhost:5173",
+  "PORT": 12077,
+  "CLIENT_ORIGIN": "http://localhost:22077",
   "SYSTEM_ACTOR_ID": "system",
   "RATE_LIMIT_ENABLED": true,
   "RATE_LIMIT_MAX": 300,
@@ -28,7 +28,7 @@
   "MEM_REFLECT_MIN_INTERVAL_MS": 60000,
   "MEM_REFLECT_SIMILARITY_PCT": 80,
   "MEM_RETRIEVAL_WINDOW": 60,
-  "RETENTION_SWEEP_MS": 21600000,
+
   "RETENTION_DAYS": 30,
   "BUDGET_RECONCILE_MS": 86400000,
   "TOOL_RWP": true,

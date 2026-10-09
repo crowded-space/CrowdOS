@@ -9,7 +9,7 @@ const isDesktopDev =
   process.argv.includes('22077') ||
   process.env.CROWDOS_DEV === '1';
 
-const backendPort = process.env.VITE_BACKEND_PORT || process.env.BACKEND_PORT || (isDesktopDev ? '12077' : '3001');
+const backendPort = process.env.VITE_BACKEND_PORT || process.env.BACKEND_PORT || (isDesktopDev ? '12077' : '12077');
 const backendTarget = process.env.VITE_BACKEND_URL || `http://127.0.0.1:${backendPort}`;
 
 export default defineConfig(() => {
@@ -37,7 +37,7 @@ export default defineConfig(() => {
       },
     },
     server: {
-      port: 3000,
+      port: 22077,
       host: '0.0.0.0',
       proxy: {
         '/api': {

@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 
 import { and, asc, eq, inArray, isNull, lt, or } from "drizzle-orm";
 
-import { getDb, dbScopeKey, withTransaction, runWithDb, dualWrite, resolveTier, isConnectionError } from "../shared/config/database.js";
+import { getDb, dbScopeKey, withTransaction, runWithDb, dualWrite, resolveTier, isConnectionError, isSchemaMismatchError } from "../shared/config/database.js";
 import { tierContextFor } from "../workspace/workspace-gate.js";
 import {
   localDeleteAgent,
@@ -20,6 +20,7 @@ import { getCachedRoster, invalidateRosterCache } from "./agent-roster-cache.js"
 import {
   agents,
   runtimeStates,
+  agentInstructionStacks,
 } from "../db/schema.js";
 import type {
   AgentAuthorityPermissions,
@@ -113,7 +114,11 @@ type NullableAgentMerge = Omit<
 export class AgentRegistry {
   async list(filters: AgentRegistryFilters = {}, dbOverride?: any): Promise<AgentProfile[]> {
     if (dbOverride) {
-      return this.loadRoster(filters, dbOverride);
+      // IMPL-AGENTLIST500-001: an explicit handle (request.db) must degrade
+      // like the bound ALS path — an unprovisioned/outage tenant PG leg
+      // (42P01 class) falls back to the workspace-scoped local roster
+      // instead of 500ing GET /api/agents.
+      return this.loadBoundRoster(filters, dbOverride);
     }
     // ponytail: scope key by tenant handle — an unscoped key serves A's roster to B.
     // Union loader is cached like the old PG-only loader (same invalidation points).
@@ -123,9 +128,16 @@ export class AgentRegistry {
     // into every tenant's cached roster (the local store has no ALS awareness).
     // The local-first union stays for unbound callers (pure-local mode and
     // registry-only workspaces), which is where the file tier is truth.
+    // AGT-002: the leak fix removed local merging entirely in tenant scope
+    // instead of scoping local reads per tenant — a local-first create whose PG
+    // leg failed (outboxed) stayed invisible inside request scope. The bound
+    // loader now merges the workspace-scoped local read (the store already
+    // supports scoping); an unscoped filters.workspaceId keeps the PG-only
+    // read, since without a workspace there is no honest way to scope local
+    // rows and the fan-out would re-open the cross-tenant leak.
     if (dbScopeKey() !== "global") {
-      return getCachedRoster(`${dbScopeKey()}:roster:${JSON.stringify(filters)}`, async () =>
-        this.loadRoster(filters),
+      return getCachedRoster(`${dbScopeKey()}:roster:${JSON.stringify(filters)}`, () =>
+        this.loadBoundRoster(filters),
       );
     }
     return getCachedRoster(`${dbScopeKey()}:roster:${JSON.stringify(filters)}`, async () => {
@@ -183,8 +195,51 @@ export class AgentRegistry {
     return records.map(mapAgentProfile);
   }
 
+  /**
+   * AGT-002: bound-handle roster — PG rows from the ALS handle plus the
+   * workspace-scoped local rows. The 2026-09-25 leak fix stopped merging the
+   * file tier here because an UNSCOPED local read fans out across workspace
+   * folders; a named workspace can be read honestly (localListAgents already
+   * scopes, including legacy-global null-workspace rows, mirroring loadRoster).
+   * Unscoped filters (workspaceId undefined) keep the PG-only read.
+   */
+  private async loadBoundRoster(filters: AgentRegistryFilters, dbOverride?: any): Promise<AgentProfile[]> {
+    const pgRows = await pgCatchNull(() => this.loadRoster(filters, dbOverride)).then((rows) => rows ?? []);
+    if (filters.workspaceId === undefined) return pgRows;
+    const localRows = await localListAgents(filters as any).catch((err) => {
+      console.warn("[agents] Bound local roster read failed:", err instanceof Error ? err.message : err);
+      return [] as AgentProfile[];
+    });
+    // Union can hold up to 2x the per-tier pages — clamp to what was asked.
+    return mergeRoster(pgRows, localRows).slice(0, limitOf(filters));
+  }
+
+  /**
+   * AGT-001: resolve the PG handle for a named workspace's replica leg.
+   * Inside ALS (request scope) getDb() already returns the tenant handle, so
+   * there is nothing to add; outside it (socket/worker scopes, RUN-007 class)
+   * the ambient pool may be a different database in split-DB deployments, so
+   * the owning workspace's record DB is resolved and bound for the write.
+   * Null = no workspace context or no record DB (local-only tier).
+   */
+  private async pgHandleFor(workspaceId?: string | null): Promise<ReturnType<typeof getDb> | null> {
+    if (workspaceId === undefined || workspaceId === null) return null;
+    try {
+      // Inside ALS (request scope) getDb() is already the tenant handle.
+      if (dbScopeKey() !== "global") return null;
+      // Dynamic import (runs-repository precedent): keeps this module loadable
+      // under test fakes that replace database.js without the resolver.
+      const mod = await import("../shared/config/database.js");
+      if (typeof mod.dbForWorkspace !== "function") return null;
+      return await mod.dbForWorkspace(workspaceId);
+    } catch {
+      return null;
+    }
+  }
+
   async getById(id: string, dbOverride?: any, workspaceId?: string | null): Promise<AgentProfile | null> {
     if (dbOverride) {
+    try {
       // Explicit handle still honors a named tenant: duplicate ids across
       // workspaces must not resolve to the first row. Unscoped (undefined)
       // keeps legacy exact behavior for tests/seeds.
@@ -194,6 +249,11 @@ export class AgentRegistry {
         where: and(...clauses),
       });
       return record ? mapAgentProfile(record) : null;
+    } catch (err) {
+      // Unprovisioned tenant schema (stale BYODB): fall through to local-first.
+      if (!isSchemaMismatchError(err)) throw err;
+      console.warn(`[agents] tenant PG schema missing; getById served locally`);
+    }
     }
     // Tenant scope first: the local store resolves the row inside the caller's
     // workspace folder; PG only fills the gap when local has nothing. Without
@@ -214,8 +274,12 @@ export class AgentRegistry {
       workspaceId !== undefined && workspaceId !== null
         ? and(eq(agents.id, id), or(eq(agents.workspaceId, workspaceId), isNull(agents.workspaceId)))
         : eq(agents.id, id);
+    // AGT-001: a named scope's PG gap-fill must run on the workspace's own
+    // record handle — the ambient pool (ALS-less socket/worker scopes) can be
+    // a different database entirely in split-DB deployments.
+    const pgHandle = await this.pgHandleFor(workspaceId);
     const pgRecord = await pgCatchNull(() =>
-      getDb().query.agents.findFirst({
+      (pgHandle ?? getDb()).query.agents.findFirst({
         where: pgWhere,
       }),
     );
@@ -246,6 +310,9 @@ export class AgentRegistry {
       permissions: normalizePermissions(input.permissions),
       status: input.status ?? "offline",
       isTemplate: input.isTemplate ?? false,
+      // AGT-008: same PG column as update's pgSet — without it a dual-tier
+      // create dropped the cap on the PG tier (migration 0027).
+      contextTokenCap: input.contextTokenCap ?? null,
       createdAt: now,
       updatedAt: now,
     };
@@ -377,8 +444,9 @@ export class AgentRegistry {
       avatar: input.avatar !== undefined ? input.avatar : existing.avatar,
       authorityLevel: input.authorityLevel ?? existing.authorityLevel,
       l3Subtype: input.l3Subtype !== undefined ? input.l3Subtype : existing.l3Subtype,
-      modelModuleId: input.modelModuleId ?? existing.modelModuleId,
-      instructionModuleId: input.instructionModuleId ?? existing.instructionModuleId,
+      // AGT-009: null clears, undefined keeps. (Was ?? which kept on null.)
+      modelModuleId: input.modelModuleId !== undefined ? input.modelModuleId : existing.modelModuleId,
+      instructionModuleId: input.instructionModuleId !== undefined ? input.instructionModuleId : existing.instructionModuleId,
       toolkitModuleId: input.toolkitModuleId !== undefined ? input.toolkitModuleId : existing.toolkitModuleId,
       constraintsModuleId:
         input.constraintsModuleId !== undefined ? input.constraintsModuleId : existing.constraintsModuleId,
@@ -415,8 +483,8 @@ export class AgentRegistry {
       status: merged.status ?? existing.status,
       isTemplate: merged.isTemplate ?? false,
       updatedAt: new Date(),
-      // NOTE: no contextTokenCap — PG agents table has no such column
-      // (follow-up: migration). Local tier persists it; PG reads map null.
+      // AGT-008: persisted via migration 0027 (was local-only).
+      contextTokenCap: merged.contextTokenCap ?? null,
     };
 
     const localApply = () =>
@@ -460,13 +528,17 @@ export class AgentRegistry {
       await runWithDb(dbOverride, () =>
         withTransaction(async (tx) => {
           await tx.update(agents).set(pgSet).where(and(...clauses));
-          await tx
-            .update(runtimeStates)
-            .set({
-              status: merged.status === "offline" ? "offline" : "idle",
-              lastHeartbeat: new Date(),
-            })
-            .where(eq(runtimeStates.agentId, id));
+          // AGT-014: presence belongs to setStatus. A title-only edit must
+          // not flip a working agent to idle.
+          if (input.status !== undefined) {
+            await tx
+              .update(runtimeStates)
+              .set({
+                status: merged.status === "offline" ? "offline" : "idle",
+                lastHeartbeat: new Date(),
+              })
+              .where(eq(runtimeStates.agentId, id));
+          }
         }),
       );
       if (input.toolkitModuleId !== undefined || input.permissions !== undefined) {
@@ -478,8 +550,13 @@ export class AgentRegistry {
 
     // Dual-boot: validate against PG only when it will actually be written.
     const ctx = await tierContextFor(merged.workspaceId ?? null);
+    // AGT-001: outside ALS (socket/worker scopes) the ambient getDb() can be a
+    // different database than the workspace's record DB — bind the owning
+    // workspace's handle for the validation and replica legs. Inside ALS the
+    // resolver returns null (getDb() is already the tenant handle).
+    const pgHandle = await this.pgHandleFor(merged.workspaceId ?? null);
     if (resolveTier(ctx).tier === "dual") {
-      await this.ensureValidReferences(merged, id).catch((err) => {
+      await this.ensureValidReferences(merged, id, pgHandle ?? undefined).catch((err) => {
         if (!isConnectionError(err)) throw err;
       });
     }
@@ -490,16 +567,23 @@ export class AgentRegistry {
       id,
       row: { ...existing, ...merged, updatedAt: new Date().toISOString() },
       pgWrite: async () => {
-        await withTransaction(async (tx) => {
-          await tx.update(agents).set(pgSet).where(eq(agents.id, id));
-          await tx
-            .update(runtimeStates)
-            .set({
-              status: merged.status === "offline" ? "offline" : "idle",
-              lastHeartbeat: new Date(),
-            })
-            .where(eq(runtimeStates.agentId, id));
-        });
+        const write = () =>
+          withTransaction(async (tx) => {
+            await tx.update(agents).set(pgSet).where(eq(agents.id, id));
+            // AGT-014: same guard as the explicit-handle leg above.
+            if (input.status !== undefined) {
+              await tx
+                .update(runtimeStates)
+                .set({
+                  status: merged.status === "offline" ? "offline" : "idle",
+                  lastHeartbeat: new Date(),
+                })
+                .where(eq(runtimeStates.agentId, id));
+            }
+          });
+        // AGT-001: the replica leg lands on the owning workspace's record DB
+        // when one resolved; the ambient pool is the fallback only.
+        await (pgHandle ? runWithDb(pgHandle, write) : write());
       },
       localWrite: localApply,
     });
@@ -508,7 +592,10 @@ export class AgentRegistry {
       skillsGate.invalidateAgentCaches(id);
     }
     invalidateRosterCache();
-    return this.getById(id, undefined, workspaceId);
+    // AGT-001: re-read inside the owning workspace's scope (the caller may not
+    // have named one) so the just-committed row is read back from the same
+    // handle the replica leg wrote — never a stale ambient-pool read.
+    return this.getById(id, undefined, workspaceId !== undefined ? workspaceId : (merged.workspaceId ?? null));
   }
 
   async delete(id: string, dbOverride?: any, workspaceId?: string | null): Promise<boolean> {
@@ -518,11 +605,12 @@ export class AgentRegistry {
       const result = await runWithDb(dbOverride, () =>
         withTransaction(async (tx) => {
           const deleted = await tx.delete(agents).where(and(...clauses)).returning({ id: agents.id });
-          // No FK from runtime_states.agentId (schema follow-up): cascade here.
+          // AGT-005: no in-tx catch. Swallowing a cascade failure inside the
+          // transaction could roll back the agent delete itself or orphan
+          // the ledger row with a success signal. Let it propagate.
           await tx
             .delete(runtimeStates)
-            .where(eq(runtimeStates.agentId, id))
-            .catch((err) => console.error("[agents] runtime_states cascade delete failed:", err instanceof Error ? err.message : err));
+            .where(eq(runtimeStates.agentId, id));
           return deleted;
         }),
       );
@@ -545,11 +633,10 @@ export class AgentRegistry {
       pgWrite: () =>
         withTransaction(async (tx) => {
           await tx.delete(agents).where(eq(agents.id, id));
-          // No FK from runtime_states.agentId (schema follow-up): cascade here.
+          // AGT-005: propagate (see explicit-handle leg above).
           await tx
             .delete(runtimeStates)
-            .where(eq(runtimeStates.agentId, id))
-            .catch((err) => console.error("[agents] runtime_states cascade delete failed:", err instanceof Error ? err.message : err));
+            .where(eq(runtimeStates.agentId, id));
         }),
       // Scope the local delete to the owning workspace folder: duplicate ids
       // across workspaces must not delete the first file that matches.
@@ -560,6 +647,30 @@ export class AgentRegistry {
   }
 
   /** Sole owner write for `agents.status` + `runtime_states`: atomic flip + heartbeat + `agent:status`. */
+  /**
+   * XD-015: atomic instruction-stack replacement (sibling of SK-001).
+   * The studio manifest path did route-owned delete+insert with no
+   * transaction — a mid-write failure left the stack half-replaced.
+   */
+  async replaceInstructionStack(agentId: string, instructionModuleIds: string[]): Promise<void> {
+    await withTransaction(async (tx: any) => {
+      await tx.delete(agentInstructionStacks).where(eq(agentInstructionStacks.agentId, agentId));
+      if (instructionModuleIds.length > 0) {
+        const now = Date.now().toString(36);
+        await tx.insert(agentInstructionStacks).values(
+          instructionModuleIds.map((mid, i) => ({
+            id: `ais_${agentId}_${i + 1}_${now}`,
+            agentId,
+            instructionModuleId: mid,
+            priorityOrder: (i + 1) * 10,
+            isEnabled: true,
+          }))
+        );
+      }
+    });
+    invalidateRosterCache();
+  }
+
   async setStatus(
     agentId: string,
     status: RuntimeStatus,
@@ -589,7 +700,12 @@ export class AgentRegistry {
         console.warn("[agents] Status context read failed:", err instanceof Error ? err.message : err);
         return null;
       });
-      const ctx = await tierContextFor(agent?.workspaceId ?? opts.workspaceId ?? null);
+      const ownerWorkspaceId = agent?.workspaceId ?? opts.workspaceId ?? null;
+      const ctx = await tierContextFor(ownerWorkspaceId);
+      // AGT-001: outside ALS (socket/worker scopes) the ambient getDb() can be
+      // a different database than the owning workspace's record DB — bind that
+      // handle for the PG flip so the replica row lands in the right DB.
+      const pgHandle = await this.pgHandleFor(ownerWorkspaceId);
       await dualWrite({
         ctx,
         entity: "agent",
@@ -597,22 +713,25 @@ export class AgentRegistry {
         id: agentId,
         // Status-only row: replay re-flips PG status (presence, not content).
         row: { status, updatedAt: new Date().toISOString() } as Record<string, unknown>,
-        pgWrite: () =>
-          withTransaction(async (tx: any) => {
-            await tx.update(agents).set({ status }).where(eq(agents.id, agentId));
-            await tx
-              .update(runtimeStates)
-              .set({
-                status,
-                lastHeartbeat: new Date(),
-                ...(opts.errorInfo
-                  ? { errorInfo: { ...opts.errorInfo, timestamp: new Date().toISOString() } }
-                  : {}),
-              })
-              .where(eq(runtimeStates.agentId, agentId));
-          }),
+        pgWrite: () => {
+          const write = () =>
+            withTransaction(async (tx: any) => {
+              await tx.update(agents).set({ status }).where(eq(agents.id, agentId));
+              await tx
+                .update(runtimeStates)
+                .set({
+                  status,
+                  lastHeartbeat: new Date(),
+                  ...(opts.errorInfo
+                    ? { errorInfo: { ...opts.errorInfo, timestamp: new Date().toISOString() } }
+                    : {}),
+                })
+                .where(eq(runtimeStates.agentId, agentId));
+            });
+          return pgHandle ? runWithDb(pgHandle, write) : write();
+        },
         localWrite: async () => {
-          const ok = await localSetAgentStatus(agentId, status, agent?.workspaceId ?? opts.workspaceId ?? null);
+          const ok = await localSetAgentStatus(agentId, status, ownerWorkspaceId);
           if (!ok) console.warn(`[agents] setStatus local flip missed: no file for ${agentId}`);
         },
       });

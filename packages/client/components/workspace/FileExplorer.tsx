@@ -321,7 +321,7 @@ const TreeView: React.FC<TreeViewProps> = ({
   );
 
   return (
-    <div role="tree" aria-label={ariaLabel}>
+    <div role="tree" aria-label={ariaLabel} tabIndex={0}>
       {rows.map((row) => (
         <TreeRow
           key={row.entry.path}

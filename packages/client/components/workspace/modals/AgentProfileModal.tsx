@@ -227,10 +227,10 @@ export default function AgentProfileModal() {
                   <FileText size={14} className="text-indigo-400 shrink-0 mt-0.5" />
                   <div className="text-xs w-full">
                     <div className="font-semibold text-zinc-200 font-mono tracking-tight leading-none">
-                      {instModule ? instModule.name : 'Standard Directives'}
+                      {instModule ? instModule.name : 'No instruction module bound'}
                     </div>
                     <div className="text-[10px] text-zinc-500 mt-1 line-clamp-2">
-                      {instModule ? instModule.systemPrompt : 'System guidance not bound.'}
+                      {instModule ? instModule.systemPrompt : 'Unassigned — the agent runs its default base prompt.'}
                     </div>
                   </div>
                 </div>
@@ -240,10 +240,10 @@ export default function AgentProfileModal() {
                   <Cpu size={14} className="text-cyan-400 shrink-0 mt-0.5" />
                   <div className="text-xs w-full">
                     <div className="font-semibold text-zinc-200 font-mono tracking-tight leading-none">
-                      {modelModule?.name || 'Dual Reasoner Profile'}
+                      {modelModule?.name || 'No model module bound'}
                     </div>
                     <div className="tnum text-[10px] text-cyan-500 font-mono mt-1">
-                      {modelModule?.modelProfileId || 'Gemini-2.0-Flash'} • Temp {modelModule?.temperature || 0.7}
+                      {modelModule ? `${modelModule.modelProfileId} • Temp ${modelModule.temperature ?? 0.7}` : 'Unassigned — no model routing for this agent.'}
                     </div>
                   </div>
                 </div>
@@ -253,14 +253,16 @@ export default function AgentProfileModal() {
                   <Hammer size={14} className="text-emerald-400 shrink-0 mt-0.5" />
                   <div className="text-xs w-full">
                     <div className="font-semibold text-zinc-200 font-mono tracking-tight leading-none">
-                      {toolModule?.name || 'Standard Toolkit'}
+                      {toolModule?.name || 'No toolkit bound'}
                     </div>
                     <div className="flex flex-wrap gap-1 mt-1.5">
-                      {(toolModule?.enabledToolIds || ['web.search', 'sandbox.exec']).map(tid => (
+                      {(toolModule?.enabledToolIds ?? []).length > 0 ? toolModule!.enabledToolIds.map(tid => (
                         <span key={tid} className="text-[9px] font-mono px-1 rounded bg-zinc-900 border border-zinc-800 text-zinc-400">
                           {tid}
                         </span>
-                      ))}
+                      )) : (
+                        <span className="text-[10px] text-zinc-500 font-mono">Unassigned — no tools granted.</span>
+                      )}
                     </div>
                   </div>
                 </div>

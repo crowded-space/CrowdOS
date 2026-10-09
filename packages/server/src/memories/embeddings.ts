@@ -359,13 +359,5 @@ export async function searchByEmbedding(
   return scored;
 }
 
-export const embeddingsGate = {
-  embedText,
-  mockEmbed,
-  cosineSimilarity,
-  embedNote,
-  embedNotesBatch,
-  ensureEmbeddingsForAgent,
-  searchByEmbedding,
-  hybridScore,
-};
+// MEM-011: removed dead second surface `embeddingsGate` (zero importers).
+// The domain contract lives on memoriesGate only.

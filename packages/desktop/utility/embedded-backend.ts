@@ -23,7 +23,7 @@ const __dirname = dirname(__filename);
 
 export interface EmbeddedBackendOptions {
   port: number;
-  databaseUrl: string;
+  databaseUrl?: string | null;
 }
 
 export interface EmbeddedBackendHandle {
@@ -37,11 +37,9 @@ export async function startEmbeddedBackend(
   if (!Number.isInteger(opts.port) || opts.port <= 0) {
     throw new Error("startEmbeddedBackend: opts.port must be a positive integer");
   }
-  if (!opts.databaseUrl || opts.databaseUrl.trim().length === 0) {
-    throw new Error("startEmbeddedBackend: opts.databaseUrl must be non-empty");
-  }
-  // NOTE: databaseUrl is validated only — the connection string itself flows
-  // through process.env (owned by the desktop shell), never assigned here.
+  // Local-only parity: an empty URL means the embedded server runs without a
+  // database. The connection string still flows through process.env (owned by
+  // the desktop shell) and is never assigned here.
 
   const fileCandidates: string[] = [
     join(__dirname, "..", "..", "..", "server", "dist", "create-app.js"),

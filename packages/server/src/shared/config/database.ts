@@ -4,6 +4,7 @@ import postgres from "postgres";
 
 import { env } from "./env.js";
 import * as schema from "../../db/schema.js";
+import type { OutboxEntity } from "../core/outbox.js";
 
 let sqlClient: postgres.Sql | null = null;
 let dbInstance: ReturnType<typeof drizzle<typeof schema>> | null = null;
@@ -70,7 +71,7 @@ export type StoreTier = "dual" | "local";
 const UNAVAILABLE_TTL_MS = 20_000;
 const unreachableUntil = new Map<string, number>();
 
-/** Explicit "no database configured here" marker (record-only tiers). */
+/** Explicit "no workspace database configured here" marker. */
 export const NO_DATABASE_CODE = "NO_DATABASE";
 
 export function isNoDatabaseError(err: unknown): boolean {
@@ -105,8 +106,33 @@ export function isConnectionError(err: unknown): boolean {
   return false;
 }
 
+/**
+ * Schema-mismatch failures: the database is reachable but was never
+ * provisioned with the current schema (stale BYODB / pre-migration).
+ *
+ * Postgres 42P01 (undefined_table) / 42703 (undefined_column) mean "this
+ * replica cannot answer", not "the query is wrong" — operationally the
+ * same class as an unreachable replica. Tenant-scoped reads degrade to the
+ * local tier on these (like connection errors) instead of surfacing a raw
+ * 500; genuine query defects against a provisioned schema keep propagating.
+ * Walks the cause chain like isConnectionError (drizzle wraps the driver
+ * error, so the SQLSTATE lives on the nested error).
+ */
+export function isSchemaMismatchError(err: unknown): boolean {
+  let current: unknown = err;
+  for (let depth = 0; depth < 5 && current && typeof current === "object"; depth += 1) {
+    const code = String((current as any).code ?? "");
+    if (/^(42P01|42703)$/.test(code)) return true;
+    current = (current as { cause?: unknown }).cause;
+  }
+  return false;
+}
+
 export function noteDbFailure(url: string | null | undefined, err: unknown): void {
-  if (!url || !isConnectionError(err)) return;
+  // A stale-schema replica (missing relations) is as unusable as an
+  // unreachable one: mark the outage window so tier resolution degrades to
+  // local until the database is provisioned (success clears it).
+  if (!url || (!isConnectionError(err) && !isSchemaMismatchError(err))) return;
   unreachableUntil.set(url, Date.now() + UNAVAILABLE_TTL_MS);
 }
 
@@ -129,7 +155,7 @@ export function isUrlReachable(url: string | null | undefined): boolean {
 }
 
 export interface TierContext {
-  /** Per-workspace DB URL (record) — falls back to the global URL. */
+  /** Effective per-workspace URL (registry record or matching keyed env value). */
   databaseUrl?: string | null;
   /** Registry preference — absent means "default". */
   storagePreference?: string | null;
@@ -138,13 +164,11 @@ export interface TierContext {
 }
 
 /**
- * Resolve the effective store tier. Record-only (CrowdOS local-first):
- * the URL comes exclusively from the workspace registry record
- * (`ctx.databaseUrl`). The process env URL is CLI-only (drizzle-kit
- * migrations/seed, tests) and is NEVER consulted at runtime, so a
- * hardcoded .env URL can no longer become a silent predetermined database.
- * "local" when preference forces it, when no record URL resolves, or when
- * the URL sits inside an outage window.
+ * Resolve the effective store tier from the workspace URL already selected by
+ * tierContextFor (registry record, then matching per-workspace env key). The
+ * process-wide DATABASE_URL is never consulted for tenant selection.
+ * "local" when preference forces it, no workspace URL resolves, or the URL
+ * sits inside an outage window.
  */
 export function resolveTier(ctx: TierContext = {}): { tier: StoreTier; url: string | null } {
   const url = ctx.databaseUrl?.trim() || null;
@@ -201,6 +225,14 @@ export async function withStoreFallback<T>(
     noteDbSuccess(url);
     return out;
   } catch (err) {
+    // Unprovisioned replica (stale BYODB): the gap-fill cannot answer —
+    // serve the local value instead of a raw 500. Genuine query defects
+    // against a provisioned schema keep propagating.
+    if (isSchemaMismatchError(err)) {
+      noteDbFailure(url, err);
+      console.warn("[store] tenant PG schema missing; serving local value");
+      return localValue;
+    }
     if (!isConnectionError(err)) throw err;
     noteDbFailure(url, err);
     return localValue;
@@ -235,7 +267,7 @@ function defaultLocalIsEmpty(value: unknown): boolean {
  */
 export async function dualWrite<T>(opts: {
   ctx: TierContext;
-  entity: "category" | "channel" | "agent" | "message";
+  entity: OutboxEntity;
   op: "upsert" | "delete";
   id: string;
   row?: Record<string, unknown> | null;
@@ -245,6 +277,12 @@ export async function dualWrite<T>(opts: {
   const { tier, url } = resolveTier(opts.ctx);
   // 1. Local commit — the source of truth. A throw propagates; PG untouched.
   const out = await opts.localWrite();
+  // CHN-033: a business-failure union (`{ error }` / `{ notFound }` /
+  // `{ conflictGeneral }`) means the local tier REFUSED the write — the row
+  // was never committed. Running the replica leg anyway left PG holding rows
+  // the API reported as rejected (phantom rows), and queueing one on the
+  // outbox re-created the divergence on replay. Return the union untouched.
+  if (isLocalGuardFailure(out)) return out;
   // No replica target configured: nothing to converge to later.
   if (!url) return out;
 
@@ -284,6 +322,13 @@ export async function dualWrite<T>(opts: {
   return out;
 }
 
+/** Guard-failure union from a local store: the write did not commit. */
+function isLocalGuardFailure(value: unknown): boolean {
+  if (!value || typeof value !== "object") return false;
+  const v = value as Record<string, unknown>;
+  return typeof v.error === "string" || v.notFound === true || v.conflictGeneral === true;
+}
+
 function parsePositiveIntEnv(raw: string | undefined, fallback: number): number {
   if (raw === undefined || raw === "") return fallback;
   const parsed = Number(raw);
@@ -318,10 +363,10 @@ export function getDb(): DbInstance {
 }
 
 /**
- * Resolve the drizzle handle for a workspace's record database.
- * Record-only: throws NO_DATABASE when the workspace has no databaseUrl —
- * callers degrade to local instead. NEVER falls back to the process env URL
- * (CLI-only); that fallback was the "single predetermined db" leak.
+ * Resolve the drizzle handle for a workspace-assigned database.
+ * Throws NO_DATABASE when neither the registry nor matching per-workspace env
+ * key assigns a URL — callers degrade to local instead. NEVER falls back to
+ * the process-wide DATABASE_URL, which would route tenants to one predetermined DB.
  * NOTE: workspace-handle threading is complete for runs/tokens/snapshot;
  * memories still consult the env gate until their API carries workspace
  * context (documented gap).

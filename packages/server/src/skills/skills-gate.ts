@@ -36,6 +36,7 @@ export const skillsGate = {
   getAgentSkills: (agentId: string) => skillService.getAgentSkills(agentId),
   assignSkill: (agentId: string, skillId: string) => skillService.assignSkill(agentId, skillId),
   removeSkill: (agentId: string, skillId: string) => skillService.removeSkill(agentId, skillId),
+  replaceAgentSkills: (agentId: string, skillIds: string[]) => skillService.replaceAgentSkills(agentId, skillIds),
   getResolvedToolsForAgent: (agentId: string) => skillService.getResolvedToolsForAgent(agentId),
   invalidateAgentCaches: (agentId?: string) => skillService.invalidateAgentCaches(agentId),
   // §20 Markdown skills: discovery-first, lazily expanded (§17: Markdown on disk).

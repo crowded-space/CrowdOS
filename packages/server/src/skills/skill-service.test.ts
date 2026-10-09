@@ -21,6 +21,8 @@ const h = vi.hoisted(() => {
     listCalls: [] as Array<{ where?: unknown; limit?: number }>,
     skillQueryCount: 0,
     linkQueryCount: 0,
+    activeDb: null as any,
+    dbScope: "test-scope",
   };
 
   const camel = (name: string) => name.replace(/_([a-z])/g, (_m, c: string) => c.toUpperCase());
@@ -162,12 +164,51 @@ const h = vi.hoisted(() => {
     },
   };
 
-  return { state, db };
+  // SK-002: split-DB fixture — a minimal tenant handle over its own row set,
+  // mirroring the shape the service reads through getDb().
+  function makeTenantDb(scope: string, rows: { agent: Row | null; toolkit: Row | null; agentSkills?: Row[]; skills?: Row[] }): any {
+    return {
+      __scope: scope,
+      query: {
+        agents: {
+          findFirst: async (opts: any) => (rows.agent && matches("agents", rows.agent, opts?.where) ? { ...rows.agent } : null),
+        },
+        toolkitModules: {
+          findFirst: async (opts: any) => (rows.toolkit && matches("toolkit_modules", rows.toolkit, opts?.where) ? { ...rows.toolkit } : null),
+        },
+        agentSkills: {
+          findMany: async (opts: any) => affected("agent_skills", rows.agentSkills ?? [], opts?.where),
+          findFirst: async (opts: any) => affected("agent_skills", rows.agentSkills ?? [], opts?.where)[0] ?? null,
+        },
+        skills: {
+          findMany: async (opts: any) => affected("skills", rows.skills ?? [], opts?.where),
+          findFirst: async (opts: any) => affected("skills", rows.skills ?? [], opts?.where)[0] ?? null,
+        },
+      },
+    };
+  }
+
+  return { state, db, makeTenantDb };
 });
 
 vi.mock("../shared/config/database.js", () => ({
-  getDb: () => h.db,
-  dbScopeKey: () => "test-scope",
+  getDb: () => h.state.activeDb ?? h.db,
+  dbScopeKey: () => h.state.dbScope,
+  // SK-002: mirrors the real ALS binding — ToolExecutor calls
+  // runWithDb(agentDb, () => skillsGate.getResolvedToolsForAgent(id)) so the
+  // gate reads the tenant handle, and the scope key follows it.
+  runWithDb: async (db: any, fn: () => any) => {
+    const prevDb = h.state.activeDb;
+    const prevScope = h.state.dbScope;
+    h.state.activeDb = db;
+    h.state.dbScope = db?.__scope ?? prevScope;
+    try {
+      return await fn();
+    } finally {
+      h.state.activeDb = prevDb;
+      h.state.dbScope = prevScope;
+    }
+  },
 }));
 
 vi.mock("../tools/tools-gate.js", () => ({
@@ -177,9 +218,20 @@ vi.mock("../tools/tools-gate.js", () => ({
       return !h.state.registryHidden.includes(id);
     },
   },
+  // SK-008: service imports the shared constant statically; mock carries it.
+  UNIVERSAL_TOOL_IDS: [
+    "open_memory",
+    "discard_memory_from_context",
+    "remember",
+    "lock_in",
+    "lock_out",
+    "open_detail",
+    "load_skill",
+  ],
 }));
 
 import { skillService } from "./skill-service.js";
+import { runWithDb } from "../shared/config/database.js";
 import { createSkillSchema, updateSkillSchema } from "./skill-validators.js";
 
 const UNIVERSALS = [
@@ -223,6 +275,8 @@ beforeEach(() => {
   h.state.listCalls.length = 0;
   h.state.skillQueryCount = 0;
   h.state.linkQueryCount = 0;
+  h.state.activeDb = null;
+  h.state.dbScope = "test-scope";
   skillService.invalidateAgentCaches();
 });
 
@@ -467,5 +521,51 @@ describe("getResolvedToolsForAgent", () => {
   it("still resolves universals when the agent and toolkit are missing", async () => {
     const resolved = await skillService.getResolvedToolsForAgent("agent-ghost");
     for (const universal of UNIVERSALS) expect(resolved).toContain(universal);
+  });
+});
+
+// ─── Ledger regressions: SK-002 (split-DB authz) / SK-003 (cross-scope cache)
+describe("SK-002/SK-003: split-DB resolution and cross-scope invalidation", () => {
+  it("SK-002: resolves tools against the bound tenant handle (split-DB fixture)", async () => {
+    // The same agentId exists in two tenant DBs with different toolkits. The
+    // executor binds the agent row's handle via runWithDb; resolution must
+    // follow that handle — never a shared pool — and caches must not bleed.
+    const tenantA = h.makeTenantDb("wsA", {
+      agent: { id: "agent-1", toolkitModuleId: "tk-A" },
+      toolkit: { id: "tk-A", tools: ["tool_a"] },
+    });
+    const tenantB = h.makeTenantDb("wsB", {
+      agent: { id: "agent-1", toolkitModuleId: "tk-B" },
+      toolkit: { id: "tk-B", tools: ["tool_b"] },
+    });
+
+    const underA = await runWithDb(tenantA, () => skillService.getResolvedToolsForAgent("agent-1"));
+    const underB = await runWithDb(tenantB, () => skillService.getResolvedToolsForAgent("agent-1"));
+
+    expect(underA).toContain("tool_a");
+    expect(underA).not.toContain("tool_b");
+    expect(underB).toContain("tool_b");
+    expect(underB).not.toContain("tool_a");
+  });
+
+  it("SK-003: a write in scope A invalidates the scope-B reader's cache", async () => {
+    h.state.skills.push(row({ id: "skill_a", requiredTools: ["req_a"] }));
+    h.state.agentSkills.push({ agentId: "agent-x", skillId: "skill_a", isEnabled: true });
+
+    // Populate both scopes' caches (resolved tools + agent skills).
+    h.state.dbScope = "wsA";
+    expect(await skillService.getResolvedToolsForAgent("agent-x")).toContain("req_a");
+    h.state.dbScope = "wsB";
+    expect(await skillService.getResolvedToolsForAgent("agent-x")).not.toContain("req_b");
+
+    // New grant lands; the write (assignSkill) runs in wsA only.
+    h.state.skills.push(row({ id: "skill_b", requiredTools: ["req_b"] }));
+    h.state.dbScope = "wsA";
+    await skillService.assignSkill("agent-x", "skill_b");
+
+    // The wsB reader must see the fresh grant, not its cached entry.
+    h.state.dbScope = "wsB";
+    expect(await skillService.getResolvedToolsForAgent("agent-x")).toContain("req_b");
+    expect((await skillService.getAgentSkills("agent-x")).map((s) => s.id).sort()).toEqual(["skill_a", "skill_b"]);
   });
 });

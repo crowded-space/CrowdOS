@@ -31,8 +31,8 @@ describe('CFG-1 · Config consolidation', () => {
 
   it('valid minimal parse: empty source yields defaults identical to today fallbacks', () => {
     const { config, issues } = loadEffectiveConfig({});
-    expect(config.PORT).toBe(3001);
-    expect(config.CLIENT_ORIGIN).toBe('http://localhost:5173');
+    expect(config.PORT).toBe(12077);
+    expect(config.CLIENT_ORIGIN).toBe('http://localhost:22077');
     expect(config.NODE_ENV).toBe('development');
     expect(config.CONFIG_STRICT).toBe(true);
     expect(config.RATE_LIMIT_ENABLED).toBe(true);
@@ -177,6 +177,25 @@ describe('CFG-1 · Config consolidation', () => {
     expect(issues2.unknownProjectVars).toHaveLength(0);
   });
 
+  it('desktop shell flags never block strict boot; server CROWDOS_ typos still block', () => {
+    // packages/desktop sets CROWDOS_DEV=1 and reads CROWDOS_DEVTOOLS; both ride
+    // along via process.env into the embedded backend and must stay inert.
+    const dev = loadEffectiveConfig({ CROWDOS_DEV: '1' });
+    expect(dev.issues.unknownProjectVars).toHaveLength(0);
+    const devtools = loadEffectiveConfig({ CROWDOS_DEVTOOLS: '1' });
+    expect(devtools.issues.unknownProjectVars).toHaveLength(0);
+    const both = loadEffectiveConfig({ CROWDOS_DEV: '1', CROWDOS_DEVTOOLS: '0' });
+    expect(both.issues.unknownProjectVars).toHaveLength(0);
+    // server-relevant CROWDOS_ misspellings must still fail fast in strict mode.
+    expect(() => loadEffectiveConfig({ CROWDOS_WS_TYPO: '1' })).toThrow(ConfigError);
+    expect(() => loadEffectiveConfig({ CROWDOS_DATA_DIRR: '/tmp/x' })).toThrow(ConfigError);
+    try {
+      loadEffectiveConfig({ CROWDOS_WS_TYPO: '1' });
+    } catch (e) {
+      expect((e as ConfigError).issues.unknownProjectVars).toContain('CROWDOS_WS_TYPO');
+    }
+  });
+
   it('secrets are masked in redacted report and URLs are origin-only', () => {
     const { config } = loadEffectiveConfig({
       CREDENTIALS_ENCRYPTION_KEY: 'a'.repeat(64),
@@ -191,7 +210,7 @@ describe('CFG-1 · Config consolidation', () => {
     expect(report.DATABASE_URL).toBe('postgresql://db.example.com:5432');
     expect(report.REDIS_URL).toBe('redis://redis.example.com:6379');
     // non-secret stays visible
-    expect(report.PORT).toBe(3001);
+    expect(report.PORT).toBe(12077);
     expect(report.RATE_LIMIT_MAX).toBe(300);
   });
 
@@ -280,8 +299,8 @@ describe('CFG-1 · Config consolidation', () => {
 
   it('coerced vars are reported in issues.coerced when normalized !== raw', () => {
     // whitespace trimming and case normalization
-    const { issues } = loadEffectiveConfig({ PORT: ' 3001 ', RATE_LIMIT_ENABLED: ' True ' });
-    // PORT normalized from ' 3001 ' to '3001' => coerced
+    const { issues } = loadEffectiveConfig({ PORT: ' 12077 ', RATE_LIMIT_ENABLED: ' True ' });
+    // PORT normalized from ' 12077 ' to '12077' => coerced
     expect(issues.coerced.some(c => c.var === 'PORT')).toBe(true);
   });
 

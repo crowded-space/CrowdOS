@@ -47,7 +47,6 @@ import { isAllowedExternal, isAllowedNavigation } from "./navigation-guard.js";
 import { getTrayMenuTemplate } from "./tray-menu.js";
 import { startEmbeddedBackend } from "../utility/embedded-backend.js";
 
-const DEFAULT_DATABASE_URL = "postgresql://postgres:postgres@127.0.0.1:5432/community_agent";
 const DEV_RENDERER_URL = process.env.VITE_URL ?? "http://127.0.0.1:22077";
 
 // Register custom privileged scheme for packaged asset loading
@@ -214,15 +213,17 @@ async function boot(): Promise<void> {
       }
     }
   }
-  if (!process.env.DATABASE_URL || process.env.DATABASE_URL.trim().length === 0) {
-    process.env.DATABASE_URL = DEFAULT_DATABASE_URL;
-  }
+  // Local-only parity: leave DATABASE_URL unset when nothing configured it so
+  // the embedded backend runs file-first. Forcing a default Postgres URL here
+  // would put every desktop launch on a database even when the server
+  // supports Local-only operation. ensureDatabase skips cleanly on empty URLs.
   process.env.QUEUE_MODE = "inline";
   process.env.DESKTOP_MODE = "1";
   if (!process.env.WORKSPACE_DIR || process.env.WORKSPACE_DIR.trim().length === 0) {
     process.env.WORKSPACE_DIR = paths.workspacesDir;
   }
-  const databaseUrl = process.env.DATABASE_URL;
+  const rawDatabaseUrl = process.env.DATABASE_URL?.trim();
+  const databaseUrl = rawDatabaseUrl && rawDatabaseUrl.length > 0 ? rawDatabaseUrl : "";
 
   const migrated = await ensureDatabase({ databaseUrl, bootstrapCandidates: bootstrapCandidates() });
   if (migrated.status === "failed") {

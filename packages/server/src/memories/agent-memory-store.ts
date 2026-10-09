@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { and, asc, desc, eq, gte, or, type SQL } from "drizzle-orm";
+import { and, asc, desc, eq, gte, ilike, or, type SQL } from "drizzle-orm";
 import { getDb, dbScopeKey, isConnectionError } from "../shared/config/database.js";
 import { mirrorMemoryNote, readLocalMemoryNotes } from "./memory-local-store.js";
 import {
@@ -86,7 +86,9 @@ export interface CreateMemoryNoteInput {
 }
 
 export interface UpdateMemoryNotePatch {
-  reason: string;
+  // MEM-006: optional in practice (runtime defaults to 'update'); the
+  // required type forced casts on omission.
+  reason?: string;
   importanceScore?: number;
   confidence?: MemoryConfidence;
   emotionalValence?: MemoryValence;
@@ -233,29 +235,29 @@ export async function resolveAgentId(agentId: string, opts?: MemoryWorkspaceOpts
     return byId.id;
   }
 
-  // 2. Query all agents to perform flexible, case-insensitive and handle-based matching
-  let allAgents: Array<{ id: string; name: string | null; title: string | null }>;
+  // 2. Bounded, case-insensitive match on id/name/title (MEM-009). This used
+  // to be a full findMany() scan of the agents table on every uncached alias
+  // miss; the WHERE clause + single-row fetch keeps cost independent of table
+  // size. `@handle` input forms are preserved via the prefixed pattern.
+  const escapeLike = (value: string): string => value.replace(/([\\%_])/g, "\\$1");
+  const patternRaw = escapeLike(rawName);
+  const patternClean = escapeLike(cleanId);
+  let matched: { id: string } | undefined;
   try {
-    allAgents = await db.query.agents.findMany();
+    matched = await db.query.agents.findFirst({
+      where: or(
+        ilike(agents.id, patternClean),
+        ilike(agents.name, patternRaw),
+        ilike(agents.name, patternClean),
+        ilike(agents.name, escapeLike(`@${rawName}`)),
+        ilike(agents.title, patternRaw),
+        ilike(agents.title, patternClean),
+      ),
+    });
   } catch (err) {
     if (isConnectionError(err)) return cleanId;
     throw err;
   }
-  const matched = allAgents.find((a) => {
-    const aName = (a.name || "").toLowerCase();
-    const aTitle = (a.title || "").toLowerCase();
-    const targetRaw = rawName.toLowerCase();
-    const targetClean = cleanId.toLowerCase();
-
-    return (
-      a.id.toLowerCase() === targetClean ||
-      aName === targetRaw ||
-      aName === targetClean ||
-      aName.replace(/^@+/, "") === targetRaw ||
-      aTitle === targetRaw ||
-      aTitle === targetClean
-    );
-  });
 
   if (matched) {
     resolveCache.set(cacheKey, matched.id);
@@ -377,7 +379,7 @@ export async function createMemoryNote(
         action: "create",
         reason: "created",
         fieldsChanged: ["noteType", "hook", "brief"],
-      });
+      }, opts);
 
       void enforceNoteCap(resolvedAgentId, undefined, opts).catch((err) => {
         console.error("[MemoryStore] Note-cap enforcement failed:", (err as any)?.message || err);
@@ -391,9 +393,15 @@ export async function createMemoryNote(
       return { ok: true, value: toPreview(inserted) };
     } catch (err: any) {
       if (isConnectionError(err)) return { ok: true, value: await createLocalNote(input, resolvedAgentId) };
-      if (attempt === 2) {
-        throw err;
-      }
+      // MEM-012: only id-collision errors merit a retry. A deterministic
+      // error (bad enum, FK, validation) used to burn 3 attempts before
+      // surfacing; rethrow immediately unless it looks like a collision.
+      const code = (err as { code?: string })?.code;
+      const isCollision = code === "23505" || /already exists|duplicate|unique/i.test(err?.message ?? "");
+      if (!isCollision) throw err;
+      // Collision budget exhausted: fall through to the documented
+      // UPDATE_FAILED result instead of the previously unreachable return.
+      if (attempt === 2) break;
     }
   }
 
@@ -503,7 +511,8 @@ export async function listMemoryPreviews(
     notes = await db.query.agentMemoryNotes.findMany({
       where,
       orderBy: (table, { desc }) => [desc(table.importanceScore), desc(table.noteTimestamp)],
-      limit: filter.limit ?? 50,
+      // MEM-010: clamp previews (was unbounded materialization).
+      limit: Math.min(Math.max(filter.limit ?? 50, 1), 200),
     });
   } catch (err) {
     if (isConnectionError(err)) return listLocal();
@@ -600,7 +609,7 @@ export async function updateMemoryNote(
     reason: patch.reason ?? "update",
     fieldsChanged,
     previousValues,
-  });
+  }, opts);
 
   await mirrorMemoryNote(resolvedAgentId, updated as unknown as Record<string, unknown>).catch(() => {});
 
@@ -653,7 +662,7 @@ export async function archiveMemoryNote(
     reason,
     fieldsChanged: ["lifecycleStatus"],
     previousValues: { lifecycleStatus: existing.lifecycleStatus },
-  });
+  }, opts);
 
   await mirrorMemoryNote(resolvedAgentId, updated as unknown as Record<string, unknown>).catch(() => {});
 
@@ -708,7 +717,7 @@ export async function suppressMemoryNote(
     reason,
     fieldsChanged: ["lifecycleStatus", "suppressUntil"],
     previousValues: { lifecycleStatus: existing.lifecycleStatus },
-  });
+  }, opts);
 
   await mirrorMemoryNote(resolvedAgentId, updated as unknown as Record<string, unknown>).catch(() => {});
 

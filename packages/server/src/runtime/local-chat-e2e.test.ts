@@ -22,7 +22,6 @@ import { EventBroker } from "../event-broker/event-broker-gate.js";
 import { channelGate } from "../channels/channel-gate.js";
 import { messageGate } from "../messages/message-gate.js";
 import { agentRegistry } from "../agents/agent-service.js";
-import { localSeedDefaultAgent } from "../agents/agent-local-store.js";
 import { ProviderRegistry } from "./providers/provider-registry.js";
 import { runtimeGate } from "./runtime-gate.js";
 import type { LLMRequest, LLMResponse } from "./types.js";
@@ -49,7 +48,41 @@ describe("C3 slice 2 · local chat turn (no DATABASE_URL)", () => {
       "ws-local",
     );
     const channelId = (created as any).channel.id;
-    const agent = await localSeedDefaultAgent();
+    const { localUpsertModelModule } = await import("../modules/module-local-store.js");
+    const { localUpsertAgent } = await import("../agents/agent-local-store.js");
+    const now = new Date().toISOString();
+    await localUpsertModelModule(
+      {
+        id: "mod-local-chat",
+        label: "local chat test model",
+        provider: "google",
+        modelName: "gemini-2.0-flash",
+        apiKey: null,
+        endpointUrl: null,
+        temperature: 0.7,
+        topP: 0.9,
+        maxOutputTokens: 2048,
+        stopSequences: [],
+        maxRecentMessages: 10,
+        enableCompression: true,
+        compressionThreshold: 15,
+        createdAt: now,
+        updatedAt: now,
+      } as any,
+      "ws-local",
+    );
+    const agent = await localUpsertAgent({
+      id: "agent-local-chat",
+      workspaceId: "ws-local",
+      name: "default-assistant",
+      title: "Default Assistant",
+      authorityLevel: 1,
+      modelModuleId: "mod-local-chat",
+      instructionModuleId: "instr-default",
+      memorySharingPolicy: "full",
+      status: "idle",
+      isTemplate: false,
+    });
     const broker = new EventBroker();
 
     await messageGate.append({

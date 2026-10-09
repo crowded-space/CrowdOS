@@ -13,7 +13,10 @@ export class GoogleAdapter implements IProviderAdapter {
     onChunk?: (chunk: { content: string; thoughts?: string; isThoughts?: boolean }) => void,
     options?: { signal?: AbortSignal }
   ): Promise<LLMResponse> {
-    const modelName = config.modelName || 'gemini-2.0-flash'
+    const modelName = config.modelName
+    if (!modelName) {
+      throw new Error('[GoogleAdapter] Missing model name. Bind the agent to a model module with an explicit model.')
+    }
     this.validateModel(modelName)
 
     let { url, headers } = this.compileEndpoint(config)
@@ -210,7 +213,10 @@ export class GoogleAdapter implements IProviderAdapter {
   }
 
   private compileEndpoint(config: ModelModuleConfig): { url: string; headers: Record<string, string> } {
-    const modelName = config.modelName || 'gemini-2.0-flash'
+    const modelName = config.modelName
+    if (!modelName) {
+      throw new Error('[GoogleAdapter] Missing model name. Bind the agent to a model module with an explicit model.')
+    }
     const apiKey = config.apiKey || process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || ''
     const endpointUrl = config.endpointUrl || ''
     const headers: Record<string, string> = { 'Content-Type': 'application/json' }

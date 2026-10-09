@@ -16,6 +16,9 @@ export const REPEATABLES: RepeatableSpec[] = [
   { id: "retention", name: "retention", everyMs: 6 * 60 * 60 * 1000 },
   { id: "snapshot-full", name: "snapshot-full", everyMs: 15_000 },
   { id: "approval-expire", name: "approval-expire", everyMs: 30_000 },
+  // THR-007: thread TTL expiry had no scheduler — the sweep existed only as
+  // a manual POST endpoint, so expired threads never transitioned anywhere.
+  { id: "thread-expire", name: "thread-expire", everyMs: 60_000 },
 ];
 
 export async function scheduleMaintenance(): Promise<void> {

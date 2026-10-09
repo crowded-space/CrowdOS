@@ -211,6 +211,12 @@ export type FsBrowseDto = {
   allowedRoots: string[];
 };
 
+export type ModelTestResultDto = {
+  success: boolean;
+  message?: string;
+  offline?: boolean;
+};
+
 function mountQuery(workspaceId: string, channelId: string | null | undefined, root: MountRootDto): string {
   const params = new URLSearchParams({ workspaceId, root });
   if (channelId) params.set('channelId', channelId);
@@ -408,6 +414,11 @@ export const apiClient = {
       return { artifacts: [] };
     }
   },
+  // ART-1: list rows truncate patch/contentRef to 500 chars. Fetch the full
+  // row before apply/revert so Apply never writes a truncated body.
+  async getArtifact(id: string) {
+    return await fetchJsonOrThrow(`${BACKEND_URL}/api/artifacts/${encodeURIComponent(id)}`, { method: 'GET' }, 'Failed to fetch artifact');
+  },
   async search(q: string, limit = 20) {
     return fetchJsonOrThrow<{ query: string; channels: any[]; messages: any[] }>(
       `${BACKEND_URL}/api/search?q=${encodeURIComponent(q)}&limit=${limit}`,
@@ -415,10 +426,11 @@ export const apiClient = {
       'Search failed'
     );
   },
-  async decideApproval(approvalId: string, decision: 'approved' | 'denied', scope?: string | null) {
+  // AP-001/AP-005: explicit reuse flag alongside the legacy scope sentinel.
+  async decideApproval(approvalId: string, decision: 'approved' | 'denied', scope?: string | null, reuse?: boolean) {
     return fetchJsonOrThrow<{ approval: unknown }>(
       `${BACKEND_URL}/api/approvals/${encodeURIComponent(approvalId)}/decision`,
-      { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ decision, scope: scope ?? null }) },
+      { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ decision, scope: scope ?? null, reuse: reuse ?? (scope === 'reusable') }) },
       'Failed to decide approval'
     );
   },
@@ -576,6 +588,15 @@ export const apiClient = {
       `${BACKEND_URL}/api/fs/browse${qs ? `?${qs}` : ''}`,
       { method: 'GET' },
       'Failed to browse the filesystem'
+    );
+  },
+
+  /** Live probe for one stored model module. Carries tenant headers; errors carry HTTP status. */
+  async testModelModule(id: string): Promise<ModelTestResultDto> {
+    return fetchJsonOrThrow<ModelTestResultDto>(
+      `${BACKEND_URL}/api/modules/model/${encodeURIComponent(id)}/test`,
+      { method: 'POST' },
+      'Failed to test the model connection'
     );
   },
 };

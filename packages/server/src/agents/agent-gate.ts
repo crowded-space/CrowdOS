@@ -1,4 +1,7 @@
 import { agentRegistry, AgentRegistry } from "./agent-service.js";
+// AGT-007: sync/replay paths write agent rows outside the service; they
+// need the same invalidation mutations get. Gate-owned hook.
+import { invalidateRosterCache } from "./agent-roster-cache.js";
 import { EscalationChain } from "./agent-errors.js";
 import { localListAgentRows, localListAgents, localSeedDefaultAgent } from "./agent-local-store.js";
 import type { LocalAgentRow } from "./agent-local-store.js";
@@ -62,9 +65,13 @@ export const agentGate = {
   touchHeartbeat: (agentIds: string[], db?: any) => agentRegistry.touchHeartbeat(agentIds, db),
   sweepOrphans: (broker: any, opts?: { orphanAfterMs?: number; isLive?: (agentId: string) => boolean }) =>
     agentRegistry.sweepOrphans(broker, opts),
+  // XD-015: atomic instruction-stack replacement (withTransaction).
+  replaceInstructionStack: (agentId: string, instructionModuleIds: string[]) =>
+    agentRegistry.replaceInstructionStack(agentId, instructionModuleIds),
   // File-tier ports: sync/seed/snapshot callers route through the gate
   // instead of importing the local store (AGENTS.md §2 gate-only).
   listLocalAgents: (filters?: AgentRegistryFilters) => localListAgents(filters),
   listLocalAgentRows: (workspaceId?: string | null) => localListAgentRows(workspaceId),
   seedDefaultAgent: (workspaceId?: string | null) => localSeedDefaultAgent(workspaceId),
+  invalidateRosterCache: () => invalidateRosterCache(),
 };

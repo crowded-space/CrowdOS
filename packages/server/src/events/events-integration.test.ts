@@ -22,6 +22,18 @@ let stop: (() => Promise<void>) | undefined;
 
 beforeAll(async () => {
   dir = mkdtempSync(join(tmpdir(), "crowdos-events-e2e-"));
+  process.env.WORKSPACE_DIR = dir;
+  process.env.CROWDOS_WORKSPACE_REGISTRY_FILE = join(dir, "workspaces.json");
+  const { writeFileSync } = await import("node:fs");
+  const stamp = new Date().toISOString();
+  const record = (id: string) => ({
+    id, name: id, icon: "x", databaseUrl: "", rootPath: join(dir, id),
+    screenLockPinHash: null, createdAt: stamp, updatedAt: stamp,
+  });
+  writeFileSync(
+    join(dir, "workspaces.json"),
+    JSON.stringify({ workspaces: [record("ws-events"), record("ws-events-2")] }),
+  );
   setLocalStoreDirForTests(dir);
   const { buildServer } = await import("../create-app.js");
   const built = await buildServer({ skipTimers: true, skipListen: true });
@@ -32,27 +44,30 @@ beforeAll(async () => {
 afterAll(async () => {
   await stop?.();
   setLocalStoreDirForTests(null);
+  delete process.env.WORKSPACE_DIR;
+  delete process.env.CROWDOS_WORKSPACE_REGISTRY_FILE;
   (env as any).DATABASE_URL = prevDatabaseUrl;
   rmSync(dir, { recursive: true, force: true });
 });
 
-async function replay(channelId: string, afterSeq?: number) {
+async function replay(channelId: string, afterSeq?: number, workspaceId?: string) {
   const q = afterSeq === undefined ? "" : `&afterSeq=${afterSeq}`;
   const res = await app.inject({
     method: "GET",
     url: `/api/events/recent?channelId=${encodeURIComponent(channelId)}${q}&limit=200`,
     remoteAddress: "127.0.0.1",
+    headers: workspaceId ? { "x-workspace-id": workspaceId } : {},
   });
   expect(res.statusCode).toBe(200);
   return res.json() as { channelId: string; events: any[]; lastSeq: number };
 }
 
 /** Poll until the detached log hook has landed at least `min` events. */
-async function waitForEvents(channelId: string, min: number) {
-  let body = await replay(channelId);
+async function waitForEvents(channelId: string, min: number, workspaceId?: string) {
+  let body = await replay(channelId, undefined, workspaceId);
   for (let i = 0; i < 200 && body.events.length < min; i++) {
     await new Promise((r) => setTimeout(r, 10));
-    body = await replay(channelId);
+    body = await replay(channelId, undefined, workspaceId);
   }
   return body;
 }
@@ -62,11 +77,11 @@ async function waitForEvents(channelId: string, min: number) {
  * a fixed sleep would be either flaky or slow; observing the head settle is the
  * deterministic way to know the turn’s log writes have all landed.
  */
-async function waitForStableHead(channelId: string) {
-  let body = await replay(channelId);
+async function waitForStableHead(channelId: string, workspaceId?: string) {
+  let body = await replay(channelId, undefined, workspaceId);
   for (let i = 0; i < 200; i++) {
     await new Promise((r) => setTimeout(r, 25));
-    const next = await replay(channelId);
+    const next = await replay(channelId, undefined, workspaceId);
     if (next.lastSeq === body.lastSeq) return next;
     body = next;
   }
@@ -91,7 +106,41 @@ describe("§29 event log · end-to-end local turn", () => {
       "ws-events",
     );
     const channelId = (created as any).channel.id;
-    const agent = await localSeedDefaultAgent();
+    const { localUpsertModelModule } = await import("../modules/module-local-store.js");
+    const { localUpsertAgent } = await import("../agents/agent-local-store.js");
+    const now = new Date().toISOString();
+    await localUpsertModelModule(
+      {
+        id: "mod-events-google",
+        label: "events test model",
+        provider: "google",
+        modelName: "gemini-2.0-flash",
+        apiKey: null,
+        endpointUrl: null,
+        temperature: 0.7,
+        topP: 0.9,
+        maxOutputTokens: 2048,
+        stopSequences: [],
+        maxRecentMessages: 10,
+        enableCompression: true,
+        compressionThreshold: 15,
+        createdAt: now,
+        updatedAt: now,
+      } as any,
+      "ws-events",
+    );
+    const agent = await localUpsertAgent({
+      id: "agent-events-default",
+      workspaceId: "ws-events",
+      name: "default-assistant",
+      title: "Default Assistant",
+      authorityLevel: 1,
+      modelModuleId: "mod-events-google",
+      instructionModuleId: "instr-default",
+      memorySharingPolicy: "full",
+      status: "idle",
+      isTemplate: false,
+    });
 
     ProviderRegistry.register({
       provider: "google",
@@ -132,10 +181,10 @@ describe("§29 event log · end-to-end local turn", () => {
     // The turn emitted message:new; the boot hook logged it. Wait for the
     // specific key rather than for "any event", because appends land one at a
     // time and a bare count would race the streaming events.
-    let body = await replay(channelId);
+    let body = await replay(channelId, undefined, "ws-events");
     for (let i = 0; i < 200 && !body.events.some((e: any) => e.type === "message:new"); i++) {
       await new Promise((r) => setTimeout(r, 10));
-      body = await replay(channelId);
+      body = await replay(channelId, undefined, "ws-events");
     }
     const types = body.events.map((e: any) => e.type);
     expect(types).toContain("message:new");
@@ -153,13 +202,13 @@ describe("§29 event log · end-to-end local turn", () => {
     // still be growing while this test runs. Comparing a snapshot taken at t1
     // against one taken at t2 would race the appends — so wait until the head
     // stops moving, then treat that as the settled state.
-    body = await waitForStableHead(channelId);
+    body = await waitForStableHead(channelId, "ws-events");
 
     // Resuming from the head is empty-but-caught-up; resuming from 0 re-delivers.
-    const fromHead = await replay(channelId, body.lastSeq);
+    const fromHead = await replay(channelId, body.lastSeq, "ws-events");
     expect(fromHead.events).toEqual([]);
     expect(fromHead.lastSeq).toBe(body.lastSeq);
-    const fromZero = await replay(channelId, 0);
+    const fromZero = await replay(channelId, 0, "ws-events");
     expect(fromZero.events.length).toBe(body.events.length);
     expect(fromZero.events.map((e: any) => e.seq)).toEqual(body.events.map((e: any) => e.seq));
 
@@ -194,7 +243,7 @@ describe("§29 event log · end-to-end local turn", () => {
     for (let i = 1; i <= 3; i++) {
       broker.emit("agent:status" as never, { agentId: "agent-1", channelId, status: "working" } as never, { channelId } as never);
     }
-    const body = await waitForEvents(channelId, 3);
+    const body = await waitForEvents(channelId, 3, "ws-events-2");
     expect(body.events.map((e: any) => e.seq)).toEqual([1, 2, 3]);
 
     const raw = readFileSync(

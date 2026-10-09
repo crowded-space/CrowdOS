@@ -13,7 +13,7 @@ import { check, sleep } from 'k6';
 import { Rate, Trend, Counter } from 'k6/metrics';
 
 const SOAK_DURATION = __ENV.SOAK_DURATION || '2m';
-const BASE_URL = __ENV.BASE_URL || 'http://localhost:3001';
+const BASE_URL = __ENV.BASE_URL || 'http://localhost:12077';
 const AUTH_TOKEN = __ENV.API_KEY || __ENV.AUTH_TOKEN || '';
 
 export const options = {

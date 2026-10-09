@@ -12,9 +12,9 @@ vi.mock("./providers/serper.js", () => ({ serperProvider: { name: "serper", sear
 
 import { searchProviders } from "./search-provider-service.js"
 import { searchProviderGate } from "./search-provider-gate.js"
-import type { SearchResult } from "./search-provider-types.js"
+import type { SearchResult, searchSource } from "./search-provider-types.js"
 
-const row = (i: number, source: string): SearchResult => ({
+const row = (i: number, source: searchSource): SearchResult => ({
   url: `https://example.com/p${i}-${source}`,
   title: `T${i}`,
   snippet: `s${i}`,
@@ -144,5 +144,16 @@ describe("searchProviders fan-out (mocked providers)", () => {
     expect(mocks.serper).toHaveBeenCalledWith("query", expect.objectContaining({ limit: 2 }))
     expect(res.length).toBe(3)
     expect(res.map((r) => r.source)).toEqual(["brave", "brave", "serper"])
+  })
+})
+
+describe("SP-01 empty-snippet near-dup guard", () => {
+  it("keeps distinct URLs with empty/short snippets", async () => {
+    const { dedupeEvidence } = await import("./search-provider-service.js")
+    const a = { url: "https://example.com/a", snippet: "", title: "a" }
+    const b = { url: "https://example.com/b", snippet: "ok", title: "b" }
+    const { deduped, duplicates } = dedupeEvidence([a, b] as any)
+    expect(deduped.map((r: any) => r.url)).toEqual(["https://example.com/a", "https://example.com/b"])
+    expect(duplicates).toEqual([])
   })
 })

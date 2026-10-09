@@ -12,6 +12,7 @@ import {
   resolveMountScope,
   resolveEffectiveMounts,
   setEffectiveMounts,
+  ownsMountTarget,
 } from "./channel-mount-service.js";
 import type {
   EffectiveMounts,
@@ -53,4 +54,6 @@ export const channelMountGate = {
   browse: browseFs,
   validate: validateMountPath,
   allowedRoots: getAllowedRootsList,
+  /** CM-003: caller-workspace ownership check for mount targets. */
+  owns: ownsMountTarget,
 };

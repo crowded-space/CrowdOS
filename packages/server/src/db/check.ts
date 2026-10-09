@@ -1,14 +1,40 @@
 import { randomUUID } from "node:crypto";
+import * as path from "node:path";
+import { pathToFileURL } from "node:url";
 
 import { eq } from "drizzle-orm";
 
 import { closeDatabaseConnection, ensurePgVectorExtension, getDb } from "../shared/config/database.js";
-import { agents, channels, instructionModules, modelModules, messages } from "./schema.js";
+import { agents, channels, instructionModules, modelModules, messages, workspaces } from "./schema.js";
+
+type Db = ReturnType<typeof getDb>;
+
+/**
+ * DB-002: the roundtrip probe writes channel/message rows with workspaceId
+ * "default", but nothing on a fresh DB provisions that workspaces row while
+ * messages.workspace_id carries an FK to workspaces(id) (0016) — db:check
+ * failed with a FK violation before its real verification ran. Insert-if-
+ * missing (ON CONFLICT DO NOTHING) keeps the probe self-sufficient and
+ * idempotent against DBs that already hold the row.
+ */
+export async function ensureDefaultWorkspaceRow(db: Db): Promise<void> {
+  await db
+    .insert(workspaces)
+    .values({
+      id: "default",
+      name: "Default Workspace",
+      ownerId: "system",
+      status: "ACTIVE",
+      rootPath: path.join(process.cwd(), "sandbox", "default").replace(/\\/g, "/"),
+    })
+    .onConflictDoNothing();
+}
 
 async function checkDatabaseRoundTrip(): Promise<{ messageId: string; channelId: string; agentId: string; modelModuleId: string; instructionModuleId: string }> {
   await ensurePgVectorExtension();
 
   const db = getDb();
+  await ensureDefaultWorkspaceRow(db);
   const now = new Date();
   const modelModuleId = randomUUID();
   const instructionModuleId = randomUUID();
@@ -107,24 +133,28 @@ async function checkDatabaseRoundTrip(): Promise<{ messageId: string; channelId:
 
 let roundtripIds: { messageId: string; channelId: string; agentId: string; modelModuleId: string; instructionModuleId: string } | null = null;
 
-checkDatabaseRoundTrip()
-  .then((ids) => { roundtripIds = ids; })
-  .catch((error) => {
-    console.error(error);
-    process.exitCode = 1;
-  })
-  .finally(async () => {
-    // Clean up roundtrip rows: leftover Level-2 non-omniscient agents break
-    // seed-dependent tests (e.g. approval-flow's agent lookup).
-    if (roundtripIds) {
-      try {
-        const db = getDb();
-        await db.delete(messages).where(eq(messages.id, roundtripIds.messageId)).catch(() => {});
-        await db.delete(channels).where(eq(channels.id, roundtripIds.channelId)).catch(() => {});
-        await db.delete(agents).where(eq(agents.id, roundtripIds.agentId)).catch(() => {});
-        await db.delete(modelModules).where(eq(modelModules.id, roundtripIds.modelModuleId)).catch(() => {});
-        await db.delete(instructionModules).where(eq(instructionModules.id, roundtripIds.instructionModuleId)).catch(() => {});
-      } catch {}
-    }
-    await closeDatabaseConnection();
-  });
+const invokedDirectly = process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
+
+if (invokedDirectly) {
+  checkDatabaseRoundTrip()
+    .then((ids) => { roundtripIds = ids; })
+    .catch((error) => {
+      console.error(error);
+      process.exitCode = 1;
+    })
+    .finally(async () => {
+      // Clean up roundtrip rows: leftover Level-2 non-omniscient agents break
+      // seed-dependent tests (e.g. approval-flow's agent lookup).
+      if (roundtripIds) {
+        try {
+          const db = getDb();
+          await db.delete(messages).where(eq(messages.id, roundtripIds.messageId)).catch(() => {});
+          await db.delete(channels).where(eq(channels.id, roundtripIds.channelId)).catch(() => {});
+          await db.delete(agents).where(eq(agents.id, roundtripIds.agentId)).catch(() => {});
+          await db.delete(modelModules).where(eq(modelModules.id, roundtripIds.modelModuleId)).catch(() => {});
+          await db.delete(instructionModules).where(eq(instructionModules.id, roundtripIds.instructionModuleId)).catch(() => {});
+        } catch {}
+      }
+      await closeDatabaseConnection();
+    });
+}

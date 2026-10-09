@@ -167,14 +167,6 @@ export async function localCreateCategory(input: {
   }
   const now = new Date().toISOString();
   const workspaceId = input.workspaceId;
-  const dupe = (await readJsonArray<LocalCategoryRow>(CATEGORIES_FILE, workspaceId)).find(
-    (r) => r.name.trim().toLowerCase() === input.name.trim().toLowerCase(),
-  );
-  if (dupe) {
-    // Duplicate guard (QA audit 2026-09-23): channels had one, categories
-    // did not - repeated failed UI attempts piled up identical rows.
-    throw new Error("Category already exists in this workspace: " + input.name);
-  }
   const row: LocalCategoryRow = {
     id: input.id ?? randomUUID(),
     name: input.name,
@@ -187,9 +179,18 @@ export async function localCreateCategory(input: {
     createdAt: now,
     fsMounts: input.fsMounts ?? inheritMounts("category"),
   };
+  // CHN-006: dup check INSIDE the mutate lock (was check-then-act outside
+  // it, so concurrent creates both passed). CHN-006b: return a union
+  // instead of throwing, so the route maps it instead of 500.
+  let duplicate = false;
   await mutateJsonArray<LocalCategoryRow>(CATEGORIES_FILE, (rows) => {
+    if (rows.some((r) => r.name.trim().toLowerCase() === input.name.trim().toLowerCase())) {
+      duplicate = true;
+      return;
+    }
     rows.push(row);
   }, workspaceId);
+  if (duplicate) return { error: "duplicate_name", name: input.name } as const;
   return reviveCategory(row);
 }
 
@@ -221,7 +222,18 @@ export async function localRemoveCategory(id: string, workspaceId?: string | nul
   }, scope);
   if (removed) {
     // Cascade: channels in the category go with it (PG ON DELETE CASCADE parity).
-    await mutateJsonArray<LocalChannelRow>(CHANNELS_FILE, (rows) => rows.filter((r) => r.categoryId !== id), scope);
+    // CHN-019: cascade settings rows too (were orphaned, stale pins could
+    // resurrect on id reuse). Message logs are RETAINED deliberately.
+    let doomed: string[] = [];
+    await mutateJsonArray<LocalChannelRow>(CHANNELS_FILE, (rows) => {
+      doomed = rows.filter((r) => r.categoryId === id).map((r) => r.id);
+      return rows.filter((r) => r.categoryId !== id);
+    }, scope);
+    if (doomed.length > 0) {
+      const doomedSet = new Set(doomed);
+      await mutateJsonArray<LocalChannelSettingsRow>(CHANNEL_SETTINGS_FILE, (rows) =>
+        rows.filter((r) => !doomedSet.has(r.channelId)), scope);
+    }
   }
   return removed;
 }
@@ -233,20 +245,63 @@ export async function localListChannels(opts?: {
   cursor?: string | null;
   workspaceId?: string | null;
 }): Promise<any[]> {
-  const limit = Math.min(200, Math.max(1, opts?.limit ?? 200));
+  const limit = Math.max(1, opts?.limit ?? 200);
   let offset = 0;
+  let keyset: { position: number; id: string } | null = null;
   if (opts?.cursor) {
-    const parsed = Number(opts.cursor);
-    if (Number.isFinite(parsed) && parsed >= 0) offset = Math.floor(parsed);
+    const sep = opts.cursor.indexOf(":");
+    if (sep > 0) {
+      const position = Number(opts.cursor.slice(0, sep));
+      const id = opts.cursor.slice(sep + 1);
+      if (Number.isFinite(position) && id) keyset = { position, id };
+    } else {
+      const parsed = Number(opts.cursor);
+      if (Number.isFinite(parsed) && parsed >= 0) offset = Math.floor(parsed);
+    }
   }
   const workspaceId = opts?.workspaceId ?? null;
   const rows = await readJsonArray<LocalChannelRow>(CHANNELS_FILE, workspaceId);
   return rows
     .filter((r) => !workspaceId || !r.workspaceId || r.workspaceId === workspaceId)
     .filter((r) => r.archivedAt === null)
+    .filter((r) => !keyset || r.position > keyset.position || (r.position === keyset.position && r.id > keyset.id))
     .sort((a, b) => a.position - b.position || (a.id < b.id ? -1 : 1))
     .slice(offset, offset + limit)
     .map(reviveChannel);
+}
+
+/** One workspace read for active page rows and every id that shadows a PG replica. */
+export async function localChannelListSnapshot(opts?: {
+  limit?: number;
+  cursor?: string | null;
+  workspaceId?: string | null;
+}): Promise<{ rows: any[]; ids: Set<string> }> {
+  const limit = Math.max(1, opts?.limit ?? 200);
+  let offset = 0;
+  let keyset: { position: number; id: string } | null = null;
+  if (opts?.cursor) {
+    const sep = opts.cursor.indexOf(":");
+    if (sep > 0) {
+      const position = Number(opts.cursor.slice(0, sep));
+      const id = opts.cursor.slice(sep + 1);
+      if (Number.isFinite(position) && id) keyset = { position, id };
+    } else {
+      const parsed = Number(opts.cursor);
+      if (Number.isFinite(parsed) && parsed >= 0) offset = Math.floor(parsed);
+    }
+  }
+  const workspaceId = opts?.workspaceId ?? null;
+  const rows = await readJsonArray<LocalChannelRow>(CHANNELS_FILE, workspaceId);
+  const scopedRows = rows.filter((r) => !workspaceId || !r.workspaceId || r.workspaceId === workspaceId);
+  return {
+    ids: new Set(scopedRows.map((row) => row.id)),
+    rows: scopedRows
+      .filter((r) => r.archivedAt === null)
+      .filter((r) => !keyset || r.position > keyset.position || (r.position === keyset.position && r.id > keyset.id))
+      .sort((a, b) => a.position - b.position || (a.id < b.id ? -1 : 1))
+      .slice(offset, offset + limit)
+      .map(reviveChannel),
+  };
 }
 
 export async function localGetChannel(id: string, workspaceId?: string | null): Promise<any | null> {
@@ -283,8 +338,11 @@ export async function localCreateChannel(input: {
     }
   }
   const rows = await readJsonArray<LocalChannelRow>(CHANNELS_FILE, workspaceId);
+  // CHN-003: archived-excluded, matching the service-level scan. Archived
+  // names are reusable; recreating after archive succeeds on both tiers.
   const dupe = rows.find(
     (r) =>
+      r.archivedAt === null &&
       r.name.trim().toLowerCase() === input.name.trim().toLowerCase() &&
       (r.categoryId ?? null) === (input.categoryId ?? null),
   );

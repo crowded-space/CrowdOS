@@ -117,6 +117,11 @@ export function mergeManifest(
         const existing = byId.get(id);
         const domain = isDomain(entry.domain) ? entry.domain : existing?.domain;
         if (!domain) continue; // cannot place an unknown id in a domain
+        // CAP-008: warn when tools is present but not an array (was silent
+        // fallback to builtin tools).
+        if (entry.tools !== undefined && entry.tools !== null && !Array.isArray(entry.tools)) {
+          console.warn(`[capabilities] manifest entry ${id} has non-array tools; keeping existing`);
+        }
         byId.set(id, {
           id,
           domain,

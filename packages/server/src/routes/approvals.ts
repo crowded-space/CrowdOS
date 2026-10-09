@@ -29,7 +29,7 @@ export async function approvalsRoutes(app: FastifyInstance) {
   // Decision endpoint — single-user local: no role gate; decidedBy is the local operator.
   app.post("/api/approvals/:id/decision", { config: { rateLimit: { max: 30, timeWindow: 60_000 } } }, async (request, reply) => {
     const { id } = request.params as { id: string };
-    const body = request.body as { decision?: string; scope?: string | null; expiresAt?: string | null } | undefined;
+    const body = request.body as { decision?: string; scope?: string | null; expiresAt?: string | null; reuse?: boolean } | undefined;
     const decision = body?.decision;
     if (decision !== "approved" && decision !== "denied") {
       return reply.status(400).send({ error: "decision must be 'approved'|'denied'" });
@@ -42,7 +42,8 @@ export async function approvalsRoutes(app: FastifyInstance) {
     if (!row) return reply.status(404).send({ error: "approval not found" });
     if (row.status !== "pending") return reply.status(409).send({ error: `approval already ${row.status}` });
 
-    const updated = await approvalGate.decide(id, { decision, decidedBy, scope, expiresAt });
+    // AP-001/AP-005: explicit reuse flag (legacy scope:'reusable' compat kept).
+    const updated = await approvalGate.decide(id, { decision, decidedBy, scope, expiresAt, reuse: body?.reuse });
     if (!updated) return reply.status(409).send({ error: "decision failed (concurrent update?)" });
 
     // Emit approval.decided for observers + transition run if waiting
@@ -76,7 +77,9 @@ export async function approvalsRoutes(app: FastifyInstance) {
     try {
       const run = await runsGate.getById(updated.runId);
       if (run?.status === "waiting_for_approval") {
-        await runsGate.transition(updated.runId, "running", `approval_${decision}`);
+        // XD-009: funnel through stateGate for the status emit.
+        const { stateGate } = await import("../state/state-gate.js");
+        await stateGate.applyRunTransition({ runId: updated.runId, to: "running", reason: `approval_${decision}`, workspaceId: (run as any)?.workspaceId ?? null });
       }
     } catch {}
 
@@ -86,13 +89,12 @@ export async function approvalsRoutes(app: FastifyInstance) {
   // Bulk sweep endpoint (admin only) — triggers TTL default-deny expiry
   // Bulk sweep endpoint — single-user local: no role gate.
   app.post("/api/approvals/sweep", async (_request, reply) => {
-    const count = await approvalGate.sweepExpired();
-    // After sweeper flips pending→expired, any run still WAITING_FOR_APPROVAL
-    // for an expired approval should be resumed as denied (default-deny).
-    // We iterate expired rows from last sweep? For now sweepExpired already
-    // handles status flip; resume is handled by waiting pollers or next sweep.
-    // To make admin sweep observable, we emit expired events for each.
-    // Note: expirePendingApprovals already flipped; we just report count.
+    // AP-004: the old path flipped rows without resume/emit, stranding runs
+    // when the executor was dead. Delegate to the sweeper which does
+    // flip + resume + emit per row. Route through the gate port
+    // (`approvalGate.sweepOnce`), never the sweeper file (AGENTS.md §2).
+    const { getSharedBroker } = await import("../event-broker/event-broker-gate.js");
+    const count = await approvalGate.sweepOnce(getSharedBroker() ?? undefined);
     return reply.send({ swept: count });
   });
 }

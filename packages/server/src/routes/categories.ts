@@ -70,6 +70,10 @@ export async function categoryRoutes(app: FastifyInstance) {
         },
         (request as any).db,
       );
+    // CHN-006b: duplicate is a union, not a throw (was unhandled 500).
+    if ((res as any)?.error === "duplicate_name") {
+      return reply.status(409).send({ error: "Conflict", message: `Category already exists: ${(res as any).name}` });
+    }
       emitWorkspaceSync();
       return reply.status(201).send(res);
     }

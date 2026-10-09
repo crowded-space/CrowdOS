@@ -5,7 +5,7 @@
  */
 import { setTimeout as sleep } from 'node:timers/promises';
 
-const BASE_URL = process.env.BASE_URL || 'http://localhost:3001';
+const BASE_URL = process.env.BASE_URL || 'http://localhost:12077';
 const VUS = Number(process.env.VUS || process.argv.find(a=>a.startsWith('--vus'))?.split('=')[1] || 20);
 const DURATION_S = Number(process.env.DURATION || process.argv.find(a=>a.startsWith('--duration'))?.split('=')[1] || 30);
 const AUTH = process.env.API_KEY || process.env.AUTH_TOKEN || '';

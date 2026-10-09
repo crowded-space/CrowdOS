@@ -52,7 +52,9 @@ export const serperProvider: SearchProvider = {
       return []
     }
     const limit = Math.min(Math.max(opts?.limit ?? DEFAULT_LIMIT, 1), 20)
-    const timeoutMs = opts?.timeoutMs ?? DEFAULT_TIMEOUT_MS
+    const rawTimeout = opts?.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+    // SP-07: non-finite timeouts clamp setTimeout to ~1ms (instant abort). Fall back to default.
+    const timeoutMs = Number.isFinite(rawTimeout) && rawTimeout > 0 ? rawTimeout : DEFAULT_TIMEOUT_MS
     const controller = new AbortController()
     const timeoutId = setTimeout(() => controller.abort(new Error("Serper search timeout")), timeoutMs)
     const callerSignal = opts?.signal

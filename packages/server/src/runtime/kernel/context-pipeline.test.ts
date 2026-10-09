@@ -26,6 +26,7 @@ describe("Context Pipeline & Modular Architecture", () => {
       workspaceId: "ws-01",
       userInput: "Please design a modular plugin system.",
       runtimeType: "agentic",
+      modelConfig: { provider: "custom", modelName: "explicit-test-model" },
     });
 
     expect(packet).toBeDefined();
@@ -33,7 +34,7 @@ describe("Context Pipeline & Modular Architecture", () => {
     expect(packet.systemPrompt).toContain("AUTHORITY LEVEL 1: EXECUTIVE LEADER");
     expect(packet.userInput).toBe("Please design a modular plugin system.");
     expect(packet._modelConfig).toBeDefined();
-    expect(packet._modelConfig.provider).toBe("google");
+    expect(packet._modelConfig.provider).toBe("custom");
   });
 
   it("should assemble context packet with identity for Level 0 (Omniscient)", async () => {
@@ -53,6 +54,7 @@ describe("Context Pipeline & Modular Architecture", () => {
       workspaceId: "ws-01",
       userInput: "Provide workspace health status.",
       runtimeType: "agentic",
+      modelConfig: { provider: "custom", modelName: "explicit-test-model" },
     });
 
     expect(packet.systemPrompt).toContain("AUTHORITY LEVEL 0: OMNISCIENT OBSERVER");
@@ -76,6 +78,7 @@ describe("Context Pipeline & Modular Architecture", () => {
       workspaceId: "ws-01",
       userInput: "Review PR #42",
       runtimeType: "coding",
+      modelConfig: { provider: "custom", modelName: "explicit-test-model" },
     });
 
     expect(packet.systemPrompt).toContain("AUTHORITY LEVEL 3: EVALUATION SUPERVISOR");
@@ -116,6 +119,7 @@ describe("Context Pipeline & Modular Architecture", () => {
       workspaceId: "ws-01",
       userInput: "Give me the summary.",
       runtimeType: "conversational",
+      modelConfig: { provider: "custom", modelName: "explicit-test-model" },
     });
 
     expect(packet.systemPrompt).toContain("[BRAND VOICE]");
@@ -171,6 +175,7 @@ describe("Context Pipeline & Modular Architecture", () => {
       workspaceId: "ws-01",
       userInput: "Run some tools.",
       runtimeType: "agentic",
+      modelConfig: { provider: "custom", modelName: "explicit-test-model" },
     });
 
     // After CrowdTools migration: no XML protocol, no sentinel
@@ -183,5 +188,26 @@ describe("Context Pipeline & Modular Architecture", () => {
       const toolNames = packet.tools.map((t: any) => t.name);
       expect(toolNames).toContain('agent_complete');
     }
+  });
+
+  it("rejects assembly without a model module or explicit config", async () => {
+    const mockAgent: any = {
+      id: "test-agent-unbound",
+      name: "Unbound",
+      title: "Unbound agent",
+      authorityLevel: 1,
+      status: "idle",
+      memorySharingPolicy: "full",
+    };
+
+    await expect(
+      contextPipeline.assemble({
+        agent: mockAgent,
+        channelId: "chan-01",
+        workspaceId: "ws-01",
+        userInput: "Hello.",
+        runtimeType: "agentic",
+      }),
+    ).rejects.toMatchObject({ code: "MODEL_MODULE_NOT_CONFIGURED" });
   });
 });

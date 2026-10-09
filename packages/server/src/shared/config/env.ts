@@ -24,9 +24,9 @@ function dotenvDefinesDbUrl(filePath: string): boolean {
 
 /**
  * Warn when a sibling .env defines DATABASE_URL but the loaded file does not
- * (or vice versa). Runtime DB credentials come ONLY from workspace.json;
- * the env URL is CLI-only — a second copy in the wrong file is dead config
- * that misleads operators into thinking the server uses it.
+ * (or vice versa). The global URL configures unscoped getDb and global database
+ * setup; workspace routing requires a workspace record or matching keyed URL.
+ * A copy in the wrong dotenv file is invisible to this server process.
  */
 export function dotenvDbUrlMismatchWarning(): string | null {
   const cwd = process.cwd();
@@ -42,8 +42,8 @@ export function dotenvDbUrlMismatchWarning(): string | null {
   const withUrl = states.filter((s) => s.defines).map((s) => s.path);
   return (
     `[config] DATABASE_URL is defined in ${withUrl.join(", ")} but not in the loaded dotenv source ` +
-    `(${loadedDotenvPath ?? "none — environment only"}). Runtime ignores env DB URLs (record-only; see workspace.json); ` +
-    `delete the dead copies to avoid confusion.`
+    `(${loadedDotenvPath ?? "none — environment only"}). The global getDb pool reads the loaded source; tenant routing ` +
+    `needs a workspace record or matching CROWDOS_WS_<ID>_DATABASE_URL. Move or remove the unused copy.`
   );
 }
 
@@ -120,15 +120,15 @@ export const envSchema = z.object({
     "Runtime mode."),
   CONFIG_STRICT: boolSchema(true)
     .describe("Rollback switch for CFG-1 fail-fast boot: false downgrades unknown project-prefixed env vars from boot-blocking errors to warnings."),
-  PORT: intSchema(1, 65535, 3001, "HTTP listen port for the Fastify server."),
+  PORT: intSchema(1, 65535, 12077, "HTTP listen port for the Fastify server."),
   HOST: optionalTextSchema("Optional bind host for the HTTP listener (reserved; listener currently binds default host)."),
   CLIENT_ORIGIN: z
     .string()
     .min(1)
-    .default("http://localhost:5173")
+    .default("http://localhost:22077")
     .describe("Comma-separated list of allowed browser origins for CORS and socket.io."),
   CORS_ORIGIN: optionalTextSchema("Alias considered for CORS origin configuration (reserved; CLIENT_ORIGIN is the consumed var)."),
-  DATABASE_URL: optionalUrlSchema("Postgres connection string used by drizzle/postgres-js. Required before any database access; checked with a named error at first use."),
+  DATABASE_URL: optionalUrlSchema("Global Postgres connection string for unscoped getDb() and global migration/seed setup. Never used as a per-workspace database fallback."),
   REDIS_URL: optionalUrlSchema("Redis connection string for BullMQ-backed job queues (Phase-5 QUE reserved flag)."),
   SYSTEM_ACTOR_ID: z
     .string()
@@ -181,7 +181,7 @@ export const envSchema = z.object({
   MEM_REFLECT_SIMILARITY_PCT: intSchema(1, 100, 80, "Jaccard similarity percentage threshold (1-100) above which a reflection hook is treated as duplicate."),
   MEM_RETRIEVAL_WINDOW: intSchema(1, null, 60, "SQL-side candidate window size (top-N active notes) for memory retrieval scoring."),
 
-  RETENTION_SWEEP_MS: numSchema(0, 21_600_000, "Interval in ms between spawn-artifact retention sweeps (archived agents/channels/task_files purge)."),
+  RETENTION_SWEEP_MS: numSchema(0, 21_600_000, "RETIRED (no reader — use RETENTION_DAYS; sweep cadence is fixed in queue/repeatables.ts + maintenance-worker.ts): formerly interval in ms between spawn-artifact retention sweeps (archived agents/channels/task_files purge)."),
   RETENTION_DAYS: numSchema(0, 30, "Retention window in days for archived spawn artifacts; 0 purges everything already archived."),
 
   BUDGET_RECONCILE_MS: numSchema(0, 86_400_000, "PERF-4: interval in ms for the daily budget-ledger reconcile job recomputing consumption from token_usage_log."),
@@ -255,10 +255,10 @@ export const PROJECT_ENV_PREFIXES = [
   "AUTH_", "QUEUE_", "REDIS_", "SOCKET_", "PROVIDER_", "MEM_", "RETENTION_",
   "BUDGET_", "RATE_LIMIT_", "METRICS_", "MAX_PARALLEL", "STREAM_BATCH",
   "TOOL_RWP", "MODEL_ROUTE", "DELTA_INDEX", "PER_ITERATION", "RUNS_ENABLED",
-  "DURABLE_EVENTS", "DEMO_FALLBACK", "SWARM_", "APPROVALS_", "APPROVAL_", "LEGACY_",
+  "DURABLE_EVENTS", "DEMO_FALLBACK", "SWARM_", "APPROVALS_", "APPROVAL_", "LEGACY_", "HONEST_", "COMPACTION_", "CUSTOM_", "CROWDOS_",
   "CREDENTIALS_", "PIPELINE_", "ORPHAN_", "UNTRUSTED_", "QUERY_", "SYSTEM_", "TOOL_", "SCHEDULER_",
   "BRAVE_", "TAVILY_", "SERPER_", "SEARCH_", "RESEARCH_",
-  "OTEL_", "EMBEDDING_",
+  "OTEL_", "EMBEDDING_", "ORPHAN_SWEEP_", "SWARM_MAX_CONCURRENCY", "SWARM_TASK_TIMEOUT_MS", "SWARM_GUARD_DISABLED", "APPROVAL_PENDING_TTL_MS",
 ] as const;
 
 export const PROJECT_ENV_EXACT = [
@@ -266,6 +266,12 @@ export const PROJECT_ENV_EXACT = [
 ] as const;
 
 const OS_JUNK_ENV_ALLOWLIST = new Set(["HOSTNAME"]);
+
+// Desktop-shell flags (packages/desktop main + dev-electron): read directly off
+// process.env by the Electron shell and inherited by the embedded backend via
+// process.env passthrough - never consumed by the server config schema. Exempt
+// them from the broad CROWDOS_ project prefix so packaged-desktop boot is not blocked.
+const DESKTOP_ENV_ALLOWLIST = new Set(["CROWDOS_DEV", "CROWDOS_DEVTOOLS"]);
 
 export class ConfigError extends Error {
   readonly issues: ConfigIssues;
@@ -296,6 +302,7 @@ const SCHEMA_KEYS = new Set(Object.keys(envSchema.shape));
 
 function isProjectNamespaceVar(key: string): boolean {
   if (OS_JUNK_ENV_ALLOWLIST.has(key)) return false;
+  if (DESKTOP_ENV_ALLOWLIST.has(key)) return false;
   if ((PROJECT_ENV_EXACT as readonly string[]).includes(key)) return true;
   return (PROJECT_ENV_PREFIXES as readonly string[]).some((p) => key.startsWith(p));
 }

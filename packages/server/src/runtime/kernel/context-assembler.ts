@@ -32,6 +32,7 @@ export interface AssembleOptions {
   workspaceId: string;
   userInput: string;
   runtimeType: RuntimeType;
+  modelConfig?: ModelModuleConfig;
   policyOverrides?: Partial<RuntimePolicy>;
   /** Cancellation signal propagated onto the packet (user-initiated cancel only). */
   abortSignal?: AbortSignal;
@@ -45,7 +46,7 @@ export class ContextAssembler {
   async assemble(
     options: AssembleOptions
   ): Promise<ContextPacket & { _modelConfig: ModelModuleConfig }> {
-    const { agent, channelId, workspaceId, userInput, runtimeType, policyOverrides, abortSignal, runId, interpreterOutput } = options;
+    const { agent, channelId, workspaceId, userInput, runtimeType, modelConfig, policyOverrides, abortSignal, runId, interpreterOutput } = options;
     const obsMod: typeof import("../../observability/observability-gate.js") | null = await import("../../observability/observability-gate.js").catch(() => null);
     const tracing = obsMod?.observabilityGate ?? null;
     const span = tracing ? tracing.startSpan("assemble", { runId: runId ?? null, channelId, agentId: agent.id, attributes: { runtimeType } }) : null;
@@ -56,6 +57,7 @@ export class ContextAssembler {
         workspaceId,
         userInput,
         runtimeType,
+        modelConfig,
         abortSignal,
       });
 

@@ -1,0 +1,39 @@
+
+⎯⎯⎯⎯⎯⎯⎯ Startup Error ⎯⎯⎯⎯⎯⎯⎯⎯
+Error: Failed to load custom Reporter from basic
+    at loadCustomReporterModule (file:///C:/Users/Asus/Documents/GitHub/.ThisCrowd/node_modules/vitest/dist/chunks/cli-api.C6CiCDM3.js:11346:9)
+    at file:///C:/Users/Asus/Documents/GitHub/.ThisCrowd/node_modules/vitest/dist/chunks/cli-api.C6CiCDM3.js:11362:23
+    ... 3 lines matching cause stack trace ...
+    at _createServer (file:///C:/Users/Asus/Documents/GitHub/.ThisCrowd/node_modules/vite/dist/node/chunks/node.js:26243:84)
+    at createViteServer (file:///C:/Users/Asus/Documents/GitHub/.ThisCrowd/node_modules/vitest/dist/chunks/cli-api.C6CiCDM3.js:8819:17)
+    at createVitest (file:///C:/Users/Asus/Documents/GitHub/.ThisCrowd/node_modules/vitest/dist/chunks/cli-api.C6CiCDM3.js:14205:18)
+    at prepareVitest (file:///C:/Users/Asus/Documents/GitHub/.ThisCrowd/node_modules/vitest/dist/chunks/cli-api.C6CiCDM3.js:14572:14)
+    at startVitest (file:///C:/Users/Asus/Documents/GitHub/.ThisCrowd/node_modules/vitest/dist/chunks/cli-api.C6CiCDM3.js:14515:14) {
+  [cause]: Error: Failed to load url basic (resolved id: basic). Does the file exist?
+      at reviveInvokeError (file:///C:/Users/Asus/Documents/GitHub/.ThisCrowd/node_modules/vite/dist/node/module-runner.js:538:14)
+      at Object.invoke (file:///C:/Users/Asus/Documents/GitHub/.ThisCrowd/node_modules/vite/dist/node/module-runner.js:554:33)
+      at ServerModuleRunner.getModuleInformation (file:///C:/Users/Asus/Documents/GitHub/.ThisCrowd/node_modules/vite/dist/node/module-runner.js:1187:7)
+      at ServerModuleRunner.import (file:///C:/Users/Asus/Documents/GitHub/.ThisCrowd/node_modules/vite/dist/node/module-runner.js:1103:23)
+      at loadCustomReporterModule (file:///C:/Users/Asus/Documents/GitHub/.ThisCrowd/node_modules/vitest/dist/chunks/cli-api.C6CiCDM3.js:11344:26)
+      at file:///C:/Users/Asus/Documents/GitHub/.ThisCrowd/node_modules/vitest/dist/chunks/cli-api.C6CiCDM3.js:11362:23
+      at async Promise.all (index 0)
+      at Vitest._setServer (file:///C:/Users/Asus/Documents/GitHub/.ThisCrowd/node_modules/vitest/dist/chunks/cli-api.C6CiCDM3.js:13161:138)
+      at BasicMinimalPluginContext.handler (file:///C:/Users/Asus/Documents/GitHub/.ThisCrowd/node_modules/vitest/dist/chunks/cli-api.C6CiCDM3.js:14175:5)
+      at _createServer (file:///C:/Users/Asus/Documents/GitHub/.ThisCrowd/node_modules/vite/dist/node/chunks/node.js:26243:84) {
+    code: 'ERR_LOAD_URL',
+    runnerError: Error: RunnerError
+        at reviveInvokeError (file:///C:/Users/Asus/Documents/GitHub/.ThisCrowd/node_modules/vite/dist/node/module-runner.js:539:64)
+        at Object.invoke (file:///C:/Users/Asus/Documents/GitHub/.ThisCrowd/node_modules/vite/dist/node/module-runner.js:554:33)
+        at ServerModuleRunner.getModuleInformation (file:///C:/Users/Asus/Documents/GitHub/.ThisCrowd/node_modules/vite/dist/node/module-runner.js:1187:7)
+        at ServerModuleRunner.import (file:///C:/Users/Asus/Documents/GitHub/.ThisCrowd/node_modules/vite/dist/node/module-runner.js:1103:23)
+        at loadCustomReporterModule (file:///C:/Users/Asus/Documents/GitHub/.ThisCrowd/node_modules/vitest/dist/chunks/cli-api.C6CiCDM3.js:11344:26)
+        at file:///C:/Users/Asus/Documents/GitHub/.ThisCrowd/node_modules/vitest/dist/chunks/cli-api.C6CiCDM3.js:11362:23
+        at async Promise.all (index 0)
+        at Vitest._setServer (file:///C:/Users/Asus/Documents/GitHub/.ThisCrowd/node_modules/vitest/dist/chunks/cli-api.C6CiCDM3.js:13161:138)
+        at BasicMinimalPluginContext.handler (file:///C:/Users/Asus/Documents/GitHub/.ThisCrowd/node_modules/vitest/dist/chunks/cli-api.C6CiCDM3.js:14175:5)
+        at _createServer (file:///C:/Users/Asus/Documents/GitHub/.ThisCrowd/node_modules/vite/dist/node/chunks/node.js:26243:84)
+  }
+}
+
+
+

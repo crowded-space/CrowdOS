@@ -7,6 +7,7 @@ import { getDb, resolveTier } from "../config/database.js";
 import { mutateJsonArray, readJsonArray } from "../core/local-file.js";
 import { apiKeys } from "../../db/schema.js";
 import type { ApiKeyRole } from "../../db/schema.js";
+import { isWorkspaceManagementPath } from "./pin-gate.js";
 
 export type { ApiKeyRole };
 
@@ -18,6 +19,37 @@ const scrypt = promisify(scryptCb) as (
 
 const SCRYPT_KEYLEN = 32;
 export const API_KEY_PREFIX = "crowd_";
+
+/**
+ * Pre-key portal / workspace-discovery surface (CrowdOS §2 portal flow).
+ *
+ * These routes must answer BEFORE a caller can know a key, because they are how
+ * the portal enumerates and enters a workspace. READ-ONLY discovery only:
+ * mutating workspace operations stay behind the gate, and the desktop app still
+ * reaches those through loopback trust.
+ *
+ * The workspace-path boundary itself is NOT redefined here — it is imported from
+ * the PIN gate, which already owns the canonical `isWorkspaceManagementPath`
+ * list shared with the tenant-DB routing hook. This function only narrows that
+ * shared boundary by method and adds the one read the portal needs that the
+ * shared list lacks. (B7: lives in the service, not the gate, so the gate stays
+ * wire + re-export only.)
+ */
+export function isPortalDiscoveryPath(method: string, path: string): boolean {
+  // Shared boundary: GET list, GET screen-lock status, the DB probe path.
+  if (isWorkspaceManagementPath(path)) {
+    // The probe is POST-only and read-only; the shared list is method-agnostic.
+    if (path === "/api/workspaces/database/test") return method === "POST" || method === "GET";
+    // Every other shared path is exempt for READS only. In particular
+    // POST /api/workspaces (create) and the screen-lock WRITE endpoints stay
+    // behind the gate.
+    return method === "GET";
+  }
+  // GET /api/workspaces/:id — entering a workspace from the portal. Not in the
+  // shared list because the tenant-routing hook does not need it, but the portal
+  // cannot resolve which workspace to enter without it.
+  return method === "GET" && /^\/api\/workspaces\/[^/]+$/.test(path);
+}
 
 /** Fast lookup hint: sha256(plaintext) hex. Reveals nothing about a 256-bit random key; scrypt still confirms. */
 function keyHintFor(key: string): string {

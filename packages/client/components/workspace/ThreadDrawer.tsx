@@ -45,6 +45,8 @@ export default function ThreadDrawer({ channelId, open, onClose, onOpenThread, r
   const [threadInput, setThreadInput] = useState('');
   const [threadSending, setThreadSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // FIX-B: which existing fetch path last failed; Retry re-invokes it, never a new path.
+  const [failedAction, setFailedAction] = useState<'threads' | 'open' | 'create' | 'send' | 'final' | null>(null);
   const [alsoSend, setAlsoSend] = useState(false);
   const [sending, setSending] = useState(false);
 
@@ -97,8 +99,10 @@ export default function ThreadDrawer({ channelId, open, onClose, onOpenThread, r
         mentions: finalMessage.mentions,
         attachments: finalMessage.attachments,
       } as any);
+      setFailedAction(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to post the final answer to the channel.');
+      setFailedAction('final');
     } finally {
       setSending(false);
     }
@@ -113,8 +117,10 @@ export default function ThreadDrawer({ channelId, open, onClose, onOpenThread, r
       if (!res.ok) throw new Error('Failed to load threads.');
       const data = await res.json();
       setThreads(data.threads ?? []);
+      setFailedAction(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load threads.');
+      setFailedAction('threads');
     }
     setLoading(false);
   }
@@ -164,8 +170,10 @@ export default function ThreadDrawer({ channelId, open, onClose, onOpenThread, r
         content: message.content || '',
         timestamp: message.timestamp,
       })));
+      setFailedAction(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load thread messages.');
+      setFailedAction('open');
     } finally {
       setThreadLoading(false);
     }
@@ -186,8 +194,10 @@ export default function ThreadDrawer({ channelId, open, onClose, onOpenThread, r
       setNewTitle('');
       await fetchThreads();
       if (created?.id) await openThread(created as Thread);
+      setFailedAction(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to create thread.');
+      setFailedAction('create');
     } finally { setCreating(false); }
   }
 
@@ -220,11 +230,28 @@ export default function ThreadDrawer({ channelId, open, onClose, onOpenThread, r
       setThreads(prev => prev.map(thread => thread.id === selectedThread.id
         ? { ...thread, messageCount: thread.messageCount + 1, lastActivityAt: message.timestamp || new Date().toISOString() }
         : thread));
+      setFailedAction(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to send thread message.');
+      setFailedAction('send');
     } finally {
       setThreadSending(false);
     }
+  }
+
+  // FIX-C2: retry dispatcher keyed by failedAction; reuses existing fns only.
+  function retryFailedAction() {
+    const action = failedAction;
+    setError(null);
+    if (action === 'threads') { void fetchThreads(); return; }
+    if (action === 'open') {
+      if (selectedThread) void openThread(selectedThread);
+      else void fetchThreads();
+      return;
+    }
+    if (action === 'create') { void createThread(); return; }
+    if (action === 'send') { void sendThreadMessage(); return; }
+    void sendFinalToChannel();
   }
 
   if (!open) return null;
@@ -255,7 +282,20 @@ export default function ThreadDrawer({ channelId, open, onClose, onOpenThread, r
           </div>
         )}
 
-        {error && <div role="alert" className="mx-3 mt-2 rounded-lg border border-rose-500/20 bg-rose-500/10 px-2.5 py-1.5 text-[11px] text-rose-300">{error}</div>}
+        {/* FIX-B: honest error state reuses the existing fetch path only. */}
+        {error && (
+          <div role="alert" className="mx-3 mt-2 rounded-lg border border-rose-500/20 bg-rose-500/10 px-2.5 py-1.5 text-[11px] text-rose-300">
+            <span>{error}</span>
+            <button
+              type="button"
+              onClick={() => { retryFailedAction(); }}
+              aria-label="Retry run thread action"
+              className="ml-2 underline hover:text-rose-200 cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-rose-400/60 rounded"
+            >
+              Retry
+            </button>
+          </div>
+        )}
 
         <div className="flex-1 overflow-y-auto p-2 space-y-1.5">
           {branchSteps.length === 0 && <div className="text-xs text-zinc-600 p-3 text-center">No run activity yet for this run.</div>}
@@ -361,7 +401,19 @@ export default function ThreadDrawer({ channelId, open, onClose, onOpenThread, r
         </div>
       )}
 
-      {error && <div role="alert" className="mx-3 mt-2 rounded-lg border border-rose-500/20 bg-rose-500/10 px-2.5 py-1.5 text-[11px] text-rose-300">{error}</div>}
+      {error && (
+        <div role="alert" className="mx-3 mt-2 rounded-lg border border-rose-500/20 bg-rose-500/10 px-2.5 py-1.5 text-[11px] text-rose-300">
+          <span>{error}</span>
+          <button
+            type="button"
+            onClick={() => { retryFailedAction(); }}
+            aria-label="Retry thread action"
+            className="ml-2 underline hover:text-rose-200 cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-rose-400/60 rounded"
+          >
+            Retry
+          </button>
+        </div>
+      )}
 
       <div className="flex-1 overflow-y-auto p-2 space-y-1.5">
         {!selectedThread && loading && <div className="text-xs text-zinc-500 p-3">Loading threads…</div>}

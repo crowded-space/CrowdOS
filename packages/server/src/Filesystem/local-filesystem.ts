@@ -101,12 +101,17 @@ export class LocalFilesystem {
     const absPath = await this.resolve(path);
     const stat = await fs.stat(absPath).catch(() => null);
     const MAX_READ_BYTES = 1_048_576;
+    // FS-002: truncation was silent (text path returns a marker, binary did
+    // not). Record it on the buffer so callers can detect the cut.
     if (stat && stat.size > MAX_READ_BYTES) {
       const handle = await fs.open(absPath, 'r');
       try {
         const buf = Buffer.alloc(MAX_READ_BYTES);
         const { bytesRead } = await handle.read(buf, 0, MAX_READ_BYTES, 0);
-        return buf.subarray(0, bytesRead);
+        const out = buf.subarray(0, bytesRead);
+        (out as unknown as Record<string, unknown>).truncated = true;
+        (out as unknown as Record<string, unknown>).totalBytes = stat.size;
+        return out;
       } finally { await handle.close(); }
     }
     return fs.readFile(absPath);
@@ -166,20 +171,27 @@ export class LocalFilesystem {
     for (let i = 0; i < filtered.length; i += BOUNDED_CONCURRENCY) {
       const batch = filtered.slice(i, i + BOUNDED_CONCURRENCY);
       const batchNodes = await Promise.all(
-        batch.map(async (entry): Promise<FileNode> => {
-          const entryPath = join(absPath, entry.name);
-          const stat = await fs.stat(entryPath);
-          return {
-            name: entry.name,
-            path: normalizePath(join(path, entry.name)),
-            type: entry.isDirectory() ? "directory" : "file",
-            size: stat.size,
-            mimeType: entry.isFile() ? guessMimeType(entry.name) : null,
-            updatedAt: stat.mtime,
-          };
+        batch.map(async (entry): Promise<FileNode | null> => {
+          // FS-001: one dangling symlink/junction must not fail the whole
+          // listing. A broken entry resolves to null here and is skipped
+          // below (was: stat throw -> LIST_FAIL ENOENT for the entire dir).
+          try {
+            const entryPath = join(absPath, entry.name);
+            const stat = await fs.stat(entryPath);
+            return {
+              name: entry.name,
+              path: normalizePath(join(path, entry.name)),
+              type: entry.isDirectory() ? "directory" : "file",
+              size: stat.size,
+              mimeType: entry.isFile() ? guessMimeType(entry.name) : null,
+              updatedAt: stat.mtime,
+            };
+          } catch {
+            return null;
+          }
         }),
       );
-      nodes.push(...batchNodes);
+      for (const n of batchNodes) if (n) nodes.push(n);
     }
 
     nodes.sort((a, b) => {

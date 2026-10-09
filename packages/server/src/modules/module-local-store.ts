@@ -24,6 +24,7 @@ import { join } from "node:path";
 import { readFile } from "node:fs/promises";
 import {
   DEFAULT_WORKSPACE_SCOPE,
+  isTestStoreDir,
   mutateJsonArray,
   readJsonArray,
   resolveLocalStoreDir,
@@ -51,7 +52,9 @@ const CAPABILITIES_FILE = "capabilities-modules.json";
 function upsertScope(workspaceId?: string | null): string | null {
   const trimmed = workspaceId?.trim();
   if (trimmed) return trimmed;
-  if (process.env.VITEST !== undefined) return DEFAULT_WORKSPACE_SCOPE;
+  // M-10: narrowed from any-VITEST env to the pinned test-dir flag (static
+  // import; require() is unavailable in ESM).
+  if (isTestStoreDir()) return DEFAULT_WORKSPACE_SCOPE;
   return null;
 }
 

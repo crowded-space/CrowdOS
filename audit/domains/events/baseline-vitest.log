@@ -1,0 +1,54 @@
+
+ RUN  v4.1.7 C:/Users/Asus/Documents/GitHub/.ThisCrowd/packages/server
+
+stdout | src/events/events-integration.test.ts > §29 event log · end-to-end local turn > records a real assistant turn and replays it through the endpoint
+{"ts":"2026-10-06T12:36:55.732Z","level":"info","msg":"metric","stage":"router.decision","runtime":"conversational","reason":"explicit","agent":"default-assistant","authorityLevel":1,"intent":"chat"}
+stderr | src/events/events-integration.test.ts > §29 event log · end-to-end local turn > records a real assistant turn and replays it through the endpoint
+[EventBroker] Failed to increment channel message count: Error: DATABASE_URL is not set. Local workspace registry remains available; PG-backed features (chat history, RAG) are degraded until a database is configured.
+    at requireDatabaseUrl (C:/Users/Asus/Documents/GitHub/.ThisCrowd/packages/server/src/shared/config/database.ts:57:9)
+    at getSqlClient (C:/Users/Asus/Documents/GitHub/.ThisCrowd/packages/server/src/shared/config/database.ts:262:49)
+    at getDb (C:/Users/Asus/Documents/GitHub/.ThisCrowd/packages/server/src/shared/config/database.ts:276:83)
+    at Function.incrementMessageCount (C:/Users/Asus/Documents/GitHub/.ThisCrowd/packages/server/src/shared/core/index-builder.ts:17:16)
+    at C:/Users/Asus/Documents/GitHub/.ThisCrowd/packages/server/src/shared/sockets/register-socket-server.ts:467:26
+    at EventEmitter.wrappedHandler (C:/Users/Asus/Documents/GitHub/.ThisCrowd/packages/server/src/event-broker/event-broker.ts:80:9)
+    at EventEmitter.emit (node:events:519:28)
+    at EventBroker.emit (C:/Users/Asus/Documents/GitHub/.ThisCrowd/packages/server/src/event-broker/event-broker.ts:60:18)
+    at Object.appendMessage [as append] (C:/Users/Asus/Documents/GitHub/.ThisCrowd/packages/server/src/messages/message-service.ts:475:18)
+    at C:/Users/Asus/Documents/GitHub/.ThisCrowd/packages/server/src/events/events-integration.test.ts:118:5
+
+
+stdout | src/events/events-integration.test.ts > §29 event log · end-to-end local turn > records a real assistant turn and replays it through the endpoint
+{"ts":"2026-10-06T12:36:55.753Z","level":"info","msg":"metric","stage":"trace.assemble","channelId":"d6a68a9c-1531-415f-bd9e-0c2ae9fe049f","agentId":"agent-default-assistant","spanId":"4313a4bf012b4c81","traceId":"c4d17f7f908e43658d5972bb91845585974740be9681470d","durationMs":5.9,"status":"error","runtimeType":"conversational","error.message":"Agent default-assistant has no model module. Register a provider and bind the agent to it instead of relying on a default."}
+
+stdout | src/events/events-integration.test.ts
+[Runtime] Provider adapters registered.
+[MemoryLifecycle] Sweeper active every 600000ms (cap 500).
+[Heartbeat] Active — touch every 15000ms, sweep every 20000ms (threshold owned by Agents).
+
+ ❯ src/events/events-integration.test.ts (2 tests | 1 failed) 17988ms
+     × records a real assistant turn and replays it through the endpoint 612ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  src/events/events-integration.test.ts > §29 event log · end-to-end local turn > records a real assistant turn and replays it through the endpoint
+AssertionError: expected 'failed' to be 'completed' // Object.is equality
+
+Expected: "completed"
+Received: "failed"
+
+ ❯ src/events/events-integration.test.ts:130:27
+    128|       broker, explicitRuntime: "conversational",
+    129|     });
+    130|     expect(result.status).toBe("completed");
+       |                           ^
+    131|
+    132|     // The turn emitted message:new; the boot hook logged it. Wait for…
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯
+
+
+ Test Files  1 failed | 2 passed (3)
+      Tests  1 failed | 19 passed (20)
+   Start at  19:35:50
+   Duration  70.98s (transform 27.38s, setup 759ms, import 2.11s, tests 65.14s, environment 1ms)
+

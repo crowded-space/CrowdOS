@@ -1,7 +1,7 @@
 # SCL-1: Artillery — 100 concurrent sends (alternative to k6)
 # Run: npx artillery run load/artillery/concurrent-sends.yml
 config:
-  target: "{{ $env.BASE_URL || 'http://localhost:3001' }}"
+  target: "{{ $env.BASE_URL || 'http://localhost:12077' }}"
   phases:
     - duration: 30
       arrivalRate: 10

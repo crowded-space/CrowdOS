@@ -27,6 +27,7 @@ import { pinGate, isWorkspaceManagementPath } from "./shared/auth/pin-gate.js";
 import { authGate } from "./shared/auth/auth-gate.js";
 import { startBudgetReconciler } from "./shared/core/token-tracker.js";
 import { runsGate } from "./runs/runs-gate.js";
+import { toolsGate } from "./tools/tools-gate.js";
 import { startApprovalSweeper } from "./approvals/approval-sweeper.js";
 import { queueGate } from "./queue/queue-gate.js";
 import { eventsGate } from "./events/events-gate.js";
@@ -279,7 +280,12 @@ export async function buildServer(opts?: BuildServerOptions): Promise<BuiltServe
         );
       });
     };
-    void getWorkspaceDb(trimmedWsId).then(
+    // getWorkspaceDb can throw synchronously for local-only workspaces, so
+    // resolve through Promise.resolve() to keep both sync and async failures
+    // on the record-fallback path below instead of escaping as unhandled.
+    void Promise.resolve()
+      .then(() => getWorkspaceDb(trimmedWsId))
+      .then(
       async (wsDb) => {
         if (wsDb.source !== "workspace") {
           if (dbOptional) {
@@ -364,6 +370,10 @@ export async function buildServer(opts?: BuildServerOptions): Promise<BuiltServe
   // Fire-and-forget: local log lag must never block or fail live delivery.
   eventBroker.onAny((event) => eventsGate.recordDetached(event));
   initRuntime();
+  // TOLS-05: repopulate MCP server sessions from mcp_servers at boot.
+  // Fire-and-forget best-effort: no DB configured or unreachable => no-op,
+  // preserving the dual-boot invariant that HTTP wiring never requires PG.
+  void toolsGate.restoreMcpServers();
   // QUE-2: when QUEUE_MODE=bullmq, local maintenance timers are replaced by
   // BullMQ repeatable jobs (runs/maintenance). API skips timers and never
   // opens a Redis connection except via optional health probe.

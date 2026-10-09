@@ -25,9 +25,16 @@ export default function AgentStudioModal({ agentId, open, onClose }: AgentStudio
 
   const { showSuccess, showError, showInfo } = useToast();
 
-  const [activeTab, setActiveTab] = useState<'rack' | 'xray' | 'patch'>('rack');
+  // Only rack + xray render below. A 'patch' variant lingered in the type
+  // with no button or panel behind it — dead UI, removed.
+  const [activeTab, setActiveTab] = useState<'rack' | 'xray'>('rack');
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
+  // Manifest load failure: a failed read must not masquerade as an empty
+  // rack. The rack renders store catalogs (honest empty when truly empty);
+  // this surfaces only the fetch failure with a retry.
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [reloadKey, setReloadKey] = useState(0);
 
   // Manifest State
   const [selectedModelId, setSelectedModelId] = useState<string>('');
@@ -52,10 +59,14 @@ export default function AgentStudioModal({ agentId, open, onClose }: AgentStudio
 
     const loadData = async () => {
       setLoading(true);
+      setLoadError(null);
       try {
         // 1. Fetch Agent Manifest
         const manifestRes = await fetch(`/api/studio/agents/${agentId}/manifest`);
-        if (manifestRes.ok) {
+        if (!manifestRes.ok) {
+          throw new Error('Manifest read failed (HTTP ' + manifestRes.status + ').');
+        }
+        {
           const data = await manifestRes.json();
           if (data.slots?.model) setSelectedModelId(data.slots.model.id);
           if (data.slots?.instructionStack) {
@@ -71,26 +82,32 @@ export default function AgentStudioModal({ agentId, open, onClose }: AgentStudio
 
         // 2. Fetch All Skills Catalog
         const skillsRes = await fetch('/api/skills');
-        if (skillsRes.ok) {
+        if (!skillsRes.ok) {
+          throw new Error('Skills catalog read failed (HTTP ' + skillsRes.status + ').');
+        }
+        {
           const skillsData = await skillsRes.json();
           setAvailableSkills(skillsData);
         }
 
         // 3. Fetch MCP Servers
         const mcpRes = await fetch('/api/mcp/servers');
-        if (mcpRes.ok) {
+        if (!mcpRes.ok) {
+          throw new Error('MCP server list read failed (HTTP ' + mcpRes.status + ').');
+        }
+        {
           const mcpData = await mcpRes.json();
           setMcpServers(mcpData);
         }
       } catch (err) {
-        console.warn('[AgentStudio] Failed to fetch manifest:', err);
+        setLoadError(err instanceof Error ? err.message : 'Failed to load the agent manifest.');
       } finally {
         setLoading(false);
       }
     };
 
     loadData();
-  }, [open, agentId]);
+  }, [open, agentId, reloadKey]);
 
   // Run X-Ray Inspection
   const handleInspectPrompt = async () => {
@@ -223,6 +240,23 @@ export default function AgentStudioModal({ agentId, open, onClose }: AgentStudio
 
           {/* Body Content */}
           <div className="flex-1 overflow-y-auto p-4 space-y-4">
+            {loadError && (
+              <div role="alert" className="rounded-xl border border-rose-500/25 bg-rose-500/[0.06] px-3 py-2.5 text-[12px] leading-relaxed text-rose-200 flex items-start gap-2">
+                <AlertCircle size={13} className="mt-0.5 shrink-0" aria-hidden="true" />
+                <div className="min-w-0 flex-1">
+                  <p className="font-semibold">Could not load the agent manifest</p>
+                  <p className="mt-0.5 break-words text-rose-200/90">{loadError} The rack below shows store catalogs only.</p>
+                  <button
+                    type="button"
+                    onClick={() => setReloadKey((k) => k + 1)}
+                    className="mt-1.5 inline-flex items-center gap-1.5 rounded-lg border border-rose-400/40 px-2.5 py-1 text-[11px] font-semibold text-rose-100 hover:bg-rose-500/20 transition cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-rose-300"
+                  >
+                    <RefreshCw size={11} aria-hidden="true" />
+                    <span>Retry load</span>
+                  </button>
+                </div>
+              </div>
+            )}
             {activeTab === 'rack' && (
               <div className="space-y-4">
                 {/* 1. MODEL SLOT */}

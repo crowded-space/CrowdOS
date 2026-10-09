@@ -93,23 +93,11 @@ export async function findReusableGrant(
     .orderBy(desc(approvalRequests.decidedAt))
     .limit(1);
   if (rows.length > 0) return rows[0];
-  // Fallback: allow global reusable grant ignoring requestedBy (per some spec interpretations)
-  // But prefer per-requester isolation; only fallback if strict not found.
-  // Check without requestedBy constraint but same scope/tool and not expired
-  const fallback = await db
-    .select()
-    .from(approvalRequests)
-    .where(
-      and(
-        eq(approvalRequests.toolName, toolName),
-        eq(approvalRequests.scope, scopeHash),
-        eq(approvalRequests.status, "approved"),
-        gt(approvalRequests.expiresAt, now)
-      )
-    )
-    .orderBy(desc(approvalRequests.decidedAt))
-    .limit(1);
-  return fallback[0] ?? null;
+  // AP-002: no cross-requester fallback. A grant issued to one requester
+  // must never authorize a different requester, even for the same tool +
+  // scope hash. Strict per-requester isolation; a miss returns null and the
+  // caller re-asks.
+  return null;
 }
 
 export async function decide(id: string, input: DecideApprovalInput): Promise<ApprovalRow | null> {
@@ -131,16 +119,20 @@ export async function decide(id: string, input: DecideApprovalInput): Promise<Ap
     let scope = claimed.scope;
     let expiresAt: Date | null = claimed.expiresAt;
     if (input.decision === "approved") {
-      if (input.scope) {
-        if (input.scope !== "reusable") {
-          scope = input.scope;
-        }
-        expiresAt = input.expiresAt ?? new Date(now.getTime() + APPROVAL_REUSABLE_TTL_MS);
-      } else if (input.expiresAt) {
-        expiresAt = input.expiresAt;
-      } else if (scope) {
-        expiresAt = new Date(now.getTime() + APPROVAL_REUSABLE_TTL_MS);
+      // AP-001/AP-005: explicit reuse mode. Legacy scope:'reusable' still
+      // maps here for compat, but new callers pass reuse:true with a real
+      // scope hash (or none, keeping the row scope).
+      // AP-005: the reusable-TTL extension is granted only on an EXPLICIT
+      // request — the reuse flag, the legacy sentinel, a caller-supplied
+      // scope key, or an explicit expiresAt. The row's own pre-existing
+      // scope no longer silently turns a one-off grant into a reusable one:
+      // without a request the expiry is cleared, so findReusableGrant can
+      // never match the row.
+      const wantReuse = input.reuse === true || Boolean(input.scope);
+      if (input.scope && input.scope !== "reusable") {
+        scope = input.scope;
       }
+      expiresAt = input.expiresAt ?? (wantReuse ? new Date(now.getTime() + APPROVAL_REUSABLE_TTL_MS) : null);
     }
 
     const ts = (d: Date | null) => (d ? new Date(d).getTime() : null);

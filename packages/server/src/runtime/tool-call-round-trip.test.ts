@@ -76,8 +76,9 @@ describe('DB-5 structured tool-call records round-trip', () => {
     expect(messageNewPayloads).toHaveLength(4);
     expect(messageNewPayloads[2].toolCalls).toEqual([sourceStructured[0]]);
     expect(messageNewPayloads[3].toolCalls).toEqual([sourceStructured[1]]);
-    expect(messageNewPayloads[0].toolCalls).toBeUndefined();
-    expect(messageNewPayloads[1].toolCalls).toBeUndefined();
+    // MSG-003 normalization: absent toolCalls persist and emit as null.
+    expect(messageNewPayloads[0].toolCalls).toBeNull();
+    expect(messageNewPayloads[1].toolCalls).toBeNull();
 
     const page = await messageGate.getChannelMessagesPage(CHANNEL_ID, {});
     const merged = page.messages;
@@ -101,7 +102,8 @@ describe('DB-5 structured tool-call records round-trip', () => {
 
     const successSource = sourceStructured[0];
     const successCard = cards.find((c: any) => c.toolExecution.name === 'web_search');
-    expect(successCard.id).toBe(`tool-${messageNewPayloads[2].id}`);
+    // MSG-016: card ids carry the per-row call index for uniqueness.
+    expect(successCard.id).toBe(`tool-${messageNewPayloads[2].id}-0`);
     expect(successCard.toolExecution).toEqual({
       name: successSource.name,
       input: JSON.stringify(successSource.args),

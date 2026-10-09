@@ -37,6 +37,16 @@ let fakeSequence = 0;
 
 let channelOverride: ((id: string) => Promise<unknown>) | null = null;
 
+// TG-1/TG-4 seams: per-workspace marker handles, a recording runWithDb, and an
+// opt-in fake ALS. Default runWithDb stays passthrough (fn() only); fake ALS is
+// enabled only by tests that assert a bare getDb() inside the bound scope.
+let fakeAlsEnabled = false;
+let currentBoundDb: unknown = null;
+let lastBoundDb: unknown = null;
+const boundCalls: unknown[] = [];
+let workspaceDbResolver: ((workspaceId: string) => Promise<unknown> | unknown) | null = null;
+const workspaceDbHandles = new Map<string, unknown>();
+
 function drizzleTableName(table: unknown): string | null {
   const name = (table as any)?.[Symbol.for("drizzle:Name")];
   return typeof name === "string" ? name : null;
@@ -53,7 +63,7 @@ function rowsFor(table: unknown): Row[] | null {
   }
 }
 
-function buildFakeDb() {
+function buildFakeDb(marker?: string) {
   function insert(table: unknown) {
     return {
       values(values: Row) {
@@ -65,6 +75,10 @@ function buildFakeDb() {
         };
         const promise = done() as Promise<Row> & { returning: () => Promise<Row[]> };
         promise.returning = async () => [rec];
+        // THR-025 regression: createThread's sequence bootstrap chains
+        // .onConflictDoNothing() on the insert builder — mirror drizzle's
+        // chainable shape (awaiting the promise already performs the insert).
+        (promise as unknown as { onConflictDoNothing: () => Promise<unknown> }).onConflictDoNothing = async () => promise;
         return promise;
       },
     };
@@ -176,7 +190,17 @@ function buildFakeDb() {
     transaction: (fn) => fn(db as never),
   };
 
+  if (marker) (db as unknown as Record<string, unknown>).__workspaceMarker = marker;
   return db;
+}
+
+function workspaceFakeDb(workspaceId: string): unknown {
+  let handle = workspaceDbHandles.get(workspaceId);
+  if (!handle) {
+    handle = buildFakeDb(workspaceId);
+    workspaceDbHandles.set(workspaceId, handle);
+  }
+  return handle;
 }
 
 vi.mock("./shared/config/database.js", async (importOriginal) => {
@@ -184,16 +208,46 @@ vi.mock("./shared/config/database.js", async (importOriginal) => {
     return await importOriginal<Record<string, unknown>>();
   }
   return {
-  getDb: () => buildFakeDb(),
+  getDb: () => (fakeAlsEnabled && currentBoundDb ? currentBoundDb : buildFakeDb()),
   getSqlClient: () => {
     throw new Error("getSqlClient is not available under the socket test fake");
   },
   ensurePgVectorExtension: async () => {},
   closeDatabaseConnection: async () => {},
   withTransaction: async <T>(fn: (tx: unknown) => Promise<T>) => fn(buildFakeDb()),
-  runWithDb: <T>(db: unknown, fn: () => T): T => fn(),
+  runWithDb: <T>(db: unknown, fn: () => T): T => {
+    lastBoundDb = db;
+    boundCalls.push(db);
+    if (!fakeAlsEnabled) return fn();
+    const previous = currentBoundDb;
+    currentBoundDb = db;
+    try {
+      const out = fn();
+      if (out && typeof (out as { then?: unknown }).then === "function") {
+        return (out as unknown as Promise<unknown>).finally(() => {
+          currentBoundDb = previous;
+        }) as T;
+      }
+      currentBoundDb = previous;
+      return out;
+    } catch (err) {
+      currentBoundDb = previous;
+      throw err;
+    }
+  },
+  dbForWorkspace: async (workspaceId: string | null | undefined): Promise<unknown> => {
+    if (workspaceDbResolver) return workspaceDbResolver(workspaceId as string);
+    if (!workspaceId) {
+      throw Object.assign(new Error("NO_DATABASE: no workspace context (local-only)"), { code: "NO_DATABASE" });
+    }
+    return workspaceFakeDb(workspaceId);
+  },
   dbScopeKey: () => "global",
   isDatabaseConfigured: () => true,
+  // THR-025: mirror the real predicate so ctx.workspaceId misses fail closed
+  // in tests exactly like production (dbForWorkspace throws NO_DATABASE).
+  isNoDatabaseError: (err: unknown): boolean =>
+    Boolean(err) && typeof err === "object" && (err as { code?: string }).code === "NO_DATABASE",
   isConnectionError: () => false,
   noteDbFailure: () => {},
   noteDbSuccess: () => {},
@@ -211,7 +265,24 @@ vi.mock("./shared/config/database.js", async (importOriginal) => {
       store.channels.length = 0;
       store.workspaces.length = 0;
       store.agents.length = 0;
+      boundCalls.length = 0;
+      lastBoundDb = null;
+      currentBoundDb = null;
+      fakeAlsEnabled = false;
+      workspaceDbResolver = null;
+      workspaceDbHandles.clear();
     },
+    setWorkspaceDbResolver(fn: ((workspaceId: string) => Promise<unknown> | unknown) | null) {
+      workspaceDbResolver = fn;
+    },
+    setFakeAls(enabled: boolean) {
+      fakeAlsEnabled = enabled;
+      if (!enabled) currentBoundDb = null;
+    },
+    get lastBoundDb() {
+      return lastBoundDb;
+    },
+    boundCalls,
   },
   };
 });

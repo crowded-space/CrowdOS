@@ -1,5 +1,5 @@
 import { eq, sql, desc, and, gte, lte, inArray } from "drizzle-orm";
-import { getDb } from "../shared/config/database.js";
+import { dbScopeKey, getDb } from "../shared/config/database.js";
 import { tokenUsageLog, modelModules, runs } from "../db/schema.js";
 import { moduleGate } from "../modules/module-gate.js";
 import { logMetric } from "../shared/core/structured-log.js";
@@ -222,8 +222,9 @@ async function attachRunMeta(list: PerRunCostRollup[]): Promise<void> {
   const ids = [...new Set(list.map((r) => r.runId).filter((id): id is string => !!id))];
   if (ids.length === 0) return;
   try {
-    const db = getDb();
-    const rows = await db.select({ id: runs.id, runtimeType: runs.runtimeType, status: runs.status }).from(runs).where(inArray(runs.id, ids));
+    // RUN-012/XD-012: via the Runs gate port, not a direct table select.
+    const { runsGate } = await import("../runs/runs-gate.js");
+    const rows = await runsGate.getMetaByIds(ids);
     const meta = new Map(rows.map((r) => [r.id, r] as const));
     for (const rollup of list) {
       if (!rollup.runId) continue;
@@ -257,6 +258,10 @@ export async function getPerRunRollup(opts: {
 export async function getCostDashboard(opts: { limit?: number } = {}): Promise<CostDashboard> {
   const limit = clampObsLimit(opts.limit);
   // One ledger fetch batched with the model-meta lookup; rollups derive pure from the same rows.
+  // M-03 note: the ledger entries resolve on the ambient ALS handle (tenant
+  // scoped when the caller runs inside runWithDb/request scope). The
+  // model-meta lookup is by-id metadata for display names only; full
+  // workspace threading awaits a workspace-aware model-meta port.
   const [entries, modelRows] = await Promise.all([
     getPerRunCostLedger({ limit }),
     moduleGate.model.list().then(
@@ -298,27 +303,43 @@ export async function getCostDashboard(opts: { limit?: number } = {}): Promise<C
 }
 
 // ponytail: 60s cache, verify is a periodic self-check not per-request truth.
-let verifyCache: { at: number; value: { match: boolean; ledgerTotal: number; recomputedTotal: number; deltaPct: number } } | null = null;
+// OBS-003: keyed by tenant scope — a module-global cache served one
+// workspace's totals to another.
+const verifyCache = new Map<string, { at: number; value: { match: boolean; ledgerTotal: number; recomputedTotal: number; deltaPct: number } }>();
 
-export async function verifyLedgerAccuracy(): Promise<{ match: boolean; ledgerTotal: number; recomputedTotal: number; deltaPct: number }> {
-  if (verifyCache && Date.now() - verifyCache.at < 60_000) return verifyCache.value;
-  const dashboard = await getCostDashboard({ limit: OBS_LIMIT_MAX });
-  // Recompute via SQL SUM aggregate as ground truth — single row, no full-table fetch.
+export async function verifyLedgerAccuracy(opts: { limit?: number } = {}): Promise<{ match: boolean; ledgerTotal: number; recomputedTotal: number; deltaPct: number }> {
+  const scope = dbScopeKey();
+  // OBS-004: like-for-like — verify the same window the served dashboard read
+  // uses (its default when no limit is given), so the verified total and the
+  // served total always cover the same rows.
+  const limit = clampObsLimit(opts.limit);
+  const cacheKey = `${scope}:${limit}`;
+  const hit = verifyCache.get(cacheKey);
+  if (hit && Date.now() - hit.at < 60_000) return hit.value;
+  const dashboard = await getCostDashboard({ limit });
+  // Recompute via SQL SUM aggregate over the SAME window — single row, no full-table fetch.
   const db = getDb();
   let rawTotal = dashboard.totalCostUsd;
   try {
-    const res = await db.execute(sql`SELECT COALESCE(SUM((token_usage_log.prompt_tokens + token_usage_log.completion_tokens) * COALESCE(model_modules.cost_per_1k, 0) / 1000), 0) AS total FROM token_usage_log LEFT JOIN model_modules ON token_usage_log.model_module_id = model_modules.id`);
+    const res = await db.execute(sql`SELECT COALESCE(SUM((w.prompt_tokens + w.completion_tokens) * COALESCE(model_modules.cost_per_1k, 0) / 1000), 0) AS total FROM (SELECT token_usage_log.prompt_tokens, token_usage_log.completion_tokens, token_usage_log.model_module_id FROM token_usage_log ORDER BY token_usage_log.timestamp DESC LIMIT ${limit}) AS w LEFT JOIN model_modules ON w.model_module_id = model_modules.id`);
     const rows = ((res as unknown as { rows?: Array<{ total: unknown }> }).rows ?? res) as Array<{ total: unknown }>;
     const total = Number((Array.isArray(rows) ? rows[0] : null as unknown as { total: unknown })?.total ?? 0);
     rawTotal = Math.round((Number.isFinite(total) ? total : dashboard.totalCostUsd) * 10000) / 10000;
   } catch {}
-  const delta = dashboard.totalCostUsd === 0 ? 0 : Math.abs(dashboard.totalCostUsd - rawTotal) / Math.max(1, dashboard.totalCostUsd);
+  // OBS-004: true percentage with a documented near-zero rule — below $0.0001
+  // (sub-1/100-cent) both sides are rounding noise; otherwise the delta is
+  // symmetric: |ledger - recomputed| / max(|ledger|, |recomputed|). The old
+  // max(1, total) floor flattened small mismatches and forced delta 0 whenever
+  // the dashboard total was 0, hiding a window/full-table disagreement.
+  const denom = Math.max(Math.abs(dashboard.totalCostUsd), Math.abs(rawTotal));
+  const delta = denom < 0.0001 ? 0 : Math.abs(dashboard.totalCostUsd - rawTotal) / denom;
   const value = {
     match: delta <= 0.01,
     ledgerTotal: dashboard.totalCostUsd,
     recomputedTotal: rawTotal,
     deltaPct: Math.round(delta * 10000) / 100,
   };
-  verifyCache = { at: Date.now(), value };
+  verifyCache.set(cacheKey, { at: Date.now(), value });
+  if (verifyCache.size > 50) verifyCache.delete(verifyCache.keys().next().value as string);
   return value;
 }

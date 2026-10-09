@@ -178,4 +178,82 @@ describe("McpClientManager SEC-6 hygiene", () => {
     expect(result.success).toBe(true);
     expect(result.output).toContain("nuked tmp");
   });
+
+  it("TOLS-03: a tripped circuit breaker refuses calls instead of sending them", async () => {
+    const id = await start(makeConfig());
+    const handler = getTool(id, "echo_env").handler;
+
+    // The public trigger paths (30s request timeout, 10MB stdout cap) each kill
+    // the child on first occurrence, so the threshold is driven here directly:
+    // five consecutive failures on a live session, exactly what recordFailure
+    // counts in production.
+    type TestSession = { consecutiveFailures: number; status: string; lastError?: string };
+    const session = (mcpClientManager as unknown as { sessions: Map<string, TestSession> })
+      .sessions.get(id)!;
+    const trip = mcpClientManager as unknown as {
+      recordFailure: (s: TestSession, reason: string) => void;
+    };
+    for (let i = 0; i < 5; i += 1) trip.recordFailure(session, "test-induced failure");
+    expect(session.status).toBe("error");
+
+    // Pre-fix the call was still written to stdin and the normal-mode fixture
+    // would have answered it successfully. The refusal below is the breaker
+    // gate: it must reject with the disabled reason and never reach the server.
+    const startedAt = performance.now();
+    await expect(handler({ names: [] }, ctx)).rejects.toThrow(/circuit breaker|disabled/);
+    await expect(handler({ names: [] }, ctx)).rejects.toBeInstanceOf(McpServerCrashedError);
+    expect(performance.now() - startedAt).toBeLessThan(100);
+
+    // Gate is a refusal, not a teardown: status stays tripped and tools stay
+    // registered (cleanup/unregister is a separate, larger change).
+    expect(mcpClientManager.getStatus(id)?.status).toBe("error");
+  });
+
+  it("TOLS-06: disconnect during an in-flight connect aborts without dead tools or an error status", async () => {
+    const id = await start(makeConfig({ autoStart: false }));
+    expect(mcpClientManager.getStatus(id)?.status).toBe("disconnected");
+
+    // Deterministically hold the handshake right after tools/list: the fixture
+    // has answered, but the response is withheld until disconnect() has landed
+    // mid-connect — the exact race the row describes.
+    type SendJsonRpc = (...args: any[]) => Promise<any>;
+    const mgr = mcpClientManager as unknown as { sendJsonRpc: SendJsonRpc };
+    const originalSend = mgr.sendJsonRpc;
+    let listSent = 0;
+    let releaseList!: () => void;
+    const listGate = new Promise<void>((resolve) => { releaseList = resolve; });
+    (mcpClientManager as unknown as Record<string, unknown>).sendJsonRpc = (...args: any[]) => {
+      const [session, method, params] = args;
+      const call = originalSend.call(mcpClientManager, session, method, params);
+      if (method !== "tools/list") return call;
+      listSent += 1;
+      return call.then(async (res: unknown) => { await listGate; return res; });
+    };
+
+    try {
+      const connectPromise = mcpClientManager.connect(id);
+      const deadline = Date.now() + 5000;
+      while (listSent === 0 && Date.now() < deadline) {
+        await new Promise((r) => setTimeout(r, 5));
+      }
+      expect(listSent).toBe(1);
+
+      await mcpClientManager.disconnect(id);
+      releaseList();
+
+      // The in-flight tools/list is rejected by disconnect's failPending (or,
+      // if it had already resolved, by the epoch check) — either way the
+      // connect must reject instead of resolving to a resurrected session.
+      await expect(connectPromise).rejects.toThrow(/disconnected/);
+    } finally {
+      delete (mcpClientManager as unknown as Record<string, unknown>).sendJsonRpc;
+    }
+
+    // TOLS-06: pre-fix the connect catch overwrote 'disconnected' with 'error'
+    // and the resumed task could register tools for the killed child.
+    expect(mcpClientManager.getStatus(id)?.status).toBe("disconnected");
+    expect(mcpClientManager.getStatus(id)?.toolCount).toBe(0);
+    expect(toolRegistry.has(`mcp_${id}_nuke_workspace`)).toBe(false);
+    expect(toolRegistry.has(`mcp_${id}_echo_env`)).toBe(false);
+  });
 });

@@ -13,7 +13,10 @@ export class CustomAdapter implements IProviderAdapter {
     onChunk?: (chunk: { content: string; thoughts?: string; isThoughts?: boolean }) => void,
     options?: { signal?: AbortSignal }
   ): Promise<LLMResponse> {
-    const modelName = config.modelName || 'custom-model'
+    const modelName = config.modelName
+    if (!modelName) {
+      throw new Error('[CustomAdapter] Missing model name. Bind the agent to a model module with an explicit model.')
+    }
     const apiKey = config.apiKey || process.env.CUSTOM_API_KEY || ''
 
     let endpointUrl = config.endpointUrl || 'http://localhost:8080/v1'

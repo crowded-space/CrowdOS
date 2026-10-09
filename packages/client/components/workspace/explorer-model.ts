@@ -175,13 +175,6 @@ export function sandboxRootLabel(root: sandboxRoot | string | null | undefined):
   return root === 'workspace-local' ? 'Workspace Local' : 'Repository';
 }
 
-export function parentPathOf(path: string): string {
-  const trimmed = path.replace(/[\\/]+$/, '');
-  const cut = Math.max(trimmed.lastIndexOf('/'), trimmed.lastIndexOf('\\'));
-  if (cut <= 0) return '/';
-  return trimmed.slice(0, cut);
-}
-
 /** One visible row of the tree, with the a11y set info it needs. */
 export type treeRow = {
   entry: repoEntry;

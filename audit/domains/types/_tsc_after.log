@@ -1,0 +1,3 @@
+src/shared/sockets/register-socket-server.ts(332,15): error TS2339: Property 'dbForWorkspace' does not exist on type 'typeof import("C:/Users/Asus/Documents/GitHub/.ThisCrowd/packages/server/src/workspace/workspace-gate")'.
+src/shared/sockets/register-socket-server.ts(335,143): error TS2322: Type 'Promise<RuntimeResult>' is not assignable to type 'Promise<Promise<RuntimeResult>>'.
+  Type 'RuntimeResult' is missing the following properties from type 'Promise<RuntimeResult>': then, catch, finally, [Symbol.toStringTag]

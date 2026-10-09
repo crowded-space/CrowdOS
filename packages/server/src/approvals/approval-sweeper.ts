@@ -7,6 +7,16 @@ import { forEachWorkspaceDb } from "../workspace/workspace-gate.js";
 
 let interval: NodeJS.Timeout | null = null;
 
+// AP-016 convergence contract — concurrent sweeps (API inline timer + worker
+// timer in separate processes; no leader election) converge by construction:
+// - `expirePendingApprovals` is one atomic UPDATE; a row lands in exactly one
+//   sweep's RETURNING set, so it is expired, resumed and emitted exactly once.
+// - Two sweeps flipping disjoint rows of the SAME run both race the resume;
+//   the runs CAS + waiting_for_approval guard let exactly one transition land
+//   (stateGate emits run.status_changed only for the CAS winner).
+// - Emits stay one-per-flipped-row: each approval.decided carries its own id.
+// No advisory lock is taken on purpose: it would only dedupe overlapping work,
+// never change outcomes, and would add cross-DB lock handling to the fan-out.
 export async function sweepApprovalsOnce(broker?: unknown): Promise<number> {
   let total = 0;
   await forEachWorkspaceDb(async (db, workspaceId) => {
@@ -14,6 +24,16 @@ export async function sweepApprovalsOnce(broker?: unknown): Promise<number> {
       total += await sweepOneDb(broker, workspaceId);
     });
   });
+  // AP-003: single-DB deployments have no per-workspace URLs, so the fan-out
+  // above visits nothing and pending rows never expire. Always sweep the
+  // ambient/global handle too (runWithDb keeps ALS semantics for getDb).
+  const { getDb } = await import("../shared/config/database.js");
+  try {
+    const db = getDb();
+    await runWithDb(db, async () => {
+      total += await sweepOneDb(broker, null);
+    });
+  } catch {}
   return total;
 }
 
@@ -38,7 +58,10 @@ async function sweepOneDb(broker?: unknown, workspaceId?: string | null): Promis
       const channelId = run?.channelId;
       // Transition WAITING_FOR_APPROVAL → RUNNING (default-deny resume). If not in waiting state, no-op.
       if (run && run.status === "waiting_for_approval") {
-        await runsGate.transition(row.runId, "running", "approval_expired_default_deny");
+        // XD-009: funnel through stateGate so the hop emits
+        // run.status_changed like every executor-driven transition.
+        const { stateGate } = await import("../state/state-gate.js");
+        await stateGate.applyRunTransition({ runId: row.runId, to: "running", reason: "approval_expired_default_deny", broker: target, workspaceId: (run as any)?.workspaceId ?? workspaceId ?? null });
       }
       // Emit approval.decided with expired for observers (sweeper is sole expiry owner)
       emitDecided(target, {

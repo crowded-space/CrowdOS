@@ -8,10 +8,10 @@ test.describe('chat journey', () => {
   test('composer sends a message and it appears in the timeline', async ({ page }) => {
     let viteUp = true;
     try {
-      await fetch('http://localhost:3000', { signal: AbortSignal.timeout(3000) });
+      await fetch('http://localhost:22077', { signal: AbortSignal.timeout(3000) });
     } catch { viteUp = false; }
     if (!viteUp) {
-      test.info().annotations.push({ type: 'SKIP', description: 'Vite not running on :3000 — start npm run dev' });
+      test.info().annotations.push({ type: 'SKIP', description: 'Vite not running on :22077 — start npm run dev' });
       return;
     }
     await page.goto('/', { waitUntil: 'domcontentloaded' });
@@ -30,13 +30,13 @@ test.describe('chat journey', () => {
   test('chat history loads with pagination cursor', async ({ page }) => {
     let apiUp = true;
     try {
-      await fetch('http://localhost:3001/health', { signal: AbortSignal.timeout(3000) });
+      await fetch('http://localhost:12077/health', { signal: AbortSignal.timeout(3000) });
     } catch { apiUp = false; }
     if (!apiUp) {
-      test.info().annotations.push({ type: 'SKIP', description: 'API not reachable on :3001' });
+      test.info().annotations.push({ type: 'SKIP', description: 'API not reachable on :12077' });
       return;
     }
-    const res = await fetch('http://localhost:3001/health');
+    const res = await fetch('http://localhost:12077/health');
     expect(res.status).toBe(200);
   });
 });

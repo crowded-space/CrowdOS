@@ -13,7 +13,10 @@ export class OllamaAdapter implements IProviderAdapter {
     onChunk?: (chunk: { content: string; thoughts?: string; isThoughts?: boolean }) => void,
     options?: { signal?: AbortSignal }
   ): Promise<LLMResponse> {
-    const modelName = config.modelName || 'llama3'
+    const modelName = config.modelName
+    if (!modelName) {
+      throw new Error('[OllamaAdapter] Missing model name. Bind the agent to a model module with an explicit model.')
+    }
     const apiKey = config.apiKey || process.env.OLLAMA_API_KEY || ''
 
     let endpointUrl = config.endpointUrl || 'http://localhost:11434/v1'

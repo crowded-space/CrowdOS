@@ -1,11 +1,13 @@
+export type searchSource = "brave" | "tavily" | "serper"
+
 export interface SearchResult {
   url: string
   title: string
   snippet: string
   /** ISO timestamp string when source published or fetched */
   timestamp?: string
-  /** Provider name: brave | tavily | serper */
-  source: string
+  /** SP-02: validated provider union — a mapper typo fails compile, not artifacts. */
+  source: searchSource
 }
 
 export interface SearchProvider {

@@ -2,12 +2,12 @@ import { useEffect, useState } from 'react';
 import { Coins, Square } from 'lucide-react';
 import { useCrowdOSStore, type ArtifactRow, type jobRow } from '@/stores/crowdOsStore';
 import { useShallow } from 'zustand/react/shallow';
+import { isStoppableRunStatus } from './run-stoppability';
 
 export interface runHeaderProps {
   runId: string;
 }
 
-const TERMINAL_RUN_STATUSES = new Set(['completed', 'failed', 'cancelled']);
 const NO_ARTIFACTS: ArtifactRow[] = [];
 
 function statusTone(status: string): string {
@@ -82,8 +82,7 @@ export function RunHeader(args: runHeaderProps): React.JSX.Element {
   const status = job ? job.status : "\u2014";
   const shortId = runId.length > 8 ? runId.slice(0, 8) : runId;
   const agentCount = job ? job.agentIds.length : null;
-  let terminal = false;
-  if (job) { terminal = TERMINAL_RUN_STATUSES.has(job.status.toLowerCase()); }
+  const stoppable = job ? isStoppableRunStatus(job.status) : false;
   const stopCls = stopping
     ? 'bg-zinc-800 border-zinc-700 text-zinc-500 cursor-wait'
     : 'bg-rose-600 hover:bg-rose-500 border-rose-500/20 text-white cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-rose-500/30';
@@ -119,7 +118,7 @@ export function RunHeader(args: runHeaderProps): React.JSX.Element {
             {costLabel}
           </span>
         )}
-        {job && !terminal && (
+        {job && stoppable && (
           <button
             type="button"
             onClick={function () { stopRun(runId); }}

@@ -1,4 +1,4 @@
-﻿import path from "node:path";
+import path from "node:path";
 import { getDb } from "../shared/config/database.js";
 import { agents } from "../db/schema.js";
 import { eq } from "drizzle-orm";
@@ -353,9 +353,16 @@ export class ToolExecutor {
       }
 
       // 2. Authorize Tool (Resolves direct grants + active skill tools + universal tools)
-      const allowedTools = await skillsGate.getResolvedToolsForAgent(agentId);
-      const isAllowed = allowedTools.includes(toolId) ||
-        ["open_memory", "discard_memory_from_context", "remember", "open_detail", "load_skill"].includes(toolId);
+      // SK-002: authorize inside the SAME workspace handle the agent row
+      // came from. Ambient authz disagreed with tenant identity in split-DB.
+      const { runWithDb } = await import("../shared/config/database.js");
+      const allowedTools = await (runWithDb as (db: unknown, fn: () => Promise<string[]>) => Promise<string[]>)(agentDb, () =>
+        skillsGate.getResolvedToolsForAgent(agentId),
+      );
+      // SK-008: fallback list is the shared constant (was a 5-id copy
+      // missing lock_in/lock_out).
+      const { UNIVERSAL_TOOL_IDS } = await import("./tools-gate.js");
+      const isAllowed = allowedTools.includes(toolId) || (UNIVERSAL_TOOL_IDS as string[]).includes(toolId);
 
       if (!isAllowed) {
         throw new Error(`Security breach: Tool "${toolId}" is not authorized for @${agent.name}. Please grant it via ToolkitModule or attach a relevant Skill.`);
@@ -512,7 +519,7 @@ export class ToolExecutor {
             if (abortSignal?.aborted || awaited === null) {
               // Distinguish abort vs disappeared
               const check = awaited === null && abortSignal?.aborted ? 'approval_cancelled' : 'approval_not_found';
-              try { await runsGate.transition(runId, "running", check); } catch {}
+              try { await runsGate.transition(runId, "running", check); } catch (terr: any) { console.warn(`[ToolExecutor] transition to running failed for run ${runId}:`, terr?.message ?? terr); }
               if (abortSignal?.aborted) throw new Error(`Tool "${toolId}" approval wait cancelled by user.`);
               throw new Error(`Approval ${pendingRow.id} disappeared — denying command.`);
             }
@@ -539,10 +546,10 @@ export class ToolExecutor {
 
             if (decidedRow!.status === "approved") {
               // Resume run RUNNING and fall through to handler execution
-              try { await runsGate.transition(runId, "running", "approval_granted"); } catch {}
+              try { await runsGate.transition(runId, "running", "approval_granted"); } catch (terr: any) { console.warn(`[ToolExecutor] transition to running failed for run ${runId}:`, terr?.message ?? terr); }
             } else {
               // DENY / EXPIRED: resume RUNNING but fail the tool safely; run continues per APR-1 policy (documented)
-              try { await runsGate.transition(runId, "running", `approval_${decidedRow!.status}`); } catch {}
+              try { await runsGate.transition(runId, "running", `approval_${decidedRow!.status}`); } catch (terr: any) { console.warn(`[ToolExecutor] transition failed for run ${runId}:`, terr?.message ?? terr); }
               const reasonMap: Record<string, string> = {
                 denied: `approval denied by operator`,
                 expired: `approval expired (TTL default-deny)`,
@@ -692,7 +699,7 @@ export class ToolExecutor {
               scope: scopeHash,
               expiresAt,
             });
-            try { await runsGate.transition(runId, "waiting_for_approval", `approval_required:${toolId}:${riskClass}`); } catch {}
+            try { await runsGate.transition(runId, "waiting_for_approval", `approval_required:${toolId}:${riskClass}`); } catch (terr: any) { console.warn(`[ToolExecutor] transition to waiting_for_approval failed for run ${runId}:`, terr?.message ?? terr); }
             // Emit approval.requested
             try {
               const { getSharedBroker } = await import("../event-broker/event-broker-gate.js");
@@ -716,7 +723,7 @@ export class ToolExecutor {
               partialCtx,
             });
             if (abortSignal?.aborted || !decidedRow) {
-              try { await runsGate.transition(runId, "running", abortSignal?.aborted ? "approval_cancelled" : "approval_not_found"); } catch {}
+              try { await runsGate.transition(runId, "running", abortSignal?.aborted ? "approval_cancelled" : "approval_not_found"); } catch (terr: any) { console.warn(`[ToolExecutor] transition to running failed for run ${runId}:`, terr?.message ?? terr); }
               throw new Error(decidedRow === null && abortSignal?.aborted ? `Tool "${toolId}" approval wait cancelled by user.` : `Approval ${pendingRow.id} disappeared — denying FS operation.`);
             }
             try {
@@ -727,9 +734,9 @@ export class ToolExecutor {
               emitDecided(emitVia, { runId, approvalId: pendingRow.id, tool: toolId, decision: decidedRow.status === "approved" ? "approved" : decidedRow.status === "denied" ? "denied" : "expired", decidedBy: (decidedRow as any)?.decidedBy ?? null, scope: scopeHash, riskClass, channelId: channelIdForEvent });
             } catch {}
             if (decidedRow.status === "approved") {
-              try { await runsGate.transition(runId, "running", "approval_granted"); } catch {}
+              try { await runsGate.transition(runId, "running", "approval_granted"); } catch (terr: any) { console.warn(`[ToolExecutor] transition to running failed for run ${runId}:`, terr?.message ?? terr); }
             } else {
-              try { await runsGate.transition(runId, "running", `approval_${decidedRow.status}`); } catch {}
+              try { await runsGate.transition(runId, "running", `approval_${decidedRow.status}`); } catch (terr: any) { console.warn(`[ToolExecutor] transition failed for run ${runId}:`, terr?.message ?? terr); }
               const why = decidedRow.status === "denied" ? "approval denied by operator" : `approval ${decidedRow.status}`;
               throw new Error(`Safety ASK denied: FS ${toolOp} on "${(args as any).path}" — ${why} (run ${runId} resumed, tool failed safely)`);
             }

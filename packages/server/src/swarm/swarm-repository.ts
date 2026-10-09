@@ -1,4 +1,4 @@
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { getDb } from "../shared/config/database.js";
 import { swarmTasks } from "../db/schema.js";
 import type { SwarmPlanTask, SwarmTaskRow, SwarmTaskStatus } from "./swarm-types.js";
@@ -205,10 +205,22 @@ export async function updateSwarmTaskStatus(
     const db = getDb();
     const patch: Record<string, unknown> = { status: status as any, updatedAt: new Date() };
     if (outputRef !== undefined) patch.outputRef = outputRef;
+    // SW-01: the mem path above guards transitions via canTransition, but the
+    // PG path did not — a terminal row could rewind. Gate the write on the
+    // current status so an illegal move affects zero rows (CAS).
+    const [current] = await db.select().from(swarmTasks).where(eq(swarmTasks.id, dbId)).limit(1);
+    if (current && !canTransition((current as DbSwarmTask).status as any, status)) {
+      console.warn(`[swarmRepository] rejected illegal transition ${(current as DbSwarmTask).status} -> ${status} for ${taskId} (run ${runId})`);
+      return null;
+    }
     const [row] = await db
       .update(swarmTasks)
       .set(patch as any)
-      .where(eq(swarmTasks.id, dbId))
+      .where(
+        current
+          ? and(eq(swarmTasks.id, dbId), eq(swarmTasks.status, (current as DbSwarmTask).status as any))
+          : eq(swarmTasks.id, dbId)
+      )
       .returning();
     if (row) {
       const converted = toRow(row as DbSwarmTask);
@@ -295,10 +307,13 @@ export async function deleteSwarmTasksByRun(runId: string): Promise<void> {
     const db = getDb();
     // drizzle delete with where runId
     await db.delete(swarmTasks).where(eq(swarmTasks.runId, runId));
+    // SW-06: mem cleared only on confirmed delete. Clearing unconditionally
+    // hid PG failures and left stale rows to collide on re-run (SW-07).
+    memClearRun(runId);
   } catch (err) {
     console.warn("[swarmRepository] deleteSwarmTasksByRun DB failed:", (err as Error)?.message || err);
+    throw err;
   }
-  memClearRun(runId);
 }
 
 export function resetSwarmRepositoryForTests(): void {

@@ -161,12 +161,16 @@ describe("Agent Runtime, Routing, Tools & Lifecycle Integrated QA Suite", () => 
     });
 
     it("injects Active Runtime system flag into system prompt for all runtime types", async () => {
+      // The prompt-flag behavior under test does not depend on model
+      // resolution; pass an explicit config so the pipeline does not
+      // require a module row in the fake database.
       const testAgentProfile: any = {
         id: "ag-prompt-test",
         name: "TestAgent",
         authorityLevel: 1,
         species: "Falcon",
       };
+      const modelConfig = { provider: "google", modelName: "gemini-2.0-flash" } as const;
 
       const runtimeMappings: Array<{ runtimeType: any; expectedFlag: string }> = [
         { runtimeType: "conversational", expectedFlag: "Active Runtime: Chat" },
@@ -183,6 +187,7 @@ describe("Agent Runtime, Routing, Tools & Lifecycle Integrated QA Suite", () => 
           workspaceId: "default",
           userInput: "Hello",
           runtimeType,
+          modelConfig: { ...modelConfig },
         });
 
         expect(packet.systemPrompt).toContain("[ACTIVE RUNTIME ENGINE]");

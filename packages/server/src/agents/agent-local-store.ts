@@ -78,7 +78,9 @@ function normalizeAgentInput(input: Record<string, any>) {
     // modelModuleId/instructionModuleId are part of the merged shape: dropping
     // them here silently reverted module assignments on every existing-row
     // update (they fell back to the existing row's values, null included).
-    modelModuleId: input.modelModuleId ?? undefined,
+    // AGT-009: null must survive normalization — a merged null is an explicit
+    // clear (update path); only undefined keeps the stored value upstream.
+    modelModuleId: input.modelModuleId,
     instructionModuleId: input.instructionModuleId ?? undefined,
     species: input.species ?? undefined,
     avatar: input.avatar ?? undefined,
@@ -271,7 +273,8 @@ export async function localUpsertAgent(input: {
           species: input.species !== undefined ? input.species : existing.species,
           avatar: input.avatar !== undefined ? input.avatar : existing.avatar,
           l3Subtype: input.l3Subtype !== undefined ? input.l3Subtype : existing.l3Subtype,
-          modelModuleId: input.modelModuleId ?? existing.modelModuleId,
+          // AGT-009: null clears, undefined keeps (mirror of the service merge).
+          modelModuleId: input.modelModuleId !== undefined ? input.modelModuleId : existing.modelModuleId,
           instructionModuleId: input.instructionModuleId ?? existing.instructionModuleId,
           toolkitModuleId: input.toolkitModuleId !== undefined ? input.toolkitModuleId : existing.toolkitModuleId,
           constraintsModuleId: input.constraintsModuleId !== undefined ? input.constraintsModuleId : existing.constraintsModuleId,
@@ -349,6 +352,8 @@ export async function localDeleteAgent(id: string, workspaceId?: string | null):
  * Seed the default conversational agent for a fresh local workspace.
  * Idempotent: an existing live default-assistant in this workspace is returned
  * untouched, so repeated boots never duplicate the roster.
+ * AGT-016: the seed id is namespaced per workspace so two workspaces sharing
+ * one PG database never collide on the agents.id PK.
  */
 export async function localSeedDefaultAgent(workspaceId?: string | null): Promise<any> {
   if (!workspaceId || !String(workspaceId).trim()) {
@@ -371,7 +376,10 @@ export async function localSeedDefaultAgent(workspaceId?: string | null): Promis
   const found = existing.find((r: LocalAgentRow) => r.name === "default-assistant" && r.archivedAt === null);
   if (found) return found;
   return localUpsertAgent({
-    id: "agent-default-assistant",
+    // AGT-016: the PG agents PK is the global id; a literal seed id let two
+    // workspaces sharing one database collide, and workspace-sync push then
+    // upserted one workspace's seed over the other.
+    id: `${workspaceId}:default-assistant`,
     workspaceId: workspaceId ?? null,
     name: "default-assistant",
     title: "Default Assistant",

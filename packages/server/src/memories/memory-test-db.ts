@@ -7,6 +7,14 @@ export interface MemTestStore {
   notes: Record<string, unknown>[];
   log: Record<string, unknown>[];
   dbCalls: number;
+  /** MEM-009: limit observed on the last findMany (null = unbounded). */
+  lastFindManyLimit: number | null;
+  /** MEM-012: fault injection for insert() — return an Error to fail the write. */
+  insertFault: ((values: Record<string, unknown>) => Error | null) | null;
+  /** MEM-012: number of agent_memory_notes insert attempts (audit inserts excluded). */
+  noteInsertCalls: number;
+  /** Notes-table findMany count (perf tests assert the hot path stays single-query). */
+  notesQueryCount: number;
 }
 
 export const memTestStore: MemTestStore = {
@@ -15,6 +23,10 @@ export const memTestStore: MemTestStore = {
   notes: [],
   log: [],
   dbCalls: 0,
+  lastFindManyLimit: null,
+  insertFault: null,
+  noteInsertCalls: 0,
+  notesQueryCount: 0,
 };
 
 export function resetMemTestStore(): void {
@@ -23,6 +35,10 @@ export function resetMemTestStore(): void {
   memTestStore.notes.length = 0;
   memTestStore.log.length = 0;
   memTestStore.dbCalls = 0;
+  memTestStore.lastFindManyLimit = null;
+  memTestStore.insertFault = null;
+  memTestStore.noteInsertCalls = 0;
+  memTestStore.notesQueryCount = 0;
 }
 
 export function tick(ms = 5): Promise<void> {
@@ -76,6 +92,28 @@ function eqValue(a: unknown, b: unknown): boolean {
   return false;
 }
 
+/** Minimal ILIKE matcher for the mock: % → any run, _ → one char, \\ escapes. */
+function likeMatch(value: string, pattern: string): boolean {
+  let regex = "^";
+  for (let i = 0; i < pattern.length; i++) {
+    const ch = pattern[i];
+    if (ch === "\\" && i + 1 < pattern.length) {
+      regex += escapeRegexChar(pattern[++i]);
+    } else if (ch === "%") {
+      regex += ".*";
+    } else if (ch === "_") {
+      regex += ".";
+    } else {
+      regex += escapeRegexChar(ch);
+    }
+  }
+  return new RegExp(`${regex}$`, "i").test(value);
+}
+
+function escapeRegexChar(ch: string): string {
+  return ch.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 function cmpValue(a: unknown, b: unknown): number {
   const av = a instanceof Date ? a.getTime() : Number(a);
   const bv = b instanceof Date ? b.getTime() : Number(b);
@@ -87,11 +125,24 @@ function chunkKind(chunk: unknown): string {
   return ctor ? String(ctor[Symbol.for("drizzle:entityKind")] ?? "") : "";
 }
 
-function binaryPredicate(table: unknown, column: Column, op: string, values: unknown[]): Predicate {
+function binaryPredicate(
+  table: unknown,
+  column: Column,
+  op: string,
+  values: unknown[],
+  transforms: { lower?: boolean; stripAt?: boolean } = {},
+): Predicate {
   const key = tsKeyOf(table, column);
   const normalized = op.trim();
+  const normalizeLeft = (raw: unknown): unknown => {
+    if (!transforms.lower && !transforms.stripAt) return raw;
+    let out = String(raw ?? "");
+    if (transforms.lower) out = out.toLowerCase();
+    if (transforms.stripAt) out = out.replace(/^@+/, "");
+    return out;
+  };
   return (row) => {
-    const left = row[key];
+    const left = normalizeLeft(row[key]);
     switch (true) {
       case normalized === "=":
         return values.some((v) => eqValue(left, v));
@@ -111,6 +162,8 @@ function binaryPredicate(table: unknown, column: Column, op: string, values: unk
         return left != null;
       case normalized.startsWith("in"):
         return values.some((v) => eqValue(left, v));
+      case normalized === "ilike":
+        return values.some((v) => likeMatch(String(left ?? ""), String(v ?? "")));
       default:
         throw new Error(`memTestDb: unsupported operator '${normalized}'`);
     }
@@ -235,6 +288,11 @@ export function buildMemTestDb() {
       memTestStore.dbCalls++;
       return {
         values(values: Row) {
+          if (tableName(table) === "agent_memory_notes") {
+            memTestStore.noteInsertCalls++;
+            const fault = memTestStore.insertFault?.(values);
+            if (fault) throw fault;
+          }
           const rec: Row = { ...values };
           for (const [key, col] of Object.entries(table as Record<string, unknown>)) {
             if (!(col instanceof Column) || rec[key] !== undefined || !col.hasDefault) continue;
@@ -348,6 +406,8 @@ export function buildMemTestDb() {
 
           const findMany = (opts: { where?: unknown; orderBy?: unknown; limit?: number } = {}) => {
             memTestStore.dbCalls++;
+            if (tableName(table) === "agent_memory_notes") memTestStore.notesQueryCount++;
+            memTestStore.lastFindManyLimit = typeof opts.limit === "number" ? opts.limit : null;
             const filtered = rowsFor(table).filter(compileCondition(table, opts.where));
             const sorted = sortedCopy(filtered, table, resolveOrderKeys(table, opts.orderBy));
             const limited = typeof opts.limit === "number" ? sorted.slice(0, opts.limit) : sorted;

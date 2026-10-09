@@ -2,7 +2,7 @@
  * SCL-1: Load suite — 100 concurrent sends
  * k6 script simulating 100 concurrent user:message sends across channels.
  *
- * Prerequisites: API at BASE_URL (default http://localhost:3001), socket.io available.
+ * Prerequisites: API at BASE_URL (default http://localhost:12077), socket.io available.
  * Run: k6 run load/k6/concurrent-sends.js
  * CI: `npm run load:concurrent-sends` (wraps k6 with thresholds)
  *
@@ -33,7 +33,7 @@ export const options = {
   },
 };
 
-const BASE_URL = __ENV.BASE_URL || 'http://localhost:3001';
+const BASE_URL = __ENV.BASE_URL || 'http://localhost:12077';
 const AUTH_TOKEN = __ENV.API_KEY || __ENV.AUTH_TOKEN || '';
 const CHANNEL_ID = __ENV.CHANNEL_ID || 'load-test-channel';
 

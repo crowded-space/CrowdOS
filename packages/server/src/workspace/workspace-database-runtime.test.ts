@@ -1,4 +1,4 @@
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -25,8 +25,11 @@ import {
 } from "./workspace-database-runtime.js";
 import { clearWorkspaceEnvCache, readWorkspaceDatabaseUrl } from "./workspace-database.js";
 import { setRegistryFilePathForTests } from "./workspace-registry.js";
+import { getWorkspaceDb as getWorkspaceDbThroughGate, tierContextFor } from "./workspace-gate.js";
+import { resolveTier } from "../shared/config/database.js";
 
 const GLOBAL_URL = "postgresql://global:u@localhost:5432/main";
+let testRegistryDir: string | null = null;
 
 beforeEach(() => {
   __resetWorkspaceDbPoolsForTests();
@@ -38,6 +41,7 @@ beforeEach(() => {
   }
   delete process.env.CROWDOS_WS_DB_MAX_POOLS;
   delete process.env.CROWDOS_WS_DB_IDLE_MS;
+  setRegistryFilePathForTests(null);
 });
 
 afterEach(() => {
@@ -47,15 +51,68 @@ afterEach(() => {
   }
   delete process.env.CROWDOS_WS_DB_MAX_POOLS;
   delete process.env.CROWDOS_WS_DB_IDLE_MS;
+  setRegistryFilePathForTests(null);
+  if (testRegistryDir) rmSync(testRegistryDir, { recursive: true, force: true });
+  testRegistryDir = null;
 });
 
 describe("getWorkspaceDb", () => {
+  it("keeps local-only and workspace-env database selection aligned", async () => {
+    const id = "ws_consistency01";
+    const envKey = "CROWDOS_WS_WS_CONSISTENCY01_DATABASE_URL";
+    const databaseUrl = "postgresql://workspace:pw@workspace-host:5433/workspace-db";
+    testRegistryDir = mkdtempSync(join(tmpdir(), "crowdos-ws-mode-"));
+    const registryFile = join(testRegistryDir, "workspaces.json");
+    const envFile = join(testRegistryDir, ".env");
+    process.env.CROWDOS_WS_ENV_FILE = envFile;
+    writeFileSync(registryFile, JSON.stringify({ workspaces: [{
+      id,
+      name: "Mode consistency",
+      icon: "x",
+      databaseUrl: "",
+      rootPath: testRegistryDir,
+      screenLockPinHash: null,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    }] }));
+    setRegistryFilePathForTests(registryFile);
+
+    const localTier = resolveTier(await tierContextFor(id));
+    await expect(getWorkspaceDbThroughGate(id)).rejects.toMatchObject({ code: "NO_DATABASE" });
+    const localPoolCount = getWorkspaceDbPoolStats().length;
+
+    writeFileSync(envFile, `${envKey}=${databaseUrl}\n`);
+    clearWorkspaceEnvCache();
+    const connectedTier = resolveTier(await tierContextFor(id));
+    const connectedDb = await getWorkspaceDbThroughGate(id);
+
+    expect({
+      local: { tier: localTier.tier, url: localTier.url, poolCount: localPoolCount },
+      connected: {
+        tier: connectedTier.tier,
+        url: connectedTier.url,
+        source: connectedDb.source,
+        workspaceId: connectedDb.workspaceId,
+        poolUrl: factoryMock.mock.calls[0]?.[0],
+      },
+    }).toEqual({
+      local: { tier: "local", url: null, poolCount: 0 },
+      connected: {
+        tier: "dual",
+        url: databaseUrl,
+        source: "workspace",
+        workspaceId: id,
+        poolUrl: databaseUrl,
+      },
+    });
+  });
+
   it("throws NO_DATABASE without an id (never the env pool)", async () => {
     await expect(getWorkspaceDb(null)).rejects.toMatchObject({ code: "NO_DATABASE" });
     expect(getWorkspaceDbPoolStats()).toEqual([]);
   });
 
-  it("throws NO_DATABASE when the workspace has no URL (record-only)", async () => {
+  it("throws NO_DATABASE when the workspace has no assigned record or env URL", async () => {
     await expect(getWorkspaceDb("ws_nodb")).rejects.toMatchObject({ code: "NO_DATABASE" });
     expect(factoryMock).not.toHaveBeenCalled();
   });
@@ -159,19 +216,21 @@ describe("forEachWorkspaceDb", () => {
     setRegistryFilePathForTests(null);
   });
 
-  it("visits every configured workspace, skipping dead ones (record-only, no global)", async () => {
+  it("visits every configured workspace database, skipping dead ones and no global target", async () => {
     const dir = mkdtempSync(join(tmpdir(), "crowdos-wsforeach-"));
     writeRegistry(dir, [
       record("ws_f1", "postgresql://u:p@h1/db1"),
       record("ws_f2", "postgresql://u:p@h2/db2"),
       record("ws_f3", ""),
     ]);
+    process.env.CROWDOS_WS_WS_F3_DATABASE_URL = "postgresql://u:p@h3/db3";
     const visited: Array<string | null> = [];
     await forEachWorkspaceDb(async (_db, workspaceId) => {
       if (workspaceId === "ws_f1") throw new Error("dead db");
       visited.push(workspaceId);
     });
-    // Dead ws_f1 skipped without stopping ws_f2, empty URL skipped, no global target.
-    expect(visited).toEqual(["ws_f2"]);
+    // Dead ws_f1 is skipped, ws_f2 uses its registry URL, and ws_f3 uses its
+    // per-workspace env URL; no global target is added.
+    expect(visited).toEqual(["ws_f2", "ws_f3"]);
   });
 });

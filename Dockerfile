@@ -8,6 +8,6 @@ COPY tsconfig.base.json ./tsconfig.base.json
 
 RUN npm ci
 
-EXPOSE 3001
+EXPOSE 12077
 
 CMD ["npm", "run", "dev", "--workspace", "@crowdspace/server"]

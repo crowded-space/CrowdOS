@@ -48,6 +48,22 @@ function inheritCopy(level: levelKey): string {
   return 'Not set. Channels without their own mount resolve to the workspace sandbox.';
 }
 
+function friendlyMountError(level: levelKey, raw: string): { title: string; body: string } {
+  if (/unexpected error occurred/i.test(raw)) {
+    return {
+      title: 'Mount unreadable right now',
+      body: 'The server hit an unexpected error reading this ' + level + ' mount. Your folders are untouched — retry the read, or browse to re-attach it.',
+    };
+  }
+  if (/failed to read|request failed|backend unreachable|fetch failed|networkerror/i.test(raw)) {
+    return {
+      title: 'Could not reach the server',
+      body: 'The ' + level + ' mount could not be read because the request failed (' + raw + '). Retry when the backend is reachable.',
+    };
+  }
+  return { title: 'Could not read this mount', body: raw };
+}
+
 export function MountsInspector(): React.JSX.Element {
   const workspaces = useCrowdOSStore((s) => s.workspaces);
   const activeWorkspaceId = useCrowdOSStore((s) => s.activeWorkspaceId);
@@ -124,6 +140,18 @@ export function MountsInspector(): React.JSX.Element {
       setChannelSnap((s) => ({ ...s, loading: true, error: null }));
       try {
         const workspaceId = activeWorkspaceId;
+        // The store hydrates the workspace roster before its tenant slices:
+        // a stale categoryId can name a row the backend no longer serves in
+        // this workspace, and its read then 500s while channel wins. Scope a
+        // clear per-level note instead of the raw server string so retry
+        // targets the level that actually failed.
+        const scopedError = (level: levelKey, err: unknown): string => {
+          const raw = messageOf(err);
+          if (/unexpected error occurred/i.test(raw)) {
+            return level + ' mount unreadable: server error (' + raw + '). Retry, or browse to re-attach it.';
+          }
+          return level + ' mount unreadable: ' + raw;
+        };
         const categoryId =
           resolvedCategoryId && resolvedCategoryId !== TOP_LEVEL_SENTINEL ? resolvedCategoryId : null;
         const channelId = resolvedChannelId;
@@ -139,7 +167,7 @@ export function MountsInspector(): React.JSX.Element {
           const info = wsR.value as MountInfoDto;
           setWorkspaceSnap({ path: info.mountedPath ?? null, reason: info.reason ?? null, error: null, loading: false });
         } else {
-          setWorkspaceSnap({ path: null, reason: null, error: messageOf(wsR.reason), loading: false });
+          setWorkspaceSnap({ path: null, reason: null, error: scopedError('workspace', wsR.reason), loading: false });
         }
         if (!categoryId) {
           setCategorySnap({ path: null, reason: null, error: null, loading: false });
@@ -152,7 +180,7 @@ export function MountsInspector(): React.JSX.Element {
             loading: false,
           });
         } else {
-          setCategorySnap({ path: null, reason: null, error: messageOf(catR.reason), loading: false });
+          setCategorySnap({ path: null, reason: null, error: scopedError('category', catR.reason), loading: false });
         }
         if (!channelId) {
           setChannelSnap({ path: null, reason: null, error: null, loading: false });
@@ -165,7 +193,7 @@ export function MountsInspector(): React.JSX.Element {
             loading: false,
           });
         } else {
-          setChannelSnap({ path: null, reason: null, error: messageOf(chR.reason), loading: false });
+          setChannelSnap({ path: null, reason: null, error: scopedError('channel', chR.reason), loading: false });
         }
         if (effR.status === 'fulfilled') {
           setEffective(effR.value);
@@ -261,8 +289,35 @@ export function MountsInspector(): React.JSX.Element {
           </p>
         ) : snap.error ? (
           <div role="alert" className="rounded-md border border-rose-500/30 bg-rose-500/10 px-2 py-1.5 text-[11px] leading-relaxed">
-            <p className="font-semibold text-rose-300">Could not read this mount</p>
-            <p className="text-rose-200/90 break-words">{snap.error}</p>
+            {(() => {
+              const copy = friendlyMountError(level, snap.error ?? 'Request failed.');
+              return (
+                <>
+                  <p className="font-semibold text-rose-300">{copy.title}</p>
+                  <p className="text-rose-200/90 break-words">{copy.body}</p>
+                </>
+              );
+            })()}
+            <div className="mt-1.5 flex items-center gap-1.5">
+              <button
+                type="button"
+                onClick={() => setRevision((n) => n + 1)}
+                className="inline-flex items-center gap-1 rounded border border-rose-400/40 px-2 py-1 text-[11px] font-semibold text-rose-100 hover:bg-rose-500/20 cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-rose-300"
+              >
+                <RefreshCw size={11} aria-hidden="true" />
+                <span>Retry</span>
+              </button>
+              {!jailHit && (
+                <button
+                  type="button"
+                  onClick={() => setBrowseOpen((prev) => ({ ...prev, [level]: true }))}
+                  className="inline-flex items-center gap-1 rounded border border-zinc-700 px-2 py-1 text-[11px] font-semibold text-zinc-300 hover:bg-zinc-800 cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-400"
+                >
+                  <FolderOpen size={11} aria-hidden="true" />
+                  <span>Browse</span>
+                </button>
+              )}
+            </div>
             {jailHit && allowedRoots.length > 0 && (
               <div className="mt-1 text-rose-200/90">
                 <p>Allowed roots:</p>

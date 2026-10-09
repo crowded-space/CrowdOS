@@ -54,7 +54,18 @@ async function getAllowedRoots(workspaceId?: string | null): Promise<string[]> {
   };
 
   if (!workspaceId) return defaultRoots();
-  const record = await getWorkspaceRecord(workspaceId).catch(() => null);
+  // CM-002: fail closed on unreadable registry. WS-005 made corrupt
+  // registries throw instead of reading as empty — catching everything to
+  // null here would widen the jail to sandbox+home on corruption. Only
+  // no-record (null) falls back to the default policy; a throw means the
+  // sandbox base alone.
+  let record: Awaited<ReturnType<typeof getWorkspaceRecord>>;
+  try {
+    record = await getWorkspaceRecord(workspaceId);
+  } catch {
+    return [resolveSandboxBase()];
+  }
+  if (!record) return defaultRoots();
   const configured = record?.allowedMountRoots;
   if (Array.isArray(configured) && configured.length > 0) {
     const resolved = configured
@@ -81,6 +92,43 @@ function isInsideAllowedRoots(candidate: string, roots: string[]): boolean {
     if (c === rn) return true;
     return c.startsWith(rn.endsWith(path.sep) ? rn : rn + path.sep);
   });
+}
+
+/**
+ * CM-003 ownership guard: true when the caller's workspace owns the target.
+ *
+ * Mount paths are host paths and every mount route takes its target id from
+ * the URL, so without this check any reachable client could read or rewrite
+ * another workspace's mount columns by id. `callerWorkspaceId` comes from the
+ * tenant hook (x-workspace-id); null/blank means there is no caller scope to
+ * compare (keyless loopback desktop), and the request passes as before. A
+ * target that cannot be resolved is allowed through: a missing row is the
+ * attachers' "not found" (route 400) and the resolvers' `none`, never an
+ * ownership 403.
+ */
+export async function ownsMountTarget(
+  kind: "channel" | "category" | "workspace",
+  id: string,
+  callerWorkspaceId?: string | null,
+  dbOverride?: unknown,
+): Promise<boolean> {
+  const callerWs = typeof callerWorkspaceId === "string" && callerWorkspaceId.trim()
+    ? callerWorkspaceId.trim()
+    : null;
+  if (!callerWs) return true;
+  if (kind === "workspace") return id === callerWs;
+  try {
+    const row = kind === "channel"
+      ? await channelGate.get(id, dbOverride)
+      : await channelGate.getCategory(id, dbOverride);
+    const owner = (row as { workspaceId?: string | null } | null)?.workspaceId ?? null;
+    return !row || !owner || owner === callerWs;
+  } catch {
+    // A failed lookup degrades to the downstream not-found/none answer
+    // instead of a misleading 403; it never opens a write (attach fails on
+    // the same missing row).
+    return true;
+  }
 }
 
 export async function validateMountPath(
@@ -195,6 +243,16 @@ export async function resolveWorkspaceMount(workspaceId: string): Promise<MountI
     if (customPath) {
       const v = await validateMountPath(customPath, ws.id);
       if (v.valid) {
+        // CM-001: backfill the registry mirror so a tier flip keeps the
+        // mount visible. Best-effort; never fails the resolve.
+        try {
+          const rec = await getWorkspaceRecord(workspaceId).catch(() => null);
+          if (rec && rec.mountPath !== customPath) {
+            const { saveWorkspaceRecord } = await import("../workspace/workspace-gate.js");
+            rec.mountPath = customPath;
+            await (saveWorkspaceRecord as (r: typeof rec) => Promise<unknown>)(rec);
+          }
+        } catch {}
         return {
           workspaceId: ws.id,
           mountedPath: v.resolved!,
@@ -208,6 +266,23 @@ export async function resolveWorkspaceMount(workspaceId: string): Promise<MountI
         source: "none",
         reason: v.error ?? "Mount path is unusable",
       };
+    }
+
+    // CM-001: PG metadata has no mirror, but the registry (local truth) may
+    // hold a mount attached before the tier flip. Read-time backfill: adopt it
+    // and mirror it up so the mount stops disappearing across tiers.
+    const fromRecord = await resolveWorkspaceMountFromRecord(workspaceId);
+    if (fromRecord?.mountedPath) {
+      try {
+        await db.update(workspaces).set({
+          metadata: { ...(ws.metadata as Record<string, unknown>), customMountPath: fromRecord.mountedPath },
+          updatedAt: new Date(),
+        }).where(eq(workspaces.id, workspaceId));
+      } catch {}
+      return { workspaceId: ws.id, mountedPath: fromRecord.mountedPath, source: "workspace" };
+    }
+    if (fromRecord?.reason) {
+      return { workspaceId: ws.id, mountedPath: null, source: "none", reason: fromRecord.reason };
     }
 
     // No Zone B mount. `rootPath` (Zone A) is not a mount; the resolver returns
@@ -324,6 +399,16 @@ export async function attachWorkspaceMount(workspaceId: string, folderPath: stri
       metadata: { ...currentMeta, customMountPath: null },
       updatedAt: new Date(),
     }).where(eq(workspaces.id, workspaceId));
+    // CM-001: clear the registry mirror too, or a tier flip back to local
+    // would resurrect the mount that was just removed.
+    try {
+      const rec = await getWorkspaceRecord(workspaceId).catch(() => null);
+      if (rec?.mountPath) {
+        const { saveWorkspaceRecord } = await import("../workspace/workspace-gate.js");
+        rec.mountPath = null;
+        await (saveWorkspaceRecord as (r: typeof rec) => Promise<unknown>)(rec);
+      }
+    } catch {}
     return { ok: true };
   }
 
@@ -334,6 +419,16 @@ export async function attachWorkspaceMount(workspaceId: string, folderPath: stri
     metadata: { ...currentMeta, customMountPath: v.resolved! },
     updatedAt: new Date(),
   }).where(eq(workspaces.id, workspaceId));
+  // CM-001: mirror the mount into the registry (local truth) so a tier flip
+  // back to local keeps it. Best-effort; never fails the attach.
+  try {
+    const rec = await getWorkspaceRecord(workspaceId).catch(() => null);
+    if (rec && rec.mountPath !== v.resolved!) {
+      const { saveWorkspaceRecord } = await import("../workspace/workspace-gate.js");
+      rec.mountPath = v.resolved!;
+      await (saveWorkspaceRecord as (r: typeof rec) => Promise<unknown>)(rec);
+    }
+  } catch {}
   return { ok: true };
 }
 

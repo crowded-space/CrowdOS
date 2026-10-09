@@ -113,7 +113,7 @@ export function WorkspaceDatabaseField({
   const shapeInvalid = trimmed.length > 0 && !isPostgresUrl(trimmed);
 
   const setUrl = (url: string) => {
-    onChange({ ...state, url, provisioned: false });
+    onChange({ ...state, mode: 'set', url, provisioned: false });
     setTest({ status: 'idle' });
     setProvision({ status: 'idle' });
   };

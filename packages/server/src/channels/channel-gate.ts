@@ -31,7 +31,8 @@ import {
   updateChannel,
   deleteChannel,
   getChannelSettings,
-  updateChannelSettings
+  updateChannelSettings,
+  seedLocalChannelPresets
 } from "./channel-service.js";
 import type { ChannelSettingsPatch } from "./channel-service.js";
 
@@ -53,7 +54,8 @@ export {
   updateChannel,
   deleteChannel,
   getChannelSettings,
-  updateChannelSettings
+  updateChannelSettings,
+  seedLocalChannelPresets
 };
 
 export const channelGate = {
@@ -69,5 +71,8 @@ export const channelGate = {
   update: updateChannel,
   remove: deleteChannel,
   getSettings: getChannelSettings,
-  updateSettings: updateChannelSettings
+  updateSettings: updateChannelSettings,
+  // CHN-020: workspace provisioning seed port (replaces the route's direct
+  // dynamic import of channel-local-store).
+  seedLocalPresets: seedLocalChannelPresets
 };

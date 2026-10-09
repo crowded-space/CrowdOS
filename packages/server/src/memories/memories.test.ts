@@ -36,8 +36,16 @@ vi.mock("../agents/agent-gate.js", () => ({
   agentGate: { list: async () => [] },
 }));
 
+// MEM-007 regression seam: keep the real embeddings module but allow a test
+// to force embedText rejection (semantic-lane failure) without resetModules.
+vi.mock("./embeddings.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./embeddings.js")>();
+  return { ...actual, embedText: vi.fn((...args: Parameters<typeof actual.embedText>) => actual.embedText(...args)) };
+});
+
 import { memTestStore, resetMemTestStore, tick } from "./memory-test-db.js";
 import { memoriesGate } from "./memories-gate.js";
+import { embedText } from "./embeddings.js";
 import { resetMemorySweeperForTests } from "./memory-lifecycle.js";
 import type { MemoryStoreResult } from "./memories-gate.js";
 import { toolsGate } from "../tools/tools-gate.js";
@@ -56,6 +64,8 @@ const ENV_KEYS = [
   "MEM_DISCARD_TTL_MS",
   "MEM_REFLECT_THROTTLE",
   "MEM_REFLECT_MIN_INTERVAL_MS",
+  "EMBEDDING_ENABLED",
+  "EMBEDDING_HYBRID_WEIGHT",
 ] as const;
 
 let savedEnv: Record<string, string | undefined> = {};
@@ -518,5 +528,100 @@ describe("timer registration site", () => {
       spy.mockRestore();
       for (const handle of captured) clearInterval(handle);
     }
+  });
+});
+
+describe("MEM-007/009/012/019 · narrow ledger fixes", () => {
+  it("MEM-007: semantic-lane rejection emits a metric and retrieval still returns heuristics", async () => {
+    process.env.EMBEDDING_ENABLED = "true";
+    const note = makeNote({ id: "2026-07-01-f00000000000" });
+    memTestStore.notes.push(note);
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    try {
+      vi.mocked(embedText).mockImplementationOnce(async () => {
+        throw new Error("provider unreachable");
+      });
+      const candidates = await memoriesGate.retrieveMemoryCandidates(retrievalInput());
+      expect(candidates.map((c) => c.noteId)).toContain(note.id);
+      const metrics = logSpy.mock.calls
+        .map((args) => args[0])
+        .filter((line): line is string => typeof line === "string" && line.startsWith("{"))
+        .map((line) => JSON.parse(line) as Record<string, unknown>);
+      const lane = metrics.find((m) => m.stage === "memory.retrieval.semantic_lane_failed");
+      expect(lane).toBeDefined();
+      expect(String(lane!.reason)).toContain("provider unreachable");
+    } finally {
+      logSpy.mockRestore();
+    }
+  });
+
+  it("MEM-009: alias resolution stays bounded (no full-table findMany) and case-insensitive", async () => {
+    memTestStore.agents.push({ id: "agent-alias-x", name: "alias-target", title: "Alias Target", status: "idle" });
+    for (let i = 0; i < 500; i++) {
+      memTestStore.agents.push({ id: `agent-filler-${i}`, name: `bot-${i}`, title: `Bot ${i}`, status: "idle" });
+    }
+    const resolved = await memoriesGate.resolveAgentId("ALIAS-TARGET");
+    expect(resolved).toBe("agent-alias-x");
+    expect(memTestStore.lastFindManyLimit).toBe(1);
+  });
+
+  it("MEM-012: deterministic insert errors surface after exactly one attempt", async () => {
+    const deterministic = Object.assign(new Error("invalid input syntax for type uuid"), { code: "22P02" });
+    memTestStore.insertFault = () => deterministic;
+    await expect(
+      memoriesGate.createMemoryNote({
+        agentId: "raven",
+        channelId: CHANNEL,
+        noteType: "episodic",
+        hook: "faulted",
+        brief: "deterministic failure",
+      }),
+    ).rejects.toBe(deterministic);
+    expect(memTestStore.noteInsertCalls).toBe(1);
+  });
+
+  it("MEM-012: collisions retry, and an exhausted collision budget returns UPDATE_FAILED", async () => {
+    memTestStore.insertFault = () =>
+      Object.assign(new Error("duplicate key value violates unique constraint \"agent_memory_notes_pkey\""), { code: "23505" });
+    const result = await memoriesGate.createMemoryNote({
+      agentId: "raven",
+      channelId: CHANNEL,
+      noteType: "episodic",
+      hook: "collides",
+      brief: "always collides",
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe("UPDATE_FAILED");
+    expect(memTestStore.noteInsertCalls).toBe(3);
+  });
+
+  it("MEM-012: a transient collision retries once and succeeds", async () => {
+    let attempts = 0;
+    memTestStore.insertFault = () => (++attempts === 1 ? Object.assign(new Error("duplicate key"), { code: "23505" }) : null);
+    const result = await memoriesGate.createMemoryNote({
+      agentId: "raven",
+      channelId: CHANNEL,
+      noteType: "episodic",
+      hook: "transient",
+      brief: "one collision",
+    });
+    expect(result.ok).toBe(true);
+    expect(memTestStore.noteInsertCalls).toBe(2);
+  });
+
+  it("MEM-019: alias retrieval reads discards recorded under the resolved UUID", async () => {
+    const note = makeNote({ id: "2026-07-02-a00000000000" });
+    memTestStore.notes.push(note);
+    // Tool write path keys on ctx.agentId (a UUID in production).
+    memoriesGate.sessionDiscards.discard(AGENT, CHANNEL, [note.id]);
+    const candidates = await memoriesGate.retrieveMemoryCandidates(retrievalInput({ agentId: "raven" }));
+    expect(candidates.map((c) => c.noteId)).not.toContain(note.id);
+  });
+
+  it("MEM-019: discard via alias normalizes the session key to the resolved UUID", async () => {
+    const note = makeNote({ id: "2026-07-03-b00000000000" });
+    memTestStore.notes.push(note);
+    await memoriesGate.discardFromContext("raven", CHANNEL, note.id, "not relevant");
+    expect(memoriesGate.sessionDiscards.listDiscarded(AGENT, CHANNEL)).toContain(note.id);
   });
 });

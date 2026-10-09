@@ -98,9 +98,9 @@ describe("tier resolution matrix", () => {
       (env as any).DATABASE_URL = prev;
     }
   });
-  it("ignores the process env URL at runtime (record-only)", () => {
-    // Even with a URL in the process env (CLI/tests legacy), an empty
-    // workspace context resolves local — env URLs are CLI-only.
+  it("ignores the process-wide URL for workspace tier selection", () => {
+    // Even with the global DATABASE_URL set, an empty workspace context has
+    // no assigned workspace URL and resolves local.
     const prev = env.DATABASE_URL;
     (env as any).DATABASE_URL = "postgresql://env:u@localhost:5432/predetermined";
     try {

@@ -90,12 +90,13 @@ export class CodingRuntime extends BaseRuntime {
       await this.kernel.setAgentStatus(broker, packet.agentId, 'working');
       this.kernel.emitThinking(broker, packet.agentId, packet.channelId);
 
-      const modelConfig: ModelModuleConfig = (packet as any)._modelConfig || {
-        provider: 'google',
-        modelName: 'gemini-2.0-flash',
-        temperature: 0.2,
-        maxOutputTokens: 4096,
-      };
+      const modelConfig = (packet as any)._modelConfig as ModelModuleConfig | undefined;
+      if (!modelConfig) {
+        throw Object.assign(
+          new Error(`Coding run for agent ${packet.agentName} has no resolved model config. Bind the agent to a model module first.`),
+          { code: "MODEL_MODULE_NOT_CONFIGURED", statusCode: 400 },
+        );
+      }
 
       const adapter = ProviderRegistry.get(modelConfig.provider);
       // §26 artifacts[]: durable outputs (diffs / written files) this run
@@ -226,6 +227,18 @@ export class CodingRuntime extends BaseRuntime {
               let existed = false;
               try { beforeContent = await fs.readFile(resolved, 'utf8'); existed = true; } catch { existed = false; beforeContent = null; }
               const beforeHash = beforeContent !== null ? sha256Hex(beforeContent) : null;
+              // RUN-003: journal BEFORE mutating. A crash between write and
+              // journal left an un-undoable file change. RUN-004: journal
+              // failure warns loudly instead of vanishing into bare catch.
+              if (packet.runId) {
+                try {
+                  const { runsGate } = await import('../../runs/runs-gate.js');
+                  const inverse = runsGate.buildCompensationInverse({ existed, priorContent: beforeContent, path: targetPath });
+                  await runsGate.addCompensation(packet.runId as string, { toolName: 'write_file', targetPath, inverseOp: inverse });
+                } catch (jerr: any) {
+                  console.warn(`[coding-runtime] compensation journal failed for ${targetPath}:`, jerr?.message || jerr);
+                }
+              }
               try {
                 await fs.mkdir(path.dirname(resolved), { recursive: true });
                 await fs.writeFile(resolved, content, 'utf8');
@@ -235,13 +248,6 @@ export class CodingRuntime extends BaseRuntime {
               const afterHash = sha256Hex(content);
               let patch = '';
               try { patch = await buildPatch(targetPath, beforeContent ?? '', content); } catch { patch = generateNaivePatch(targetPath, beforeContent ?? '', content); }
-              if (packet.runId) {
-                try {
-                  const { runsGate } = await import('../../runs/runs-gate.js');
-                  const inverse = runsGate.buildCompensationInverse({ existed, priorContent: beforeContent, path: targetPath });
-                  await runsGate.addCompensation(packet.runId as string, { toolName: 'write_file', targetPath, inverseOp: inverse });
-                } catch {}
-              }
               if (packet.runId) {
                 try {
                   const { artifactsGate } = await import('../../artifacts/artifacts-gate.js');
@@ -338,6 +344,16 @@ export class CodingRuntime extends BaseRuntime {
                 modifiedSlice = contentToSearch.replace(targetContent, replacementContent);
               }
               const finalContent = prefix + modifiedSlice + suffix;
+              // RUN-003 (edit path): journal before mutating, warn on failure.
+              if (packet.runId) {
+                try {
+                  const { runsGate } = await import('../../runs/runs-gate.js');
+                  const inverse = runsGate.buildCompensationInverse({ existed: true, priorContent: originalContent, path: targetPath });
+                  await runsGate.addCompensation(packet.runId as string, { toolName: 'edit_file', targetPath, inverseOp: inverse });
+                } catch (jerr: any) {
+                  console.warn(`[coding-runtime] compensation journal failed for ${targetPath}:`, jerr?.message || jerr);
+                }
+              }
               try {
                 await fs.mkdir(path.dirname(resolved), { recursive: true });
                 await fs.writeFile(resolved, finalContent, 'utf8');
@@ -347,13 +363,6 @@ export class CodingRuntime extends BaseRuntime {
               const afterHash = sha256Hex(finalContent);
               let diffText = '';
               try { diffText = await buildPatch(targetPath, originalContent, finalContent); } catch { diffText = generateNaivePatch(targetPath, originalContent, finalContent); }
-              if (packet.runId) {
-                try {
-                  const { runsGate } = await import('../../runs/runs-gate.js');
-                  const inverse = runsGate.buildCompensationInverse({ existed: true, priorContent: originalContent, path: targetPath });
-                  await runsGate.addCompensation(packet.runId as string, { toolName: 'edit_file', targetPath, inverseOp: inverse });
-                } catch {}
-              }
               if (packet.runId) {
                 try {
                   const { artifactsGate } = await import('../../artifacts/artifacts-gate.js');
@@ -410,7 +419,7 @@ export class CodingRuntime extends BaseRuntime {
         sessionId: `session_${packet.agentId}_${packet.channelId}`,
         modelConfig: {
           provider: modelConfig.provider as any,
-          modelName: modelConfig.modelName || 'gemini-2.0-flash',
+          modelName: modelConfig.modelName,
           temperature: modelConfig.temperature ?? 0.2,
           maxOutputTokens: modelConfig.maxOutputTokens ?? 4096,
         },

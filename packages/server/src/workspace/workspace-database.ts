@@ -643,36 +643,76 @@ export async function seedWorkspacePresets(
 }
 
 /**
+ * Tables `resetWorkspaceDatabase` drops (WS-003). Versioned list — the coverage
+ * test in workspace-database.test.ts diffs it against every CREATE TABLE in
+ * db/migrations so a new migration cannot silently outlive a flush (which made
+ * re-provision fail with "relation already exists" and left memory rows behind).
+ * `__drizzle_migrations` is dropped last so the next provision re-runs 0000.
+ */
+export const WORKSPACE_RESET_DROP_TABLES: readonly string[] = [
+  "workspace_safety_settings",
+  "channel_settings",
+  "thread_sequences",
+  "threads",
+  "approval_grants",
+  "approval_requests",
+  "artifacts",
+  "workspace_agents",
+  "workspace_events",
+  "workspace_nodes",
+  "workspaces",
+  "workspace_settings",
+  "messages",
+  "channels",
+  "categories",
+  "agents",
+  "toolkit_modules",
+  "instruction_modules",
+  "model_modules",
+  "constraints_modules",
+  "capabilities_modules",
+  "runs",
+  "runs_compensation",
+  "channel_sequences",
+  "agent_memory_notes",
+  "memory_update_log",
+  "skills",
+  "agent_skills",
+  "agent_instruction_stacks",
+  "swarm_tasks",
+  "delegations",
+  "token_usage_log",
+  "channel_index",
+  "compressed_summaries",
+  "mcp_servers",
+  "api_keys",
+  // WS-003: tables the earlier hardcoded list missed entirely (agent/tool,
+  // durable events, model profiles, runtime, scheduler, spawn/task files).
+  "agent_tools",
+  "durable_events",
+  "embedding_model_profiles",
+  "generation_model_profiles",
+  "indexing_model_profiles",
+  "runtime_overrides",
+  "runtime_states",
+  "scheduled_tasks",
+  "spawn_requests",
+  "task_files",
+  "tools",
+  "__drizzle_migrations",
+];
+
+/**
  * Drops CrowdOS-managed tables from the given PostgreSQL database to allow clean reuse.
  */
 export async function resetWorkspaceDatabase(databaseUrl: string): Promise<void> {
   const parsed = parseWorkspaceDatabaseUrl(databaseUrl);
   const sql = postgres(parsed.url, { max: 1, prepare: false, connect_timeout: 15 });
   try {
-    await sql.unsafe(`
-      DROP TABLE IF EXISTS "workspace_safety_settings" CASCADE;
-      DROP TABLE IF EXISTS "channel_settings" CASCADE;
-      DROP TABLE IF EXISTS "thread_sequences" CASCADE;
-      DROP TABLE IF EXISTS "threads" CASCADE;
-      DROP TABLE IF EXISTS "approval_grants" CASCADE;
-      DROP TABLE IF EXISTS "approval_requests" CASCADE;
-      DROP TABLE IF EXISTS "artifacts" CASCADE;
-      DROP TABLE IF EXISTS "workspace_agents" CASCADE;
-      DROP TABLE IF EXISTS "workspace_events" CASCADE;
-      DROP TABLE IF EXISTS "workspace_nodes" CASCADE;
-      DROP TABLE IF EXISTS "workspaces" CASCADE;
-      DROP TABLE IF EXISTS "workspace_settings" CASCADE;
-      DROP TABLE IF EXISTS "messages" CASCADE;
-      DROP TABLE IF EXISTS "channels" CASCADE;
-      DROP TABLE IF EXISTS "categories" CASCADE;
-      DROP TABLE IF EXISTS "agents" CASCADE;
-      DROP TABLE IF EXISTS "toolkit_modules" CASCADE;
-      DROP TABLE IF EXISTS "instruction_modules" CASCADE;
-      DROP TABLE IF EXISTS "model_modules" CASCADE;
-      DROP TABLE IF EXISTS "constraints_modules" CASCADE;
-      DROP TABLE IF EXISTS "capabilities_modules" CASCADE;
-      DROP TABLE IF EXISTS "__drizzle_migrations" CASCADE;
-    `);
+    // WS-003: built from the versioned list above; coverage asserted by test.
+    await sql.unsafe(
+      WORKSPACE_RESET_DROP_TABLES.map((table) => `DROP TABLE IF EXISTS "${table}" CASCADE;`).join("\n"),
+    );
   } finally {
     await sql.end({ timeout: 5 });
   }

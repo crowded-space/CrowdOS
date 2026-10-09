@@ -108,6 +108,7 @@ export default function SandboxCodeViewer({ path, workspaceId, channelId, root }
               value={content}
               onChange={e => setContent(e.target.value)}
               readOnly={readOnly}
+              aria-label={`File editor: ${path}`}
               aria-readonly={readOnly || undefined}
               onScroll={e => {
                 const ta = e.currentTarget;

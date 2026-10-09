@@ -233,6 +233,8 @@ export const agents = pgTable("agents", {
   permissions: jsonb("permissions").$type<{ spawnAgents: boolean; patchRuntime: boolean; accessAllChannels: boolean }>().notNull().default(sql`'{"spawnAgents":false,"patchRuntime":false,"accessAllChannels":false}'::jsonb`),
   status: agentStatusEnum("status").notNull().default("offline"),
   isTemplate: boolean("is_template").notNull().default(false),
+  // AGT-008: token cap column (migration 0027). Was local-only; PG dropped it.
+  contextTokenCap: integer("context_token_cap"),
   archivedAt: timestamp("archived_at", { withTimezone: true }),
   archivedReason: text("archived_reason"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
@@ -307,7 +309,10 @@ export const messages = pgTable("messages", {
   sequenceNumber: integer("sequence_number").notNull(),
   timestamp: timestamp("timestamp", { withTimezone: true }).notNull().defaultNow(),
 }, (table) => ({
-  channelSequenceIndex: uniqueIndex("messages_channel_sequence_idx").on(table.channelId, table.sequenceNumber),
+  // MSG-001/THR-002/XD-007: thread-aware uniqueness — channel messages and
+  // thread replies share the table with independent counters. Mirrors
+  // migration 0025 (messages_channel_thread_sequence_idx).
+  channelSequenceIndex: uniqueIndex("messages_channel_thread_sequence_idx").on(table.channelId, sql`COALESCE(${table.threadId}, '')`, table.sequenceNumber),
   channelTimestampIndex: index("messages_channel_timestamp_idx").on(table.channelId, table.timestamp.desc()),
   channelTsSeqIndex: index("messages_channel_ts_seq_idx").on(table.channelId, table.timestamp.desc(), table.sequenceNumber.desc()),
 }));
@@ -549,7 +554,10 @@ export const swarmTasks = pgTable("swarm_tasks", {
 export const delegations = pgTable("delegations", {
   id: text("id").primaryKey(),
   parentRunId: uuid("parent_run_id").notNull().references(() => runs.id, { onDelete: "cascade" }),
-  childRunId: uuid("child_run_id").notNull().references(() => runs.id, { onDelete: "cascade" }),
+  // SW-02: child ids are delegation tokens, not run rows (migration 0024
+  // dropped this FK). Re-adding references() here would re-break prod
+  // inserts via drizzle-kit generate.
+  childRunId: uuid("child_run_id").notNull(),
   depth: integer("depth").notNull(),
   summary: text("summary"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
@@ -978,6 +986,8 @@ export interface CompensationInverseOp {
   path: string;
   priorHash?: string;
   priorContentRef?: string;
+  /** RUN-005: set when priorContent was truncated to 20k chars at journal time. */
+  truncated?: boolean;
 }
 
 export const runs = pgTable("runs", {
@@ -1026,7 +1036,11 @@ export const threads = pgTable("threads", {
   lastActivityAt: timestamp("last_activity_at", { withTimezone: true }).notNull().defaultNow(),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
-});
+  // THR-004: partial unique index mirror (migration 0026). One thread per
+  // parent message; the service maps violations to the existing thread.
+}, (table) => ({
+  parentMessageIdx: uniqueIndex("threads_parent_message_idx").on(table.parentMessageId).where(sql`"parent_message_id" IS NOT NULL`),
+}));
 
 export const threadSequences = pgTable("thread_sequences", {
   threadId: text("thread_id").primaryKey().references(() => threads.id, { onDelete: "cascade" }),

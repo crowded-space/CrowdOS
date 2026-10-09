@@ -194,6 +194,9 @@ export function DiffViewer({ runId, artifactId }: { runId?: string; artifactId?:
   const diffError = useCrowdOSStore(s => s.diffError);
   const clearDiffError = useCrowdOSStore(s => s.clearDiffError);
   const activeWorkspaceId = useCrowdOSStore(s => s.activeWorkspaceId);
+  // FIX-B: honest fetch state for diff fetch only (store signals, no API change).
+  const artifactsFetching = useCrowdOSStore(s => s.artifactsFetching);
+  const artifactsFetchError = useCrowdOSStore(s => s.artifactsFetchError);
   const [viewMode, setViewMode] = useState<'unified' | 'side'>('unified');
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [conflictById, setConflictById] = useState<Record<string, string>>({});
@@ -228,6 +231,13 @@ export function DiffViewer({ runId, artifactId }: { runId?: string; artifactId?:
     }
     clearDiffError();
     void runMutation(lastMutation);
+  };
+  // FIX-B: failed diff fetch renders error-with-retry (existing store path),
+  // never a stuck Loading state. Mutation errors keep the existing block.
+  const fetchErrorForRun = runId ? (artifactsFetchError?.[runId] ?? null) : null;
+  const fetchingForRun = runId ? (artifactsFetching?.[runId] ?? false) : false;
+  const retryFetch = () => {
+    if (runId) void fetchArtifacts(runId);
   };
 
   const dismissConflict = (id: string) => {
@@ -330,6 +340,26 @@ export function DiffViewer({ runId, artifactId }: { runId?: string; artifactId?:
     );
   }
 
+  // FIX-B: failed fetch -> error-with-retry; in-flight/unknown -> Loading.
+  if (fetchErrorForRun && diffs.length === 0) {
+    return (
+      <div role="alert" className="border border-rose-500/30 bg-rose-500/10 rounded-xl px-3 py-2 flex items-center gap-2">
+        <div className="min-w-0 flex-1">
+          <div className="text-[11px] font-mono font-semibold text-rose-300">Failed to load diffs</div>
+          <div className="text-[11px] font-mono text-rose-200/80 break-words">{fetchErrorForRun}</div>
+        </div>
+        <button
+          onClick={retryFetch}
+          disabled={fetchingForRun}
+          aria-label="Retry loading diffs"
+          className="shrink-0 px-3 py-1.5 min-h-[30px] rounded-lg bg-zinc-800 hover:bg-zinc-700 disabled:opacity-50 text-zinc-200 text-[11px] font-mono font-semibold border border-zinc-700 transition cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-rose-400/60"
+        >
+          Retry
+        </button>
+      </div>
+    );
+  }
+
   if (diffs.length === 0) {
     return (
       <div className="border border-zinc-800 bg-zinc-950/40 rounded-xl p-4 text-xs text-zinc-500 font-mono flex items-center gap-2">
@@ -346,7 +376,6 @@ export function DiffViewer({ runId, artifactId }: { runId?: string; artifactId?:
           <button
             onClick={() => setViewMode('unified')}
             aria-pressed={viewMode === 'unified'}
-            role="button"
             className={`px-2.5 py-1.5 rounded-lg text-xs font-mono font-bold flex items-center gap-1.5 transition ${viewMode === 'unified' ? 'bg-zinc-800 text-zinc-100 border border-zinc-700' : 'text-zinc-500 hover:text-zinc-300'}`}
           >
             <Rows3 size={12} /> Unified
@@ -354,7 +383,6 @@ export function DiffViewer({ runId, artifactId }: { runId?: string; artifactId?:
           <button
             onClick={() => setViewMode('side')}
             aria-pressed={viewMode === 'side'}
-            role="button"
             className={`px-2.5 py-1.5 rounded-lg text-xs font-mono font-bold flex items-center gap-1.5 transition ${viewMode === 'side' ? 'bg-zinc-800 text-zinc-100 border border-zinc-700' : 'text-zinc-500 hover:text-zinc-300'}`}
           >
             <LayoutPanelLeft size={12} /> Side-by-side

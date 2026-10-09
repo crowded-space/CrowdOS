@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import { getDb } from "../shared/config/database.js";
+import { logWarn } from "../shared/core/structured-log.js";
 import { runs, runsCompensation, type RunStatus, type RunCheckpoint, type CompensationInverseOp } from "../db/schema.js";
 import { transition } from "./run-state-machine.js";
 
@@ -42,10 +43,10 @@ export function isRunsEnabled(): boolean {
 
 // Split-DB routing: ONE resolver for every runs read AND write, so a row can
 // never be written to one handle and read from another. A threaded workspaceId
-// resolves that workspace's record DB; without one both sides land on getDb()
+// resolves that workspace's record or keyed-env DB; without one both sides land on getDb()
 // (ALS tenant scope when a sweep binds it, the shared pool otherwise).
-// Write-side nuance: a workspace with no record database (or no database at
-// all) stays record-less — resolveWriteDb returns null there and the caller
+// Write-side nuance: a workspace with no assigned workspace URL (or no database
+// at all) stays record-less — resolveWriteDb returns null there and the caller
 // degrades instead of leaking into the shared pool. Reads fall back to
 // getDb() so a handle is always returned.
 async function resolveWriteDb(workspaceId?: string | null) {
@@ -72,10 +73,10 @@ async function resolveDb(workspaceId?: string | null) {
 
 export async function createRun(input: CreateRunInput): Promise<RunRow | null> {
   if (!isRunsEnabled()) return null;
-  // C3 local-first, record-only DB: no ledger without the workspace's record
-  // database — the executor runs run-less (null, never throws for local).
+  // C3 local-first: no ledger without the workspace's assigned database — the
+  // executor runs run-less (null, never throws for local).
   // Workspace-less creates take the same handle every reader uses, so write
-  // and read cannot disagree. Env URLs are CLI-only, never read.
+  // and read cannot disagree. Process-wide DATABASE_URL is never a tenant fallback.
   const workspaceId = input.workspaceId?.trim() || null;
   const db = await resolveWriteDb(workspaceId);
   if (!db) return null;
@@ -108,6 +109,9 @@ export async function applyTransition(
   to: RunStatus,
   options: TransitionOptions = {}
 ): Promise<TransitionResult | null> {
+  // RUN-008: transport errors (no DB, connection loss) THROW; only
+  // missing/illegal/terminal/CAS-rejected transitions return null.
+  // Callers must not treat null as covering transport failure.
   if (!isRunsEnabled()) return null;
   const db = await resolveDb(options.workspaceId);
   for (let attempt = 0; attempt < 2; attempt++) {
@@ -122,7 +126,14 @@ export async function applyTransition(
 
     const [row] = await db
       .update(runs)
-      .set({ status: to, errorCode: options.errorCode ?? null, updatedAt: new Date() })
+      // RUN-001: errorCode is sticky. undefined = leave the stored code
+      // untouched (a reason-only hop must not erase the last failure);
+      // null = explicit clear; a provided string sets it.
+      .set({
+        status: to,
+        ...(options.errorCode === undefined ? {} : { errorCode: options.errorCode }),
+        updatedAt: new Date(),
+      })
       .where(and(eq(runs.id, runId), eq(runs.status, current.status)))
       .returning();
     if (row) return { row, from: verdict.from, to, changed: true, reason: options.reason ?? null };
@@ -145,7 +156,13 @@ export async function cancelRun(runId: string): Promise<RunRow | null> {
   const first = await applyTransition(runId, "cancelling");
   if (!first || !first.changed) return first?.row ?? null;
   const result = await applyTransition(runId, "cancelled");
-  return result?.row ?? null;
+  // RUN-002: the two-hop cancel is not atomic. If hop 2 is rejected
+  // (concurrent move / CAS loss), the row is still mid-cancel from hop 1 -
+  // return that committed row instead of null so callers do not read a
+  // committed cancel as a failure. The orphan sweeper heals it from there.
+  if (result) return result.row;
+  const reread = await getRunById(runId);
+  return reread;
 }
 
 export async function getRunById(runId: string, workspaceId?: string | null): Promise<RunRow | null> {
@@ -153,6 +170,31 @@ export async function getRunById(runId: string, workspaceId?: string | null): Pr
   const db = await resolveDb(workspaceId);
   const [row] = await db.select().from(runs).where(eq(runs.id, runId)).limit(1);
   return row ?? null;
+}
+
+export interface RunMeta {
+  id: string;
+  runtimeType: string;
+  status: RunStatus;
+}
+
+/**
+ * RUN-012/XD-012: batched run metadata for cross-domain readers
+ * (observability cost-ledger). Gate-owned so the runs table has one reader
+ * contract instead of a direct cross-domain table select.
+ */
+export async function getRunsMetaByIds(ids: string[], workspaceId?: string | null): Promise<RunMeta[]> {
+  if (!isRunsEnabled() || ids.length === 0) return [];
+  const db = await resolveDb(workspaceId);
+  try {
+    const rows = await db
+      .select({ id: runs.id, runtimeType: runs.runtimeType, status: runs.status })
+      .from(runs)
+      .where(inArray(runs.id, ids));
+    return rows as RunMeta[];
+  } catch {
+    return [];
+  }
 }
 
 export async function touchCheckpoint(runId: string, patchOrSeq: number | CheckpointPatch, workspaceId?: string | null): Promise<boolean> {
@@ -165,6 +207,9 @@ export async function touchCheckpoint(runId: string, patchOrSeq: number | Checkp
       const seq = patchOrSeq;
       // P04: single-statement atomic merge — no read-modify-write, so parallel
       // executeBatch writers cannot lose completedCallIds. Watermark monotonic.
+      // RUN-010: terminal guard — progress writes on completed/failed/
+      // cancelled rows are refused (returns false) instead of mutating
+      // audit data and updatedAt on a finished run.
       const updated = await db
         .update(runs)
         .set({
@@ -172,7 +217,7 @@ export async function touchCheckpoint(runId: string, patchOrSeq: number | Checkp
           checkpointSeq: sql`greatest(coalesce(${runs.checkpointSeq}, 0), ${seq})`,
           updatedAt: now,
         })
-        .where(eq(runs.id, runId))
+        .where(and(eq(runs.id, runId), sql`${runs.status} NOT IN ('completed', 'failed', 'cancelled')`))
         .returning({ id: runs.id });
       return updated.length > 0;
     }
@@ -204,7 +249,8 @@ export async function touchCheckpoint(runId: string, patchOrSeq: number | Checkp
           : {}),
         updatedAt: now,
       })
-      .where(eq(runs.id, runId))
+      // RUN-010: same terminal guard as the numeric path.
+      .where(and(eq(runs.id, runId), sql`${runs.status} NOT IN ('completed', 'failed', 'cancelled')`))
       .returning({ id: runs.id });
     return updated.length > 0;
   } catch (err) {
@@ -233,9 +279,18 @@ export function buildCompensationInverse(args: { existed: boolean; priorContent?
   // Truncation flag: hash covers the STORED (possibly truncated) content and is
   // always verified on restore — a flag that skips verification would be dead.
   const truncated = prior.length > 20000;
-  const stored = truncated ? prior.slice(0, 20000) : prior;
+  let stored = truncated ? prior.slice(0, 20000) : prior;
+  // RUN-023: never end the stored prefix on a lone high surrogate — a JSONB
+  // round-trip of lone surrogates is undefined behavior and the restored file
+  // would contain U+FFFD. Backing off one UTF-16 unit keeps the ≤20k bound
+  // and always splits on a code-point boundary.
+  if (truncated) {
+    const lastUnit = stored.charCodeAt(stored.length - 1);
+    if (lastUnit >= 0xd800 && lastUnit <= 0xdbff) stored = stored.slice(0, -1);
+  }
   const priorHash = createHash("sha256").update(stored, "utf8").digest("hex");
-  return { op: "restore", path: args.path, priorHash, priorContentRef: stored, ...(truncated ? { truncated: true } : {}) } as CompensationInverseOp;
+  // RUN-005: truncated is now a typed field, no cast needed.
+  return { op: "restore", path: args.path, priorHash, priorContentRef: stored, ...(truncated ? { truncated: true } : {}) };
 }
 
 export async function addCompensation(runId: string, entry: { toolName: string; targetPath: string; inverseOp: CompensationInverseOp }): Promise<CompensationRow | null> {
@@ -256,6 +311,18 @@ export async function addCompensation(runId: string, entry: { toolName: string; 
     } catch (err) {
       if ((err as { code?: string })?.code === "23505" && attempt < 4) continue;
       console.warn(`[runsRepository] addCompensation failed for ${runId}:`, (err as Error)?.message || err);
+      // RUN-004: best-effort journaling must be observable — a swallowed insert
+      // failure means undo is silently unavailable. One structured warn line per
+      // failure lets operators alert on the journal-loss rate.
+      try {
+        logWarn({
+          stage: "runs.compensation_journal_failed",
+          runId,
+          toolName: entry.toolName,
+          targetPath: entry.targetPath,
+          reason: (err as Error)?.message || String(err),
+        });
+      } catch {}
       return null;
     }
   }
@@ -284,6 +351,21 @@ export async function deleteCompensation(compId: string, workspaceId?: string | 
   if (!isRunsEnabled()) return;
   const db = await resolveDb(workspaceId);
   await db.delete(runsCompensation).where(eq(runsCompensation.id, compId));
+}
+
+/**
+ * RUN-013: scoped delete — runId is part of the WHERE so a caller cannot
+ * delete another run's journal row by compId. Additive; the old port stays
+ * for compat.
+ */
+export async function deleteRunCompensation(runId: string, compId: string, workspaceId?: string | null): Promise<boolean> {
+  if (!isRunsEnabled()) return false;
+  const db = await resolveDb(workspaceId);
+  const removed = await db
+    .delete(runsCompensation)
+    .where(and(eq(runsCompensation.id, compId), eq(runsCompensation.runId, runId)))
+    .returning({ id: runsCompensation.id });
+  return removed.length > 0;
 }
 
 export async function listRunsByStatus(statuses: RunStatus[], staleBefore?: Date, limit = 50): Promise<RunRow[]> {

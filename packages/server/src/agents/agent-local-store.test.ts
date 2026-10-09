@@ -7,6 +7,7 @@ import { setLocalStoreDirForTests } from "../shared/core/local-file.js";
 import {
   localGetAgent,
   localListAgents,
+  localSeedDefaultAgent,
   localUpsertAgent,
 } from "./agent-local-store.js";
 
@@ -111,5 +112,33 @@ describe("agent local store — full-field persistence (C3)", () => {
 
     const scopedB = await localListAgents({ workspaceId: "ws-b" });
     expect(scopedB.map((r: any) => r.name)).toEqual(["b-ws-b"]);
+  });
+});
+
+// AGT-016: the PG agents PK is the global id; a literal seed id collided when
+// two workspaces shared one database and workspace-sync pushed both rosters.
+describe("AGT-016 · default-assistant seed id is namespaced per workspace", () => {
+  it("seeds distinct ids per workspace so shared-PG rows cannot collide", async () => {
+    const a = await localSeedDefaultAgent("ws-a");
+    const b = await localSeedDefaultAgent("ws-b");
+
+    // Pre-fix both seeds used the literal id "agent-default-assistant": one
+    // shared-PG row, last writer wins.
+    expect(a.id).not.toBe(b.id);
+    expect(a.id).toBe("ws-a:default-assistant");
+    expect(b.id).toBe("ws-b:default-assistant");
+    expect(a.workspaceId).toBe("ws-a");
+    expect(b.workspaceId).toBe("ws-b");
+
+    // Idempotent per workspace: re-seed returns the same namespaced row.
+    expect((await localSeedDefaultAgent("ws-a")).id).toBe(a.id);
+    expect((await localListAgents({ workspaceId: "ws-a" })).map((r: any) => r.id)).toEqual([a.id]);
+  });
+
+  it("returns a pre-fix legacy-id seed untouched (no rename, no duplicate)", async () => {
+    await localUpsertAgent(baseInput({ id: "agent-default-assistant", name: "default-assistant", title: "Default Assistant" }));
+    const seeded = await localSeedDefaultAgent("ws-a");
+    expect(seeded.id).toBe("agent-default-assistant");
+    expect((await localListAgents({ workspaceId: "ws-a" })).map((r: any) => r.name)).toEqual(["default-assistant"]);
   });
 });

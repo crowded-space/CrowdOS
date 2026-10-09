@@ -34,13 +34,16 @@ export class MentionParser {
    * Parse and resolve mentions from text content.
    * Support @AgentName, @AgentId, @Level0, @Level1, @Level2, @Level3, @L0, @L1, @L2, @L3
    */
-  async parseMentions(content: string): Promise<MentionMetadata[]> {
+  async parseMentions(content: string, workspaceId?: string | null): Promise<MentionMetadata[]> {
     if (!content) return [];
 
     const matches: MentionMetadata[] = [];
 
-    // Fetch all active agents
-    const allAgents = await this.registry.list({ isTemplate: false });
+    // AGT-003: scope the roster to the owning workspace. An unscoped list
+    // leaks foreign-workspace agents into mention resolution.
+    const allAgents = await this.registry.list(
+      workspaceId ? { isTemplate: false, workspaceId } : { isTemplate: false }
+    );
 
     const agentNames = allAgents.map(a => a.name);
     const roleNames = [

@@ -85,7 +85,9 @@ export class RuntimeExecutor {
 
       if (requestedRunId) {
         // ponytail: no .catch(()=>null) — DB error must fail loudly, not fork a duplicate run
-        const fetched = await runsGate.getById(requestedRunId)
+        // RUN-007: thread the workspace so split-DB rows resolve on their
+        // own handle instead of the ambient pool.
+        const fetched = await runsGate.getById(requestedRunId, workspaceId ?? null)
         if (fetched) {
           run = fetched
           if (resumeContext) {
@@ -103,7 +105,10 @@ export class RuntimeExecutor {
             // H4: fresh-run / BullMQ retry reuse — adopt the caller's row, never insert a new one.
             run = await this.walkTransitions(broker, run, ["starting", "running"], "execution_started", null)
           } else if (run.status !== "running") {
-            console.warn(`[RuntimeExecutor] Run ${run.id} in status ${run.status} — reusing without transition walk`)
+            // B-02: refusing to execute with stale state (matches the resume
+            // path above). A warn-and-continue here let non-executable
+            // statuses (failed/cancelled/verifying/...) run code.
+            throw new Error(`[RuntimeExecutor] Run ${run.id} in status ${run.status} — refusing to execute with stale state`)
           }
         } else if (resumeContext) {
           throw new Error(`Resume requested but run not found: ${requestedRunId}`)
@@ -133,7 +138,8 @@ export class RuntimeExecutor {
       // the runtime owns the run; cleared as soon as execute settles.
       const heartbeatRunId = run?.id ?? null
       const heartbeat = heartbeatRunId
-        ? setInterval(() => { void runsGate.touchRunHeartbeat(heartbeatRunId) }, 15_000)
+        // RUN-007: heartbeat on the run's own handle.
+        ? setInterval(() => { void runsGate.touchRunHeartbeat(heartbeatRunId, (run as unknown as Record<string, unknown> | null)?.workspaceId as string | null ?? workspaceId ?? null) }, 15_000)
         : null
       heartbeat?.unref?.()
       let result: RuntimeResult
@@ -150,20 +156,26 @@ export class RuntimeExecutor {
       // checks (soft-cap escalation) run asynchronously.
       if (result.usage && (result.usage.promptTokens > 0 || result.usage.completionTokens > 0)) {
         void (async () => {
-          try {
-            const { TokenTracker } = await import('../shared/core/token-tracker.js')
-            await TokenTracker.trackUsage(
-              broker,
-              agent,
-              channelId,
-              agent.modelModuleId ?? null,
-              result.usage.promptTokens,
-              result.usage.completionTokens,
-              run?.id ?? null,
-              workspaceId
-            )
-          } catch (err) {
-            console.error('[RuntimeExecutor] Failed to record token usage:', err)
+          // B-04: one attempt + log silently skewed budgets on DB blips.
+          // Retry 3x with backoff before declaring the usage lost.
+          for (let attempt = 0; attempt < 3; attempt++) {
+            try {
+              const { TokenTracker } = await import('../shared/core/token-tracker.js')
+              await TokenTracker.trackUsage(
+                broker,
+                agent,
+                channelId,
+                agent.modelModuleId ?? null,
+                result.usage.promptTokens,
+                result.usage.completionTokens,
+                run?.id ?? null,
+                workspaceId
+              )
+              return;
+            } catch (err) {
+              if (attempt === 2) console.error('[RuntimeExecutor] token usage lost after 3 attempts:', err);
+              else await new Promise((r) => setTimeout(r, 500 * (attempt + 1)));
+            }
           }
         })()
       }
@@ -246,6 +258,9 @@ export class RuntimeExecutor {
         reason,
         errorCode: isLast ? lastHopErrorCode : null,
         broker,
+        // XD-002: the run row knows its workspace; thread it so the
+        // transition resolves the same DB handle the row was created on.
+        workspaceId: (current as unknown as Record<string, unknown>).workspaceId as string | null ?? null,
       })
       if (!outcome) {
         throw new Error(

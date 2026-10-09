@@ -51,7 +51,9 @@ export class ToolSchemaMiddleware implements IContextMiddleware {
     // open_detail / load_skill are the §21/§20 expansion verbs: without them
     // discovery would be a dead end, since the agent could never pull in what it
     // was told about.
-    const universalContextToolIds = ["lock_in", "lock_out", "open_detail", "load_skill"];
+    // SK-008: derive from the shared constant so the subset cannot drift.
+    const { UNIVERSAL_TOOL_IDS } = await import("../../../tools/tools-gate.js");
+    const universalContextToolIds = (UNIVERSAL_TOOL_IDS as string[]).filter((id) => ["lock_in", "lock_out", "open_detail", "load_skill"].includes(id));
 
     if (!requiresTools) {
       // Pure conversational/observer: no tools (keep Chat pure 0-1 for hot-reload fidelity).

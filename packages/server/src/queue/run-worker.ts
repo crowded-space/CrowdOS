@@ -12,7 +12,43 @@ export interface RunJobData extends EnqueueRunInput {}
 // Anything else degrades to Auto (undefined), never a throw.
 const KNOWN_RUNTIMES = new Set(["conversational", "agentic", "swarm", "coding", "research"]);
 
-async function processRunJob(job: Job<RunJobData>): Promise<unknown> {
+/**
+ * RUN-026/RUN-030/RUN-031: run-state guard for non-resume jobs (no
+ * resumeContext). A queue job may only start an execution for a row that is
+ * still on its first (or retrying) delivery:
+ *
+ *  - terminal / resumable / mid-close rows refuse (RUN-026: a stale BullMQ
+ *    retry or backlog pickup must not execute with no valid state anchor);
+ *  - `queued` is resume-exclusive (only reachable via `resumable -> queued`),
+ *    so a non-resume job seeing `queued` is the stale pre-sweep backlog job
+ *    of a run the operator already resumed — refuse or it duplicates the
+ *    resume execution (RUN-030);
+ *  - `starting`/`running` with zero attempts made means ANOTHER execution is
+ *    already in flight (only an executor walks a row out of `created`); a
+ *    first-pickup job must refuse or it duplicates a live/resumed execution.
+ *    A retried job (attemptsMade >= 1) adopts its own crashed row — the H4
+ *    retry-reuse path stays intact. Stall redelivery of a hard-killed
+ *    first attempt lands here too (attemptsMade stays 0): it is refused and
+ *    the row recovers through the sweep (`running -> orphaned -> resumable`)
+ *    plus an explicit resume, which is the documented recovery path.
+ *  - rows with parentRunId are research child-trace rows (audit-only): never
+ *    executable from the queue (RUN-031).
+ */
+// Exported for the RUN-026/030/031 unit test (same-folder test file).
+export function refuseNonResumeJob(
+  row: { status: string; parentRunId: string | null },
+  attemptsMade: number,
+): { reason: string } | null {
+  if (row.parentRunId) return { reason: "child_trace_row" };
+  if (row.status === "queued") return { reason: "resume_exclusive_status" };
+  if ((row.status === "starting" || row.status === "running") && attemptsMade === 0) return { reason: "execution_in_flight" };
+  if (!["created", "starting", "running"].includes(row.status)) return { reason: "stale_run_status" };
+  return null;
+}
+
+// Exported for the TG-4 scope test (same-folder): the wrap assertion calls the
+// processor directly with a fake Job instead of booting Redis.
+export async function processRunJob(job: Job<RunJobData>): Promise<unknown> {
   const { channelId, agentId, messageId, userInput, workspaceId, runId } = job.data;
   const rawRuntime = (job.data as { explicitRuntime?: unknown }).explicitRuntime;
   const explicitRuntime = typeof rawRuntime === "string" && KNOWN_RUNTIMES.has(rawRuntime) ? rawRuntime : undefined;
@@ -74,6 +110,37 @@ async function processRunJob(job: Job<RunJobData>): Promise<unknown> {
   } catch {}
 
   try {
+    // SH-002 (XD-016 worker leg) + RUN-026/RUN-030/RUN-031: resolve the
+    // effective workspace first; the state guard and the scoped executor both
+    // need it.
+    const effectiveWorkspaceId = workspaceId ?? "default";
+
+    // RUN-026/RUN-030/RUN-031: job/run correlation guard (see
+    // refuseNonResumeJob). Refuse BEFORE resolving the agent or executing:
+    // resume jobs pass through (the executor owns the resume walk and refuses
+    // stale states itself, B-02); a missing row (null) also passes —
+    // runs-disabled / record-less deployments execute run-less by design.
+    if (runId && !resumeContext) {
+      try {
+        const { runsGate } = await import("../runs/runs-gate.js");
+        const row = await runsGate.getById(runId as string, effectiveWorkspaceId);
+        if (row) {
+          const refusal = refuseNonResumeJob(
+            { status: row.status, parentRunId: (row.parentRunId as string | null) ?? null },
+            (job as unknown as { attemptsMade?: number }).attemptsMade ?? 0,
+          );
+          if (refusal) {
+            console.warn(`[runs:worker] skipped run ${runId}: ${refusal.reason} (status ${row.status})`);
+            return { skipped: true, reason: refusal.reason, status: row.status, runId };
+          }
+        }
+      } catch (err) {
+        // Fail-open: a guard-read failure must not block delivery; the
+        // executor re-fetches the row and enforces its own refusal.
+        console.warn(`[runs:worker] run-state guard read failed for ${runId}:`, (err as Error)?.message || err);
+      }
+    }
+
     let agent: unknown = null;
     try {
       if (typeof (agentGate as unknown as Record<string, unknown>).getById === "function") {
@@ -90,10 +157,18 @@ async function processRunJob(job: Job<RunJobData>): Promise<unknown> {
       throw new Error(`Agent not found: ${agentId}`);
     }
 
-    const result = await (runtimeGate as unknown as { execute: (req: unknown) => Promise<unknown> }).execute({
+    // SH-002 (XD-016 worker leg): bullmq runs must execute inside the
+    // workspace's ALS handle, or bare getDb() writes inside the runtime
+    // (artifacts, run transitions) resolve the ambient pool — lost or
+    // cross-tenant rows in split-DB deployments. Same fallback semantics as
+    // executeRunScoped (register-socket-server.ts:327-341): a local-only or
+    // unknown workspace degrades to the unscoped path. Only the resolver is
+    // caught — a failing run must reject once so BullMQ retries stay intact.
+    const execute = (runtimeGate as unknown as { execute: (req: unknown) => Promise<unknown> }).execute;
+    const runRequest = {
       agent,
       channelId,
-      workspaceId: workspaceId ?? "default",
+      workspaceId: effectiveWorkspaceId,
       userInput,
       broker,
       explicitRuntime,
@@ -101,7 +176,14 @@ async function processRunJob(job: Job<RunJobData>): Promise<unknown> {
       librarianAgentId: "agent-librarian",
       runId: (runId as string | undefined) ?? null,
       resumeContext: resumeContext as unknown as null,
-    });
+    };
+    let scopedExecute: ((req: unknown) => Promise<unknown>) | null = null;
+    try {
+      const { runWithDb, dbForWorkspace } = await import("../shared/config/database.js");
+      const db = await dbForWorkspace(effectiveWorkspaceId).catch(() => null);
+      if (db) scopedExecute = (req) => runWithDb(db, () => execute(req));
+    } catch {}
+    const result = await (scopedExecute ?? execute)(runRequest);
 
     return result;
   } finally {

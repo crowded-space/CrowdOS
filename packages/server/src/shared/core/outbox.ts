@@ -10,7 +10,7 @@ import { promises as fs } from "node:fs";
 import { join } from "node:path";
 import { resolveLocalStoreDir, withStoreLock } from "./local-file.js";
 
-export type OutboxEntity = "category" | "channel" | "agent" | "message";
+export type OutboxEntity = "category" | "channel" | "channelSettings" | "agent" | "message";
 export type OutboxOp = "upsert" | "delete";
 
 export interface OutboxEntry {

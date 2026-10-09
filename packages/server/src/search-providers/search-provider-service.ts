@@ -1,4 +1,4 @@
-import type { SearchResult, SearchOptions } from "./search-provider-types.js"
+import type { SearchResult, SearchOptions, SearchProvider } from "./search-provider-types.js"
 import { braveProvider } from "./providers/brave.js"
 import { tavilyProvider } from "./providers/tavily.js"
 import { serperProvider } from "./providers/serper.js"
@@ -52,6 +52,12 @@ export function dedupeByUrl(results: SearchResult[]): { deduped: SearchResult[];
       if (!r || typeof r.url !== "string") throw new Error("malformed result: missing url")
       const key = normalizeUrl(r.url)
       if (seen.has(key)) {
+        // SP-08: merge a missing timestamp from the duplicate onto the kept
+        // row so freshness sort does not bury it as unparsable.
+        const kept = seen.get(key)!;
+        if (!(kept as unknown as Record<string, unknown>).timestamp && (r as unknown as Record<string, unknown>).timestamp) {
+          (kept as unknown as Record<string, unknown>).timestamp = (r as unknown as Record<string, unknown>).timestamp;
+        }
         duplicates.push({ url: r.url, duplicateOf: seen.get(key)!.url })
       } else {
         seen.set(key, r)
@@ -75,7 +81,9 @@ function tokenizeSnippet(text: string): Set<string> {
 }
 
 function jaccard(a: Set<string>, b: Set<string>): number {
-  if (a.size === 0 && b.size === 0) return 1
+  // SP-01: two empty token sets carry no similarity signal. Returning 1
+  // dropped distinct URLs with empty/short snippets as near-duplicates.
+  if (a.size === 0 && b.size === 0) return 0
   let inter = 0
   for (const tok of a) if (b.has(tok)) inter++
   const union = a.size + b.size - inter
@@ -137,7 +145,8 @@ export function sortByFreshness(results: SearchResult[]): SearchResult[] {
   return [...valid.map((v) => v.result), ...unparsable]
 }
 
-type ProviderEntry = { name: string; provider: typeof braveProvider }
+// SP-06: type the entry as the SearchProvider port so provider shapes cannot drift.
+type ProviderEntry = { name: string; provider: SearchProvider }
 
 function configuredProviders(): ProviderEntry[] {
   const out: ProviderEntry[] = []

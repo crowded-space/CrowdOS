@@ -37,3 +37,9 @@ export interface ChannelMessagesPage {
   messages: any[];
   cursor: MessagePageCursor | null;
 }
+
+/** THR-015: raw thread message page — rows keep `threadId` (the merged channel page drops it). */
+export interface ThreadMessagesPage {
+  messages: any[];
+  nextCursor: string | null;
+}

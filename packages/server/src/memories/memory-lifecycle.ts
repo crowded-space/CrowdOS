@@ -74,10 +74,13 @@ const DEFAULT_SWEEP_INTERVAL_MS = 10 * 60 * 1000;
 const DEFAULT_NOTE_CAP = 500;
 
 /** Fire-and-forget audit write; never blocks or throws into the hot path. */
-export function logMemoryUpdate(entry: MemoryUpdateLogInput): void {
+// MEM-001: audit rows used to land in the ambient DB while the note lived in
+// the workspace DB. Thread the workspace opts so audit follows the note.
+export function logMemoryUpdate(entry: MemoryUpdateLogInput, opts?: MemoryWorkspaceOpts): void {
   void (async () => {
     try {
-      await getDb().insert(memoryUpdateLog).values({
+      const db = (await resolveMemoryDb(opts)) ?? getDb();
+      await db.insert(memoryUpdateLog).values({
         id: randomUUID(),
         agentId: entry.agentId ?? null,
         action: entry.action,
@@ -111,8 +114,11 @@ export function isSuppressionActive(
  * Flip hard-suppressed notes whose suppress_until has elapsed back to active.
  * Standalone function so QUE-2 can port it to a repeatable BullMQ job as-is.
  */
-export async function runSuppressionSweep(now: Date = new Date()): Promise<{ flipped: number }> {
-  const db = getDb();
+export async function runSuppressionSweep(now: Date = new Date(), opts?: MemoryWorkspaceOpts): Promise<{ flipped: number }> {
+  // The sweeper fan-out binds each workspace database via runWithDb, so the
+  // ALS handle already selects the right database. An explicit workspace id
+  // keeps the same precedence as writes when callers sweep one workspace.
+  const db = (await resolveMemoryDb(opts)) ?? getDb();
   const expired = await db.query.agentMemoryNotes.findMany({
     where: and(
       eq(agentMemoryNotes.lifecycleStatus, "suppressed"),
@@ -135,7 +141,7 @@ export async function runSuppressionSweep(now: Date = new Date()): Promise<{ fli
       agentId: note.agentId,
       action: "suppress_expire",
       reason: "suppress_until elapsed (sweep)",
-    });
+    }, opts);
   }
   return { flipped: expired.length };
 }
@@ -295,12 +301,23 @@ export async function discardNoteFromContext(
   opts?: MemoryWorkspaceOpts,
 ): Promise<{ ok: true; inVault: boolean }> {
   const ttlMs = numEnv("MEM_DISCARD_TTL_MS", 30 * 60 * 1000);
+  // MEM-019: session discards are keyed in the resolved-UUID space so the
+  // retrieval read path (which resolves alias inputs the same way) reads back
+  // the same key. Dynamic import breaks the store↔lifecycle module cycle;
+  // resolution failure keeps the caller-provided id (degraded parity).
+  let agentKey = resolvedAgentId;
+  try {
+    const { resolveAgentId } = await import("./agent-memory-store.js");
+    agentKey = await resolveAgentId(resolvedAgentId, opts);
+  } catch {
+    // keep the caller-provided id
+  }
   let inVault = false;
   try {
-    inVault = await softSuppressNote(resolvedAgentId, noteId, `discard_memory_from_context: ${reason}`, new Date(Date.now() + ttlMs), opts);
+    inVault = await softSuppressNote(agentKey, noteId, `discard_memory_from_context: ${reason}`, new Date(Date.now() + ttlMs), opts);
   } catch (err) {
     console.error("[MemoryLifecycle] Soft-suppress on discard failed:", (err as any)?.message || err);
   }
-  memorySessionDiscards.discard(resolvedAgentId, channelId, [noteId], ttlMs);
+  memorySessionDiscards.discard(agentKey, channelId, [noteId], ttlMs);
   return { ok: true, inVault };
 }

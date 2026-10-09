@@ -1,0 +1,245 @@
+packages/client\stores\crowdOsStore.ts:3798:      // ART-1: list rows carry a 500-char contentRef truncation. Fetch the
+packages/server/src\workspace\workspace-registry.ts:247:    // WS-005: a corrupt registry must not read as empty (locks disabled,
+packages/server/src\workspace\workspace-registry.ts:294:  // WS-004: conflict quarantine. A record whose dbSync state is conflict is
+packages/server/src\workspace\workspace-pin.ts:97:  // WS-002: honest persistence. At least one store must acknowledge the
+packages/server/src\workspace\workspace-pin.ts:129:  // WS-001: drop the 15s pin-entries cache so the new PIN enforces immediately.
+packages/server/src\workspace\workspace-pin.ts:145:  // WS-002 (clear path): same honest-persist + invalidate contract as set.
+packages/server/src\workspace\workspace-database.ts:674:      -- WS-003: previously-missing tables left behind by flush (runs,
+packages/server/src\workspace\workspace-database-runtime.ts:100:  // WS-007: serialize rotation per workspace. Concurrent callers during a
+packages/server/src\workspace\workspace-database-runtime.ts:204:      // WS-008: skipped sweep targets were invisible. Warn with the id so
+packages/server/src\workspace\workspace-database-runtime.ts:219:      // WS-008: per-target sweep failures were silent coverage loss.
+e2e\coding-diff.spec.ts:2: * Coding diff journey — UX-3 diff viewer from ART-1
+e2e\coding-diff.spec.ts:21:    // Instead, assert that the artifacts API is reachable (honest ART-1)
+packages/server/src\tools\tools-gate.ts:13: * SK-008: single source of truth for universal tool ids. Consumed by
+packages/server/src\tools\tool-registry.ts:433:      // TOLS-01: plumb the intended 300s to the executor race (was default
+packages/server/src\tools\tool-executor.ts:356:      // SK-002: authorize inside the SAME workspace handle the agent row
+packages/server/src\tools\tool-executor.ts:362:      // SK-008: fallback list is the shared constant (was a 5-id copy
+packages/client\src\api\client.ts:417:  // ART-1: list rows truncate patch/contentRef to 500 chars. Fetch the full
+packages/client\src\api\client.ts:429:  // AP-001/AP-005: explicit reuse flag alongside the legacy scope sentinel.
+packages/server/src\tools\mcp\mcp-client-manager.ts:213:    // TOLS-06: disconnect epoch. A disconnect landing mid-connect must
+packages/server/src\tools\mcp\mcp-client-manager.ts:459:      // TOLS-03: the breaker status was label-only — requests to a
+packages/server/src\tools\mcp\mcp-client-manager.ts:506:    // TOLS-06: bump the epoch so an in-flight connect aborts instead of
+packages/server/src\threads\thread-service.ts:10:  // THR-003: local-first tier. Without a database the file store is truth
+packages/server/src\threads\thread-service.ts:45:  // THR-004: a concurrent create on the same parent hits the partial
+packages/server/src\threads\thread-service.ts:88:  // THR-003: local tier serves channel-scoped JSON rows.
+packages/server/src\threads\thread-service.ts:125:  // THR-003: local tier update (channel scope resolved by scan).
+packages/server/src\threads\thread-service.ts:130:  // THR-006: guarded transition map. Any-to-any moves allowed resurrection
+packages/server/src\threads\thread-service.ts:132:  // bookkeeping). THR-009: single conditional UPDATE so a concurrent
+packages/server/src\threads\thread-service.ts:149:    // THR-014: stamp leave-active time on every non-active move, never
+packages/server/src\threads\thread-service.ts:162:  // THR-003: local tier expiry sweep over all workspace scopes.
+packages/server/src\threads\thread-service.ts:198:  // THR-003: local tier delete.
+packages/server/src\threads\thread-service.ts:205:  // THR-005: SET NULL rule. Replies survive as channel messages (their
+packages/server/src\threads\thread-service.ts:213:  // THR-003: local tier reads thread replies from the messages local store.
+packages/server/src\threads\thread-service.ts:264:  // THR-003: local tier bump.
+packages/server/src\threads\thread-service.ts:281:// THR-003 local-tier: createThreadLocal + scope helper
+packages/server/src\threads\thread-local-store.ts:1:// ─── Thread Local Store (THR-003, C3 local-first) ─────────────────────────
+packages/server/src\threads\thread-local-mode.test.ts:1:// THR-003: thread local tier works with no DATABASE_URL.
+packages/server/src\threads\thread-local-mode.test.ts:31:describe("THR-003 thread local tier (no DATABASE_URL)", () => {
+packages/server/src\artifacts\artifacts-repository.ts:76:    // ART-7: sanitize the runId path segment so a crafted runId cannot
+packages/server/src\artifacts\artifacts-repository.ts:98:  // ART-8: persist the written path only. The caller-supplied path lives in
+packages/server/src\artifacts\artifacts-repository.ts:123:  // SCL-3/ART-1: emit artifact events for observability and client sync (CTX-1 phantom handler fix)
+packages/server/src\artifacts\artifacts-repository.ts:184:  // ART-5: batched purge (500 ids per statement) instead of one unbounded
+packages/server/src\Filesystem\local-filesystem.ts:104:    // FS-002: truncation was silent (text path returns a marker, binary did
+packages/server/src\Filesystem\local-filesystem.ts:175:          // FS-001: one dangling symlink/junction must not fail the whole
+packages/server/src\artifacts\artifacts-gate.test.ts:67:describe.skipIf(!probe.ok)("Artifacts gate — repository CRUD (ART-1)", () => {
+packages/server/src\artifacts\artifacts-gate.test.ts:164:describe.skipIf(!probe.ok)("Artifacts gate — coding run integration (ART-1)", () => {
+packages/server/src\approvals\approval-types.ts:46:   * AP-001/AP-005: explicit session-reuse request. Replaces the overloaded
+packages/server/src\approvals\approval-sweeper.ts:17:  // AP-003: single-DB deployments have no per-workspace URLs, so the fan-out
+packages/server/src\approvals\approval-sweeper.ts:51:        // XD-009: funnel through stateGate so the hop emits
+packages/server/src\approvals\approval-repository.ts:96:  // AP-002: no cross-requester fallback. A grant issued to one requester
+packages/server/src\approvals\approval-repository.ts:122:      // AP-001/AP-005: explicit reuse mode. Legacy scope:'reusable' still
+packages/server/src\swarm\swarm-types.ts:31:  // SW-05: blocked is a first-class outcome. The dispatch map used to say
+packages/server/src\swarm\swarm-repository.ts:208:    // SW-01: the mem path above guards transitions via canTransition, but the
+packages/server/src\swarm\swarm-repository.ts:310:    // SW-06: mem cleared only on confirmed delete. Clearing unconditionally
+packages/server/src\swarm\swarm-repository.ts:311:    // hid PG failures and left stale rows to collide on re-run (SW-07).
+packages/server/src\channels\channel-settings.test.ts:99:    expect(row).toMatchObject({ channelId: "ch-orphan", workspaceId: "default", pinnedRuntime: "agentic" }); // gate permissive; route enforces CHN-012
+packages/server/src\channels\channel-service.ts:39:// CHN-007: optional workspace scope. Unscoped keeps legacy behavior for
+packages/server/src\channels\channel-service.ts:138:  // CHN-006: pre-check so a duplicate never reaches dualWrite (which would
+packages/server/src\channels\channel-service.ts:370:  // CHN-007: scope the parent-category check to the resolved workspace.
+packages/server/src\channels\channel-service.ts:393:        // CHN-002: compare lower(name) on BOTH sides. Rows store the name
+packages/server/src\channels\channel-service.ts:481:  // CHN-001: renames need the same duplicate-name guard as creates.
+packages/server/src\channels\channel-service.ts:566:  // CHN-010: the default fallback is now LOUD. A temporarily-unreadable
+packages/server/src\channels\channel-service.ts:574:  // CHN-011: an explicit handle pins PG first (was: local won even with a
+packages/server/src\channels\channel-service.ts:615:  // CHN-008: the PG leg used to swallow every error via pgCatchNull. Warn
+packages/server/src\channels\channel-service.ts:617:  // stays the commit point until settings join the outbox replay (CHN-009).
+packages/server/src\channels\channel-local-store.ts:182:  // CHN-006: dup check INSIDE the mutate lock (was check-then-act outside
+packages/server/src\channels\channel-local-store.ts:183:  // it, so concurrent creates both passed). CHN-006b: return a union
+packages/server/src\channels\channel-local-store.ts:225:    // CHN-019: cascade settings rows too (were orphaned, stale pins could
+packages/server/src\channels\channel-local-store.ts:298:  // CHN-003: archived-excluded, matching the service-level scan. Archived
+packages/server/src\events\event-log-service.ts:92:    // XD-013: channel row is authoritative for write scope. The payload
+packages/server/src\swarm\swarm-dispatcher.ts:239:      // SW-05: map agrees with the persisted row status.
+packages/server/src\swarm\swarm-dispatcher.test.ts:106:    // SW-05: the dispatch map agrees with the persisted row — blocked, not failed.
+packages/server/src\channel-mounts\channel-mount-service.ts:57:  // CM-002: fail closed on unreadable registry. WS-005 made corrupt
+packages/server/src\channel-mounts\channel-mount-service.ts:209:        // CM-001: backfill the registry mirror so a tier flip keeps the
+packages/server/src\agents\agent-service.ts:381:      // AGT-009: null clears, undefined keeps. (Was ?? which kept on null.)
+packages/server/src\agents\agent-service.ts:420:      // AGT-008: persisted via migration 0027 (was local-only).
+packages/server/src\agents\agent-service.ts:465:          // AGT-014: presence belongs to setStatus. A title-only edit must
+packages/server/src\agents\agent-service.ts:501:          // AGT-014: same guard as the explicit-handle leg above.
+packages/server/src\agents\agent-service.ts:530:          // AGT-005: no in-tx catch. Swallowing a cascade failure inside the
+packages/server/src\agents\agent-service.ts:558:          // AGT-005: propagate (see explicit-handle leg above).
+packages/server/src\agents\agent-service.ts:573:   * XD-015: atomic instruction-stack replacement (sibling of SK-001).
+packages/server/src\state\state-gate.ts:5:// (sweeper, REST, socket) funnel here since XD-009; tool-executor approval
+packages/server/src\state\state-gate.ts:6:// waits keep direct runsGate calls with warn-on-failure (XD-028) because the
+packages/server/src\state\state-gate.ts:21:  /** XD-002: thread the owning workspace so split-DB runs transition on their own handle. */
+packages/server/src\agents\agent-gate.ts:2:// AGT-007: sync/replay paths write agent rows outside the service; they
+packages/server/src\agents\agent-gate.ts:68:  // XD-015: atomic instruction-stack replacement (withTransaction).
+packages/server/src\skills\skill-service.ts:74:    // SK-003: the old code deleted only the CALLER scope key, leaving other
+packages/server/src\skills\skill-service.ts:234:   * SK-001: atomic all-or-nothing skill replacement. The studio manifest
+packages/server/src\skills\skill-service.ts:283:    // SK-008: single source of truth lives in tools-gate (UNIVERSAL_TOOL_IDS).
+packages/server/src\skills\skill-service.ts:284:    // SK-008: single source of truth lives in tools-gate (UNIVERSAL_TOOL_IDS).
+packages/server/src\db\schema.ts:236:  // AGT-008: token cap column (migration 0027). Was local-only; PG dropped it.
+packages/server/src\db\schema.ts:312:  // MSG-001/THR-002/XD-007: thread-aware uniqueness — channel messages and
+packages/server/src\db\schema.ts:557:  // SW-02: child ids are delegation tokens, not run rows (migration 0024
+packages/server/src\db\schema.ts:989:  /** RUN-005: set when priorContent was truncated to 20k chars at journal time. */
+packages/server/src\db\schema.ts:1039:  // THR-004: partial unique index mirror (migration 0026). One thread per
+packages/server/src\skills\skill-service.test.ts:180:  // SK-008: service imports the shared constant statically; mock carries it.
+packages/server/src\routes\workspace.ts:192:      // WS-006: provision/seed readiness for the 201 payload. Declared at
+packages/server/src\routes\workspace.ts:342:        // WS-006: readiness surfaced (was warn-only 201).
+packages/server/src\shared\sockets\register-socket-server.ts:324:  // XD-016/ART-2: inline execution must run inside the message workspace's
+packages/server/src\shared\sockets\register-socket-server.ts:333:      // silently degraded every inline run to the unscoped path (XD-016 gap).
+packages/server/src\shared\sockets\register-socket-server.ts:746:        // AGT-003: same workspace scope as the roster below.
+packages/server/src\shared\sockets\register-socket-server.ts:771:        // AGT-003: scope the roster to this message's workspace. An
+packages/server/src\shared\sockets\register-socket-server.ts:1048:          // XD-016/ART-2: resume must ride the same tenant-scoped executor as
+packages/server/src\shared\sockets\register-socket-server.ts:1181:            // XD-009: funnel through stateGate for the status emit.
+packages/server/src\routes\threads.ts:63:    // THR-006: guarded lifecycle — illegal moves are 409, not silent writes.
+packages/server/src\routes\threads.ts:101:    // XD-008: single-emit ownership. The broker goes INTO append so the
+packages/server/src\routes\studio.ts:135:        // XD-015: atomic replace through the Agents gate (all-or-nothing).
+packages/server/src\routes\studio.ts:142:        // SK-001: atomic replace through the Skills gate (all-or-nothing in
+packages/server/src\routes\search.ts:27:      // XD-001: caller workspace handle + filter. Unscoped search leaked
+packages/server/src\routes\search.ts:44:          // XD-001: raw rows carry workspace_id; filter here, strip sim +
+packages/server/src\routes\search.ts:62:        // XD-001: the raw-SQL similarity path cannot easily bind the
+packages/server/src\routes\runs.ts:16:    // Q-2/Q-5: delivery honesty. An enqueue/inline failure used to log and
+packages/server/src\routes\messages.ts:27:        // MSG-007: tenant check mirroring the socket rule. The page query
+packages/server/src\routes\index.test.ts:45:  // THR-001: threadRoutes must stay mounted on the real entrypoint.
+packages/server/src\routes\index.test.ts:48:  it("serves every Threads endpoint (THR-001)", async () => {
+packages/server/src\routes\events.ts:39:      // XD-014: tenant check mirroring the messages read rule. A bare
+packages/server/src\routes\channels.ts:64:        // CHN-004: duplicate_name and category are distinct failures.
+packages/server/src\routes\channels.ts:91:      // CHN-004 (update path): duplicate_name is 409, category stays 400.
+packages/server/src\routes\channels.ts:149:        // XD-004: scope the lookup to the caller workspace. An unscoped
+packages/server/src\routes\channels.ts:155:      // CHN-012: refuse orphan pin writes at the transport boundary. The
+packages/server/src\routes\channel-mounts.ts:18:  // CM-003: ownership guard. Mount paths are host paths — without a check
+packages/server/src\routes\channel-mounts.ts:103:    // CM-017/019: scope the event to the owning workspace. Without a
+packages/server/src\routes\categories.ts:73:    // CHN-006b: duplicate is a union, not a throw (was unhandled 500).
+packages/server/src\routes\artifacts.ts:42:      // ART-4: bind the query to the caller identity. A mismatched
+packages/server/src\routes\approvals.ts:45:    // AP-001/AP-005: explicit reuse flag (legacy scope:'reusable' compat kept).
+packages/server/src\routes\approvals.ts:80:        // XD-009: funnel through stateGate for the status emit.
+packages/server/src\routes\approvals.ts:92:    // AP-004: the old path flipped rows without resume/emit, stranding runs
+packages/server/src\db\migrations\0027_agents_context_token_cap.sql:1:-- 0027: agents.context_token_cap (AGT-008). The field flowed through zod
+packages/server/src\db\migrations\0026_threads_integrity.sql:1:-- 0026: threads integrity (THR-004/THR-005).
+packages/server/src\db\migrations\0026_threads_integrity.sql:2:-- THR-004: partial unique index on parent_message_id so concurrent creates
+packages/server/src\db\migrations\0026_threads_integrity.sql:4:-- THR-005: delete rule is SET NULL at the service layer (replies survive as
+packages/server/src\db\migrations\0025_thread_aware_message_sequence.sql:1:-- 0025: thread-aware messages uniqueness (MSG-001/THR-002/XD-007).
+packages/server/src\shared\core\workspace-sync.ts:237:  // AGT-007: synced rows bypass service mutations; invalidate the roster so
+packages/server/src\queue\run-worker.ts:93:    // SH-002 (XD-016 worker leg): bullmq runs must execute inside the
+packages/server/src\shared\core\ttl-cache.ts:50:  /** Invalidate every key ending with the given suffix (SK-003 cross-scope). */
+packages/server/src\queue\maintenance-worker.ts:100:    // ART-3: the artifacts retention sweep existed but was never wired -
+packages/server/src\observability\tracing.ts:50:// OBS-001: spanById had no eviction (traceStore is bounded, this was not).
+packages/server/src\observability\tracing.ts:66:// OBS-011: stored snapshots must not alias the live attribute object.
+packages/server/src\observability\tracing.ts:91:  // OBS-001: bound the live-span registry.
+packages/server/src\observability\tracing.ts:126:  // OBS-009: idempotent end. A double-end used to duplicate the stored span
+packages/server/src\observability\tracing.ts:156:      // OBS-010: evict the least-recently-written bucket; Map order tracks
+packages/server/src\observability\tracing.ts:163:    // OBS-010: re-insert on every write so a still-active run bucket is never
+packages/server/src\observability\tracing.ts:169:  // OBS-011: deep-copied attributes — post-end mutation of the live span must
+packages/server/src\observability\tracing.ts:222:  // OBS-008: newest-first. Was insertion (oldest-first) order, so limit
+packages/server/src\observability\tracing.test.ts:64:  it("evicts the least-recently-written run bucket, keeping an active run (OBS-010)", () => {
+packages/server/src\observability\tracing.test.ts:78:  it("stores a snapshot that does not alias live attributes (OBS-011)", () => {
+packages/server/src\shared\core\mention-parser.ts:42:    // AGT-003: scope the roster to the owning workspace. An unscoped list
+packages/server/src\observability\cost-ledger.ts:225:    // RUN-012/XD-012: via the Runs gate port, not a direct table select.
+packages/server/src\observability\cost-ledger.ts:306:// OBS-003: keyed by tenant scope — a module-global cache served one
+packages/server/src\shared\core\agent-heartbeat.ts:31:// Q-1: exported so the bullmq maintenance worker (handleHeartbeatTouch, via
+packages/server/src\messages\message-service.ts:62:    // MSG-002: resolve the workspace record DB when one exists, so the
+packages/server/src\messages\message-service.ts:111:  // MSG-008: explicit ok/error fields win over prefix heuristics; non-string
+packages/server/src\messages\message-service.ts:113:  // MSG-016: id includes the call index so multiple calls per row are unique.
+packages/server/src\messages\message-service.ts:187:        // MSG-016: index keeps card ids unique within the row.
+packages/server/src\messages\message-service.ts:195:              // MSG-008: JSON-stringify preserves structure (was String()
+packages/server/src\messages\message-service.ts:285:  // MSG-014: non-finite limit (NaN from direct callers) propagated into
+packages/server/src\messages\message-service.ts:303:        // MSG-006: seq tiebreak so same-timestamp rows order deterministically,
+packages/server/src\messages\message-service.ts:464:      // MSG-003: return the persisted shape (baseRow already String()s
+packages/server/src\messages\message-service.ts:495:  // MSG-003: the returned row is the persisted shape (baseRow normalizes
+packages/server/src\messages\message-local-store.ts:92:  // MSG-005: id-based dedupe so a BullMQ/worker retry after a local success
+packages/server/src\messages\message-gate.ts:18:// MSG-013: MAX_PAGE_LIMIT re-exported so validators and callers share one ceiling.
+packages/server/src\memories\memory-retrieval.ts:155:      // MEM-007: silent lane failure hid hybrid→heuristic degradation.
+packages/server/src\memories\memory-retrieval.ts:168:  // MEM-002: parity with the PG path — suppressed notes stay hidden in
+packages/server/src\memories\memory-retrieval.ts:169:  // degraded mode. MEM-003: scope the mirror read to the caller's workspace.
+packages/server/src\search-providers\search-provider-types.ts:9:  /** SP-02: validated provider union — a mapper typo fails compile, not artifacts. */
+packages/server/src\search-providers\search-provider-service.ts:55:        // SP-08: merge a missing timestamp from the duplicate onto the kept
+packages/server/src\search-providers\search-provider-service.ts:84:  // SP-01: two empty token sets carry no similarity signal. Returning 1
+packages/server/src\search-providers\search-provider-service.ts:148:// SP-06: type the entry as the SearchProvider port so provider shapes cannot drift.
+packages/server/src\search-providers\search-provider-service.test.ts:150:describe("SP-01 empty-snippet near-dup guard", () => {
+packages/server/src\memories\memory-local-store.ts:52:  // MEM-002: suppression timestamp must exist on the local shape or the
+packages/server/src\memories\memory-lifecycle.ts:77:// MEM-001: audit rows used to land in the ambient DB while the note lived in
+packages/server/src\memories\memories-gate.ts:88:  // MEM-004: logMemoryUpdate was flat-only; gate object carries it now.
+packages/server/src\memories\embeddings.ts:362:// MEM-011: removed dead second surface `embeddingsGate` (zero importers).
+packages/server/src\search-providers\providers\tavily.ts:56:    // SP-07: non-finite timeouts clamp setTimeout to ~1ms (instant abort). Fall back to default.
+packages/server/src\memories\agent-memory-store.ts:89:  // MEM-006: optional in practice (runtime defaults to 'update'); the
+packages/server/src\memories\agent-memory-store.ts:396:      // MEM-012: only id-collision errors merit a retry. A deterministic
+packages/server/src\memories\agent-memory-store.ts:511:      // MEM-010: clamp previews (was unbounded materialization).
+packages/server/src\search-providers\providers\serper.ts:56:    // SP-07: non-finite timeouts clamp setTimeout to ~1ms (instant abort). Fall back to default.
+packages/server/src\search-providers\providers\brave.ts:65:    // SP-07: non-finite timeouts clamp setTimeout to ~1ms (instant abort). Fall back to default.
+re-docs\Backend Docs\Domain Spec\Filesystem.md:37:7a. List tolerance (FS-001 fixed): per-entry `stat` failure (dangling symlink/junction) resolves to null and is skipped — one broken entry no longer fails the entire listing with ENOENT.
+re-docs\Backend Docs\Domain Spec\Events.md:164:- **`workspaceId` is captured opportunistically.** It is read from the payload when a producer tags it, and `null` otherwise — it is an audit field, not an enforcement field. Isolation is enforced by the channel→workspace relation and the per-channel file, not by this column. Since XD-013 the write path resolves the channel row FIRST and only falls back to the payload; since XD-014 the recent-read route asserts caller-vs-channel workspace (403 on mismatch).
+re-docs\Backend Docs\Domain Spec\Workspace.md:58:7. Screenlock write: `setScreenLockPin` validates `4..128` chars via pin-gate, requires current-PIN proof (stored hash OR global `LOCAL_PIN`) when a hash exists, writes registry then DB sync, fails closed when no store acknowledges (WS-002 fixed), and invalidates the 15s pin cache so new state enforces immediately (WS-001 fixed) (`workspace-pin.ts`); reads go registry-first, DB-second, throw-to-404 when neither has the workspace (`workspace-pin.ts:32`). Corrupt `workspaces.json` throws instead of reading as empty (WS-005 fixed).
+re-docs\Backend Docs\Domain Spec\Workspace.md:59:7b. Reset + quarantine (WS-003/WS-004 fixed): `resetWorkspaceDatabase` drops the full table set (runs, memories, skills, sequences, ledger, keys, events — was missing 15 tables); `tierContextFor` resolves conflict-state records to local-only so wrong-DB writes stop.
+re-docs\Backend Docs\Domain Spec\Channels.md:136:- Duplicate name → `{ error: duplicate_name }`; route now answers 409 `Channel name already exists` (CHN-004 fixed), category stays 400 `Category not found` (`channel-service.ts:57`, `routes/channels.ts:47`).
+re-docs\Backend Docs\Domain Spec\Channels.md:137:- Duplicate name → `{ error: duplicate_name }`; route now answers 409 `Channel name already exists` (CHN-004 fixed), category stays 400 `Category not found` (`channel-service.ts:57`, `routes/channels.ts:47`). Pin validation scopes the agent lookup to the caller workspace (XD-004 fixed).
+re-docs\Backend Docs\Domain Spec\Channels.md:138:- Duplicate name → `{ error: duplicate_name }`; route now answers 409 `Channel name already exists` (CHN-004 fixed), category stays 400 `Category not found` (`channel-service.ts:57`, `routes/channels.ts:47`). Pin validation scopes the agent lookup to the caller workspace (XD-004 fixed). PG dup check compares `lower(name)` on both sides (CHN-002 fixed); renames carry the dup guard (CHN-001 fixed); archived names are reusable on both tiers (CHN-003 fixed); parent-category check is workspace-scoped (CHN-007 fixed); category dup check runs inside the mutate lock with union + 409 mapping (CHN-006/006b fixed).
+re-docs\Backend Docs\Domain Spec\Channels.md:151:- Route `POST /api/channels` distinguished `duplicate_name` (409) from category errors (400) (CHN-004 fixed). Settings PG replica failures now warn instead of vanishing (CHN-008 fixed; CHN-009 outbox replay still open).
+re-docs\Backend Docs\Domain Spec\Tools.md:94:- Writes into others' tables: `messages` (scheduler persist, owned by Messages), `runs_compensation` (via `runsGate`, owned by Runs). `mcp_servers` table exists in schema but the manager keeps sessions memory-only — its writer is unconfirmed (see Gaps). Fixed this round: authz runs in the agent row's workspace handle (SK-002); fallback universals are shared `UNIVERSAL_TOOL_IDS` (SK-008); bash honors 300s toolDef timeout (TOLS-01); tripped breakers refuse (TOLS-03); disconnect bumps connect epoch (TOLS-06); approval-path transition failures warn (XD-028).
+re-docs\Backend Docs\Domain Spec\ChannelMounts.md:19:- Transport (REST schemas, auth, socket fan-out) → Routes/Sockets (call `channelMountGate`, emit `*:mount-updated` themselves). `category:mount-updated` now carries the owning `workspaceId` so the fan-out stays workspace-scoped instead of global (CM-017/CM-019 fixed).
+re-docs\Backend Docs\Domain Spec\ChannelMounts.md:20:- Transport (REST schemas, auth, socket fan-out) → Routes/Sockets (call `channelMountGate`, emit `*:mount-updated` themselves). `category:mount-updated` now carries the owning `workspaceId` so the fan-out stays workspace-scoped instead of global (CM-017/CM-019 fixed). Mount PUT routes assert caller-vs-target workspace (CM-003 fixed); PG resolve backfills the registry mirror (CM-001 fixed); unreadable registry fails closed to the sandbox base instead of widening the jail (CM-002 fixed).
+re-docs\Backend Docs\Domain Spec\Threads.md:67:Transport registration: `threadRoutes` is mounted in `routes/index.ts` alongside all other route modules (THR-001 fixed; pinned by the `serves every Threads endpoint` case in `routes/index.test.ts`).
+re-docs\Backend Docs\Domain Spec\Threads.md:68:Single-emit ownership (XD-008 fixed): the thread-post route passes the broker INTO `messageGate.append` and no longer emits `message:new` manually — exactly one emit per post, no latent double-delivery.
+re-docs\Backend Docs\Domain Spec\Threads.md:69:Local tier (THR-003 fixed): `thread-local-store.ts` JSON rows per channel + tier routing in every service op, proven by `thread-local-mode.test.ts` with no `DATABASE_URL`. One-thread-per-parent enforced by partial unique index 0026 with violation-to-winner mapping (THR-004 fixed). Delete rule is SET NULL — replies survive as channel messages (THR-005 fixed).
+re-docs\Backend Docs\Domain Spec\Swarm.md:27:- `[Observed]` Task rows follow a guarded state machine: `updateSwarmTaskStatus` rejects illegal transitions (e.g. rewinding a terminal row) with a warning and leaves the row untouched — mem path (`swarm-repository.ts:40`) and, since SW-01 fix, the PG path via a CAS status predicate.
+re-docs\Backend Docs\Domain Spec\Swarm.md:28:- `[Observed]` Task rows follow a guarded state machine: `updateSwarmTaskStatus` rejects illegal transitions (e.g. rewinding a terminal row) with a warning and leaves the row untouched — mem path (`swarm-repository.ts:40`) and, since SW-01 fix, the PG path via a CAS status predicate. Abort is checked before persist (SW-04 fixed); dispatch map reports `blocked` honestly (SW-05 fixed); failed deletes throw instead of hiding stale rows (SW-06 fixed); child FK removed from schema to match migration 0024 (SW-02 fixed).
+re-docs\Backend Docs\Domain Spec\Artifacts.md:38:9a. Retention wiring (ART-3 fixed): the `retention` maintenance job now calls `artifactsGate.runRetentionSweep()`; without it artifacts grew unboundedly. `writeArtifactFile` sanitizes the runId path segment (ART-7 fixed). Client Apply fetches the full row via `GET /api/artifacts/:id` before writing (ART-1 fixed) since listings truncate to 500 chars.
+re-docs\Backend Docs\Domain Spec\State.md:36:- `RunTransitionInput` (`state-gate.ts`) — `{ runId, to, reason?, errorCode?, broker?, workspaceId? }` input type; the executor passes the run row's workspace so split-DB runs transition on their own handle (XD-002 fixed).
+re-docs\Backend Docs\Domain Spec\State.md:37:- `RunTransitionInput` (`state-gate.ts`) — `{ runId, to, reason?, errorCode?, broker?, workspaceId? }` input type; the executor passes the run row's workspace so split-DB runs transition on their own handle (XD-002 fixed). Approval decide paths (sweeper, REST, socket) funnel through `applyRunTransition` so every hop emits `run.status_changed` (XD-009 fixed; tool-executor waits stay direct with warn logging per XD-028).
+re-docs\Backend Docs\Domain Spec\Approvals.md:24:- `[Observed]` Reusable-grant lookup is strictly per-requester (AP-002 fixed: the cross-requester global fallback was removed); a hit requires `approved` + matching `(toolName, scope, requestedBy)` + `expiresAt > now`, otherwise the caller re-asks.
+re-docs\Backend Docs\Domain Spec\Approvals.md:139:- Admin `POST /api/approvals/sweep` delegates to `approvalGate.sweepOnce` (AP-004): the sweeper fan-out flips statuses AND resumes `waiting_for_approval` runs via `stateGate` with `approval.decided` emits per row, returning `{ swept }` (`routes/approvals.ts:96`, `approval-gate.ts` `sweepOnce`). Drift fixed 2026-10-07: the route no longer imports `approval-sweeper.js` past the gate (gate-lint clean), and this line no longer claims flip-only semantics.
+re-docs\Backend Docs\Domain Spec\Skills.md:85:- `skillsGate.replaceAgentSkills` — atomic all-or-nothing skill-set replacement in one transaction + owned cache invalidation (SK-001 fixed); studio manifest calls this port, never direct `agentSkills` writes.
+re-docs\Backend Docs\Domain Spec\Skills.md:86:- `skillsGate.replaceAgentSkills` — atomic all-or-nothing skill-set replacement in one transaction + owned cache invalidation (SK-001 fixed); studio manifest calls this port, never direct `agentSkills` writes. Sibling: `agentGate.replaceInstructionStack` — same atomicity for instruction stacks (XD-015 fixed).
+re-docs\Backend Docs\Domain Spec\Skills.md:87:- `skillsGate.replaceAgentSkills` — atomic all-or-nothing skill-set replacement in one transaction + owned cache invalidation (SK-001 fixed); studio manifest calls this port, never direct `agentSkills` writes. Sibling: `agentGate.replaceInstructionStack` — same atomicity for instruction stacks (XD-015 fixed). Invalidation is cross-scope by agent suffix (SK-003 fixed). Universal ids are the shared `UNIVERSAL_TOOL_IDS` from tools-gate (SK-008 fixed).
+re-docs\Backend Docs\Domain Spec\Agents.md:32:- `[Observed]` Socket dispatch + mention resolution scope the roster to the message workspace (`register-socket-server.ts`, `mention-parser.ts` with optional `workspaceId`; AGT-003 fixed) — foreign-workspace agents no longer leak into mention/auto-trigger dispatch.
+re-docs\Backend Docs\Domain Spec\Agents.md:33:- `[Observed]` Socket dispatch + mention resolution scope the roster to the message workspace (`register-socket-server.ts`, `mention-parser.ts` with optional `workspaceId`; AGT-003 fixed) — foreign-workspace agents no longer leak into mention/auto-trigger dispatch. Profile updates no longer flip runtime presence unless `status` was explicitly provided (AGT-014 fixed); explicit `null` clears nullable module links (AGT-009 fixed).
+re-docs\Backend Docs\Domain Spec\Agents.md:34:- `[Observed]` Socket dispatch + mention resolution scope the roster to the message workspace (`register-socket-server.ts`, `mention-parser.ts` with optional `workspaceId`; AGT-003 fixed) — foreign-workspace agents no longer leak into mention/auto-trigger dispatch. Profile updates no longer flip runtime presence unless `status` was explicitly provided (AGT-014 fixed); explicit `null` clears nullable module links (AGT-009 fixed). Cascade failures propagate out of the delete transaction (AGT-005 fixed); sync/replay invalidates the roster via a gate port (AGT-007 fixed); `contextTokenCap` persists via migration 0027 (AGT-008 fixed). 2026-10-07 db-audit note: 0027 was missing from `meta/_journal.json` (drizzle applies only journal-listed tags), so the column existed solely in `schema.ts` on migrated DBs; journal entry added.
+re-docs\Backend Docs\Domain Spec\SearchProviders.md:27:- [Observed] `dedupeEvidence` near-dup guard: two empty token sets score 0, not 1 (SP-01 fixed) — distinct URLs with empty/short snippets are kept instead of dropped as `near_duplicate_snippet`.
+re-docs\Backend Docs\Domain Spec\Observability.md:20:- [Observed] `endSpan` computes `durationMs` rounded to 0.1ms and stores a snapshot copy; the live object stays reachable via the internal id map (`tracing.ts:107-149`). `endSpan` is idempotent — a double-end returns the span untouched (OBS-009 fixed).
+re-docs\Backend Docs\Domain Spec\Observability.md:27:- [Observed] `verifyLedgerAccuracy` caches 60s per tenant scope and matches within 1% (`cost-ledger.ts:296-317`). Was module-global, served cross-tenant totals (OBS-003 fixed).
+re-docs\Backend Docs\Domain Spec\Observability.md:28:- [Observed] `verifyLedgerAccuracy` caches 60s per tenant scope and matches within 1% (`cost-ledger.ts:296-317`). Was module-global, served cross-tenant totals (OBS-003 fixed). Span registry bounded at 10k with eviction (OBS-001 fixed); `getAllTraces` returns newest-first (OBS-008 fixed). Cross-domain reads go through `runsGate.getMetaByIds` (RUN-012/XD-012 fixed).
+re-docs\Backend Docs\Domain Spec\Runtime.md:199:- [Observed] Stale-state refusal: any rejected walk throws rather than executing against a row another writer moved (`runtime-executor.ts:251-252`); reusing a non-running row without a walk now throws too (B-02 fixed, was warn-and-continue). Swarm cleanup failure fails the run instead of mixing stale rows with a new plan (B-03 fixed). Run reads + heartbeats thread the workspace handle (RUN-007 fixed).
+re-docs\Backend Docs\Domain Spec\Runtime.md:200:- [Observed] Stale-state refusal: any rejected walk throws rather than executing against a row another writer moved (`runtime-executor.ts:251-252`); reusing a non-running row without a walk now throws too (B-02 fixed, was warn-and-continue). Swarm cleanup failure fails the run instead of mixing stale rows with a new plan (B-03 fixed). Run reads + heartbeats thread the workspace handle (RUN-007 fixed). Socket inline execution runs inside the message workspace ALS (XD-016 fixed).
+packages/server/src\runtime\tool-call-round-trip.test.ts:104:    // MSG-016: card ids carry the per-row call index for uniqueness.
+re-docs\Backend Docs\Feature and Flow Spec\Recovery and resume.md:26:2026-10-07 tenant-scoping (SH-002): the bullmq worker handoff now executes inside the workspace ALS handle - `runWithDb(dbForWorkspace(workspaceId ?? "default"))` around `runtimeGate.execute` with unscoped fallback on NO_DATABASE/unknown workspace (`run-worker.ts:100-120`); resumed runs therefore write artifacts/run transitions to the workspace DB, matching the SH-001 socket-resume fix. Regression tests TG-1/TG-4 still owed.
+re-docs\Backend Docs\Domain Spec\Messages.md:46:- `messages/message-gate.ts` → re-export + `messageGate` with `getChannelMessagesPage`/`listRecent`/`parseBeforeCursor`/`append` (plus `MAX_PAGE_LIMIT`; the legacy `getChannelMessages` entry below is doc drift). Fixed this task: `listRecent` PG order carries the `sequenceNumber` tiebreak (MSG-006); `localAppendMessage` dedupes by id (MSG-005).
+re-docs\Backend Docs\Domain Spec\Messages.md:47:- `messages/message-gate.ts` → re-export + `messageGate` with `getChannelMessagesPage`/`listRecent`/`parseBeforeCursor`/`append` (plus `MAX_PAGE_LIMIT`; the legacy `getChannelMessages` entry below is doc drift). Fixed: `listRecent` PG order carries the `sequenceNumber` tiebreak (MSG-006); `localAppendMessage` dedupes by id (MSG-005); replica floor reads the workspace DB handle (MSG-002); REST read asserts caller-vs-channel workspace (MSG-007).
+re-docs\Backend Docs\Domain Spec\Messages.md:48:- `messages/message-gate.ts` → re-export + `messageGate` with `getChannelMessagesPage`/`listRecent`/`parseBeforeCursor`/`append` (plus `MAX_PAGE_LIMIT`; the legacy `getChannelMessages` entry below is doc drift). Fixed: `listRecent` PG order carries the `sequenceNumber` tiebreak (MSG-006); `localAppendMessage` dedupes by id (MSG-005); replica floor reads the workspace DB handle (MSG-002); REST read asserts caller-vs-channel workspace (MSG-007). Uniqueness is thread-aware via migration 0025 `(channel_id, COALESCE(thread_id,''), sequence_number)` (MSG-001/THR-002/XD-007 fixed).
+re-docs\Backend Docs\Domain Spec\Messages.md:134:- `MAX_PAGE_LIMIT` (200) is now re-exported through the gate (MSG-013 fixed); route-level `limit` max matches and is enforced in the service (`message-service.ts:139-140`).
+re-docs\Backend Docs\Domain Spec\Runs.md:68:- `errorCode` is sticky (RUN-001 fixed): `undefined` leaves the stored code untouched so a reason-only hop never erases the last failure; explicit `null` clears it; a string sets it. Pinned by `apply-transition.test.ts` (preserves / explicit-null-clears cases).
+re-docs\Backend Docs\Domain Spec\Runs.md:69:- `cancelRun` returns the committed hop-1 (`cancelling`) row when hop 2 is rejected by a concurrent move (RUN-002 fixed); the orphan sweeper heals it from there instead of the caller reading a committed cancel as a failure.
+re-docs\Backend Docs\Domain Spec\Runs.md:70:- `cancelRun` returns the committed hop-1 (`cancelling`) row when hop 2 is rejected by a concurrent move (RUN-002 fixed); the orphan sweeper heals it from there instead of the caller reading a committed cancel as a failure. Checkpoint writes refuse terminal rows (RUN-010 fixed); compensation delete has a scoped `deleteRunCompensation(runId, compId)` variant (RUN-013 fixed); `getMetaByIds` serves cross-domain metadata (RUN-012 fixed).
+re-docs\Backend Docs\Domain Spec\Runs.md:71:- `CompensationInverseOp` carries the typed `truncated?: boolean` flag (RUN-005 fixed); `buildCompensationInverse` no longer casts to hide it.
+re-docs\Backend Docs\Domain Spec\Memories.md:221:- Record-only DB threading (done for the hot paths): memory CRUD/retrieval/lifecycle accept an optional trailing `workspaceId` opts (`MemoryWorkspaceOpts`); when present the handle resolves via `dbForWorkspace` and a NO_DATABASE/unreachable workspace degrades to the local mirror. Threaded callers: `tool-registry.ts` memory handlers (`ctx.workspaceId`), `memory-retrieval-middleware.ts` (`ctx.workspaceId`), `base-runtime.writeReflectionNoteAsync` (+ `packet.workspaceId` from conversational/agentic/coding runtimes), and the semantic query embed (`embedText` via retrieval). With no workspace context the legacy env-gated path is preserved (`isDatabaseConfigured`), so context-free callers keep prior behaviour. Remaining port surface: `embeddings.ts` note-level ops (`embedNote`/`embedNotesBatch`/`ensureEmbeddingsForAgent`/`searchByEmbedding`) still use the env-gated handle — no production caller carries workspace context yet. Fixed this task: `logMemoryUpdate` accepts workspace opts so audit rows follow the note's DB (MEM-001); degraded local retrieval filters suppressed notes and scopes the mirror read (MEM-002/MEM-003).
+re-docs\Backend Docs\Domain Spec\Queue.md:147:- `heartbeats-touch` actually touches (Q-1 fixed): `touchWorkingAgents` exported from `agent-heartbeat.ts` so the bullmq maintenance worker resolves it; live agents no longer risk orphan-sweep in bullmq mode.
+re-docs\Backend Docs\Feature and Flow Spec\Chat send-message flow.md:42:2026-10-07 tenant-scoping: bullmq worker runs execute inside the workspace ALS handle (`runWithDb(dbForWorkspace(workspaceId ?? "default"))` around `runtimeGate.execute`, unscoped fallback on NO_DATABASE/unknown workspace; SH-002, `run-worker.ts:100-120`), completing the XD-016 fix across socket dispatch, socket resume, and worker legs. Runtime writes (artifacts, run transitions) now resolve the workspace DB in split-DB deployments; regression tests TG-1/TG-4 still owed.
+packages/server/src\runtime\runtime-executor.ts:88:        // RUN-007: thread the workspace so split-DB rows resolve on their
+packages/server/src\runtime\runtime-executor.ts:141:        // RUN-007: heartbeat on the run's own handle.
+packages/server/src\runtime\runtime-executor.ts:261:        // XD-002: the run row knows its workspace; thread it so the
+packages/server/src\runs\runs-repository.ts:111:  // RUN-008: transport errors (no DB, connection loss) THROW; only
+packages/server/src\runs\runs-repository.ts:128:      // RUN-001: errorCode is sticky. undefined = leave the stored code
+packages/server/src\runs\runs-repository.ts:158:  // RUN-002: the two-hop cancel is not atomic. If hop 2 is rejected
+packages/server/src\runs\runs-repository.ts:181: * RUN-012/XD-012: batched run metadata for cross-domain readers
+packages/server/src\runs\runs-repository.ts:209:      // RUN-010: terminal guard — progress writes on completed/failed/
+packages/server/src\runs\runs-repository.ts:251:      // RUN-010: same terminal guard as the numeric path.
+packages/server/src\runs\runs-repository.ts:283:  // RUN-005: truncated is now a typed field, no cast needed.
+packages/server/src\runs\runs-repository.ts:336: * RUN-013: scoped delete — runId is part of the WHERE so a caller cannot
+packages/server/src\runs\runs-gate.ts:47:  // RUN-012/XD-012: batched metadata for cross-domain readers.
+packages/server/src\runs\runs-gate.ts:54:  // RUN-013: scoped variant (runId in WHERE). Prefer over deleteCompensation.
+packages/server/src\runs\apply-transition.test.ts:96:  // RUN-001: errorCode is sticky. A reason-only hop must not erase the
+packages/server/src\runs\apply-transition.test.ts:98:  it("preserves a stored errorCode on hops that do not set one (RUN-001)", async () => {
+packages/server/src\runs\apply-transition.test.ts:109:  it("clears errorCode only on explicit null (RUN-001)", async () => {
+packages/server/src\runtime\kernel\middlewares\tool-schema-middleware.ts:54:    // SK-008: derive from the shared constant so the subset cannot drift.
+packages/server/src\runtime\runtimes\swarm-runtime.ts:65:      // SW-04: settle before persist. A cancel between plan and dispatch
+packages/server/src\runtime\runtimes\coding-runtime.ts:230:              // RUN-003: journal BEFORE mutating. A crash between write and
+packages/server/src\runtime\runtimes\coding-runtime.ts:231:              // journal left an un-undoable file change. RUN-004: journal
+packages/server/src\runtime\runtimes\coding-runtime.ts:347:              // RUN-003 (edit path): journal before mutating, warn on failure.

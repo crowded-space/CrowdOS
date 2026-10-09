@@ -357,7 +357,7 @@ export default function WorkspaceSidebar({ onClose }: WorkspaceSidebarProps) {
         <div className="flex items-center gap-1 min-w-0">
           <div className="relative w-9 h-9 rounded-xl bg-amber-500/12 border border-amber-500/20 text-amber-400 flex items-center justify-center text-[11px] shrink-0 font-bold">
             {operatorInitials}
-            <span className="absolute -bottom-0.5 -right-0.5 w-3 h-3 rounded-full bg-emerald-500 border-2 border-[#09090b]" />
+            <span className="absolute -bottom-0.5 -right-0.5 w-3 h-3 rounded-full bg-zinc-500 border-2 border-[#09090b]" title="Local profile - presence unknown (no live source)" />
           </div>
           <div className="min-w-0 leading-tight">
             {operatorEditing ? (
