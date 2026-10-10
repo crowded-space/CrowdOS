@@ -25,8 +25,22 @@ export default function ModelCardsTab() {
   const [modelName, setModelName] = useState('');
   const [apiKey, setApiKey] = useState('');
   const [baseUrl, setBaseUrl] = useState('');
-  const [temperature, setTemperature] = useState(0.7);
-  const [maxTokens, setMaxTokens] = useState(2048);
+  // Numeric fields keep the raw input so clearing the box never stores NaN:
+  // empty means "leave unchanged on edit, default on create".
+  const [temperature, setTemperature] = useState('0.7');
+  const [maxTokens, setMaxTokens] = useState('2048');
+  const DEFAULT_TEMPERATURE = 0.7;
+  const DEFAULT_MAX_TOKENS = 2048;
+  const coerceTemperature = (raw: string, fallback: number): number | undefined => {
+    if (raw.trim() === '') return undefined;
+    const parsed = parseFloat(raw);
+    return Number.isFinite(parsed) ? parsed : fallback;
+  };
+  const coerceMaxTokens = (raw: string, fallback: number): number | undefined => {
+    if (raw.trim() === '') return undefined;
+    const parsed = parseInt(raw, 10);
+    return Number.isFinite(parsed) ? parsed : fallback;
+  };
 
   // UI testing state
   const [testingId, setTestingId] = useState<string | null>(null);
@@ -67,8 +81,8 @@ export default function ModelCardsTab() {
     setModelName('');
     setApiKey('');
     setBaseUrl('');
-    setTemperature(0.7);
-    setMaxTokens(2048);
+    setTemperature(String(DEFAULT_TEMPERATURE));
+    setMaxTokens(String(DEFAULT_MAX_TOKENS));
     setEditingId(null);
     setFormOpen(false);
   };
@@ -82,8 +96,8 @@ export default function ModelCardsTab() {
     // mask back would overwrite the stored credential. Blank = keep existing.
     setApiKey('');
     setBaseUrl(mod.baseUrl || '');
-    setTemperature(mod.temperature ?? 0.7);
-    setMaxTokens(mod.maxTokens ?? 2048);
+    setTemperature(mod.temperature != null && Number.isFinite(mod.temperature) ? String(mod.temperature) : '');
+    setMaxTokens(mod.maxTokens != null && Number.isFinite(mod.maxTokens) ? String(mod.maxTokens) : '');
     setFormOpen(true);
   };
 
@@ -94,14 +108,22 @@ export default function ModelCardsTab() {
     // Only send an apiKey when the user actually typed one; on edit an empty
     // field means "keep the stored key".
     const trimmedKey = apiKey.trim();
+    // Empty numeric fields mean "leave unchanged" on edit; on create they
+    // fall back to the defaults so the server never sees NaN or blanks.
+    const tempValue = editingId
+      ? coerceTemperature(temperature, DEFAULT_TEMPERATURE)
+      : (coerceTemperature(temperature, DEFAULT_TEMPERATURE) ?? DEFAULT_TEMPERATURE);
+    const maxValue = editingId
+      ? coerceMaxTokens(maxTokens, DEFAULT_MAX_TOKENS)
+      : (coerceMaxTokens(maxTokens, DEFAULT_MAX_TOKENS) ?? DEFAULT_MAX_TOKENS);
     const payload = {
       name: label,
       provider,
       modelProfileId: modelName,
       apiKey: trimmedKey || undefined,
       baseUrl,
-      temperature,
-      maxTokens
+      temperature: tempValue,
+      maxTokens: maxValue
     };
     try {
       if (editingId) {
@@ -144,14 +166,26 @@ export default function ModelCardsTab() {
       if (status === 404) {
         setTestResult(prev => ({
           ...prev,
-          [id]: { success: false, msg: 'Model not found. It may have been deleted.' }
+          [id]: { success: false, msg: 'Model not found on the server. It may have been deleted — refresh the list before retrying.' }
+        }));
+        return;
+      }
+      // A down or unreachable custom endpoint answers with a network error
+      // or a 5xx, never a 404: keep those distinct so a stopped local
+      // endpoint is never mistaken for a deleted model.
+      const message = err instanceof Error ? err.message : 'Connection test failed. Backend unreachable.';
+      const offline = /unreachable|offline|fetch failed|ENOTFOUND|ECONNREFUSED|aborted|timeout/i.test(message);
+      if (offline) {
+        setTestResult(prev => ({
+          ...prev,
+          [id]: { success: false, msg: `${message} The endpoint looks down or unreachable — the model itself is still registered.` }
         }));
         return;
       }
       const statusNote = typeof status === 'number' ? ` (HTTP ${status})` : '';
       setTestResult(prev => ({
         ...prev,
-        [id]: { success: false, msg: `${err instanceof Error ? err.message : 'Connection test failed. Backend unreachable.'}${statusNote}` }
+        [id]: { success: false, msg: `Connection test failed${statusNote}: ${message}` }
       }));
     }
   };
@@ -247,7 +281,7 @@ export default function ModelCardsTab() {
                 min="0"
                 max="2"
                 value={temperature}
-                onChange={(e) => setTemperature(parseFloat(e.target.value))}
+                onChange={(e) => setTemperature(e.target.value)}
                 className="w-full bg-zinc-900 border border-zinc-800 focus:border-zinc-700 focus:ring-1 focus:ring-zinc-700/40 rounded px-2.5 py-1.5 text-xs text-zinc-200 focus:outline-none font-mono"
               />
             </div>
@@ -258,7 +292,7 @@ export default function ModelCardsTab() {
                 type="number"
                 min="1"
                 value={maxTokens}
-                onChange={(e) => setMaxTokens(parseInt(e.target.value))}
+                onChange={(e) => setMaxTokens(e.target.value)}
                 className="w-full bg-zinc-900 border border-zinc-800 focus:border-zinc-700 focus:ring-1 focus:ring-zinc-700/40 rounded px-2.5 py-1.5 text-xs text-zinc-200 focus:outline-none font-mono"
               />
             </div>

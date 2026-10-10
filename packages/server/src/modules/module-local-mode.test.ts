@@ -213,12 +213,16 @@ describe("module store hardening", () => {
     expect(zero.length).toBe(1);
   });
 
-  it("unscoped get reads only the default folder (no cross-workspace fan-out)", async () => {
+  it("scoped reads stay tenant-scoped; unscoped get locates the owner folder", async () => {
     await localUpsertModelModule(modelRow("mod-a") as any, "ws-a");
     expect(await moduleGate.model.get("mod-a", "ws-a")).not.toBeNull();
     expect(await moduleGate.model.get("mod-a", "ws-a ")).not.toBeNull(); // trimmed
-    expect(await moduleGate.model.get("mod-a")).toBeNull();
-    expect(await moduleGate.model.get("mod-a", null)).toBeNull();
+    // Sibling scopes never see the row: isolation is enforced on named scopes.
+    expect(await moduleGate.model.get("mod-a", "ws-b")).toBeNull();
+    // Unscoped callers carry only the id, so the read locates the owner
+    // folder (server-model-fix scope agreement; mirrors agent/channel stores).
+    expect(await moduleGate.model.get("mod-a")).not.toBeNull();
+    expect(await moduleGate.model.get("mod-a", null)).not.toBeNull();
   });
 
   it("echoing the redacted mask back on update keeps the stored key", async () => {

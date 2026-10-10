@@ -17,6 +17,7 @@ export interface Agent {
   capabilitiesModuleId?: string;
   parentId?: string; // Links to parent agent for hierarchy
   roleId?: string;
+  contextTokenCap?: number | null; // Per-agent context window override; null/empty inherits the workspace default
   isOmniscient?: boolean;
   createdAt: string;
   lastActive: string;

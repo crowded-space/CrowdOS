@@ -6,6 +6,8 @@
  * API client are separate modules, each <800 lines.
  */
 
+import { getRegisteredWorkspaceId } from '../config/pin';
+
 const BACKEND_URL = '';
 
 let dynamicBackendUrl = '';
@@ -74,8 +76,14 @@ function buildHeaders(initHeaders?: HeadersInit, hasBody = false): Headers {
   if (hasBody && !headers.has('Content-Type') && !headers.has('content-type')) {
     headers.set('Content-Type', 'application/json');
   }
-  if (currentWorkspaceId && !headers.has('x-workspace-id')) {
-    headers.set('x-workspace-id', currentWorkspaceId);
+  // Cold-restore path: the store restores activeWorkspaceId from localStorage
+  // at init without calling setActiveWorkspaceId, and direct setState calls
+  // bypass the enter/leave sync too. Fall back to the workspace getter the
+  // store registers in config/pin.ts so test/get/update all send one scope.
+  // setActiveWorkspaceId stays the explicit override when both are present.
+  const tenantWorkspaceId = currentWorkspaceId ?? getRegisteredWorkspaceId();
+  if (tenantWorkspaceId && !headers.has('x-workspace-id')) {
+    headers.set('x-workspace-id', tenantWorkspaceId);
   }
   if (currentPin && !headers.has('x-pin')) {
     headers.set('x-pin', currentPin);

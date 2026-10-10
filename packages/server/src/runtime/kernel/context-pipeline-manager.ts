@@ -151,7 +151,8 @@ export class ContextPipelineManager {
       history: [],
       userPrompt: ctx.userInput,
       policies: {
-        maxTokenBudget: 8000,
+        // Default per-agent input context cap: 128k tokens.
+        maxTokenBudget: 131072,
         maxIterations: 10,
         allowToolCalls: true,
         allowSpawn: false,

@@ -1,6 +1,6 @@
 // Theme preference: auto (system) by default, manual override persisted.
 // The resolved theme drives documentElement data-theme + colorScheme, which
-// the [data-theme="light"] override layer in index.css reads. Dark is the
+// the [data-theme="light"] override layer in light-theme.css reads. Dark is the
 // untouched default: no data-theme attr styling needed for dark.
 
 export type themePref = 'auto' | 'light' | 'dark';

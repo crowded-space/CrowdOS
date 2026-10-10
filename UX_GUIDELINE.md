@@ -43,6 +43,7 @@ The UI is a control surface for these product facts. Never contradict them:
 
 **Type:** Outfit (display) · Inter (UI) · JetBrains Mono (code/metadata).
 **Colors:** canvas `#0B0B0C` · surface `#101012` · raised `#151517` · ink `#f4f4f5` · muted `#a1a1aa` · hairline `#232329` · accent indigo `#465EDB`.
+**Light theme:** warm canvas `#FAF8F4` · white surface `#FFFFFF` · raised `#F3EFE7` · ink `#1A1917` · muted `#57534E` · faint `#6B665F` · hairline `#D7D1C5` · the same indigo accent.
 **Shape:** circles only for status dots/knobs/glows. Radii: 2–4px badges/inputs/buttons · 6px cards · 8px modals (max). No rounded-full except dots.
 **Motion:** 200ms settle · 150ms dialog fade · 1px composer lift · mention chip springs once · scrollbars invisible until hover (6px, 4px thin) · skeleton shimmer · grain overlay 0.05 · `prefers-reduced-motion` collapses all pulse/spring/shimmer to static.
 **Motion budget [pending]:** one pulsing surface at a time during swarm; roster rows tick elapsed without pulse; mention pulses once on arrival; toasts max 3 stacked; approval pulses until decided.

@@ -44,6 +44,12 @@ function activeWorkspaceIdForRequest(): string | null {
     return null;
   }
 }
+/** Read the store-registered workspace id without importing the store.
+ * apiClient uses this as the cold-restore fallback so requests carry the
+ * tenant header even when setActiveWorkspaceId was never called. */
+export function getRegisteredWorkspaceId(): string | null {
+  return activeWorkspaceIdForRequest();
+}
 
 /** Attach the active tenant header when the caller did not set one. */
 export function withTenantHeaders(init?: RequestInit): RequestInit {

@@ -15,9 +15,9 @@ describe("TST-7 Performance budgets", () => {
     expect(maxAssemblyP95Ms).toBe(200);
   });
 
-  it("per-iteration token budget default is 8000 tokens", async () => {
-    // Verified by ContextLimitMiddleware default
-    const defaultBudget = 8000;
-    expect(defaultBudget).toBe(8000);
+  it("per-iteration token budget default is 131072 tokens (128k)", async () => {
+    // Verified by ContextPipelineManager packet seed default
+    const defaultBudget = 131072;
+    expect(defaultBudget).toBe(131072);
   });
 });

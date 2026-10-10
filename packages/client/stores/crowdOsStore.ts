@@ -2290,6 +2290,7 @@ const initialSelectedMode: ComposerMode = (() => {
             instructionModuleId: ag.instructionModuleId,
             modelModuleId: ag.modelModuleId,
             toolkitModuleId: ag.toolkitModuleId,
+            contextTokenCap: ag.contextTokenCap ?? null,
             description: ag.title || '',
             isOmniscient: ag.isOmniscient || false,
             createdAt: ag.createdAt,
@@ -2960,6 +2961,7 @@ const initialSelectedMode: ComposerMode = (() => {
           modelModuleId,
           instructionModuleId,
           toolkitModuleId: agent.toolkitModuleId || undefined,
+          ...(Number.isFinite(agent.contextTokenCap) ? { contextTokenCap: agent.contextTokenCap } : {}),
           isOmniscient: agent.isOmniscient || false,
           memorySharingPolicy: agent.level === 0 ? 'full' : agent.level === 1 ? 'full' : 'vertical',
           permissions: { spawnAgents: true, patchRuntime: true, accessAllChannels: true },
@@ -3004,6 +3006,8 @@ const initialSelectedMode: ComposerMode = (() => {
         if (patch.instructionModuleId !== undefined) body.instructionModuleId = patch.instructionModuleId;
         if (patch.modelModuleId !== undefined) body.modelModuleId = patch.modelModuleId;
         if ('toolkitModuleId' in patch) body.toolkitModuleId = patch.toolkitModuleId ?? null;
+        // NaN is never sent: only finite numbers or explicit null (clear) reach the server.
+        if (patch.contextTokenCap !== undefined && (patch.contextTokenCap === null || Number.isFinite(patch.contextTokenCap))) body.contextTokenCap = patch.contextTokenCap;
         if (patch.isOmniscient !== undefined) body.isOmniscient = patch.isOmniscient;
         const backendStatus = toBackendAgentStatus(patch.status);
         if (backendStatus !== undefined) body.status = backendStatus;

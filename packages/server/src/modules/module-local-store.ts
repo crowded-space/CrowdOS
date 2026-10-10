@@ -28,6 +28,7 @@ import {
   mutateJsonArray,
   readJsonArray,
   resolveLocalStoreDir,
+  searchableWorkspaceScopes,
 } from "../shared/core/local-file.js";
 import type {
   ModelModule,
@@ -75,14 +76,51 @@ function revive<T extends { createdAt: unknown; updatedAt: unknown }>(row: T): a
 }
 
 /**
- * Scope for a get-by-id. Unscoped reads the default placeholder folder only
- * — the same folder an unscoped write lands in — never a fan-out across
- * every registered workspace (that leaked cross-tenant rows into unscoped
- * reads and made scopes disagree with the write path's trim).
+ * Scopes for a get-by-id. A named scope reads only its folder; an unscoped
+ * read searches every registered workspace (registry ids, then on-disk
+ * folders, then the default placeholder) because the id is the only key
+ * the caller has. This mirrors the agent/channel/memory local stores, and
+ * is what keeps update/get/test in agreement when a later call arrives
+ * without the scope the create carried (cold-restore clients test with a
+ * null scope after creating under a named one).
  */
 function scopesFor(workspaceId?: string | null): Array<string | null> {
   const trimmed = workspaceId?.trim();
-  return trimmed ? [trimmed] : [null];
+  if (trimmed) return [trimmed];
+  return searchableWorkspaceScopes();
+}
+
+/**
+ * Locate the folder that physically holds a row, plus the row itself.
+ * Writes and reads use the same folder, so an update/delete must target
+ * the folder the row was found in — not the scope the caller named, which
+ * may be null or a sibling of the creating workspace. Targeting the named
+ * scope instead would strand a second copy and leave the original in place.
+ */
+async function findInFile<T extends { id: string }>(
+  file: string,
+  id: string,
+  workspaceId?: string | null,
+): Promise<{ row: T; scope: string | null } | null> {
+  for (const scope of scopesFor(workspaceId)) {
+    const rows = await readJsonArray<T>(file, scope).catch(() => [] as T[]);
+    const row = rows.find((r) => r.id === id);
+    if (row) return { row, scope };
+  }
+  return null;
+}
+
+/** Owner folder of a model row: the folder that holds it, or the caller
+ * scope when it holds nothing. Exported for the service update path so an
+ * unscoped or cross-scope update writes back where the row lives instead
+ * of stranding a second copy under the caller scope. */
+export async function localModelModuleOwnerScope(
+  id: string,
+  workspaceId?: string | null,
+): Promise<string | null> {
+  const found = await findInFile<Serialized<ModelModule>>(MODEL_FILE, id, workspaceId);
+  if (found) return found.scope;
+  return workspaceId?.trim() || null;
 }
 
 /**
@@ -116,13 +154,14 @@ async function assertStoreWritable(file: string, scope: string | null): Promise<
 
 /**
  * Owner-scoped delete shared by all five catalogs. A scoped call touches one
- * folder. An unscoped call only ever touches the default placeholder folder
- * — never a fan-out across every workspace (that wiped same-id rows in
- * workspaces the caller never named).
+ * folder. An unscoped call deletes the row from the folder that holds it —
+ * the same folder an owner-locating read finds — so a delete with a missing
+ * or sibling scope still removes the created row instead of 404ing.
  */
 async function deleteFromFile<T extends { id: string }>(file: string, id: string, workspaceId?: string | null): Promise<boolean> {
-  if (workspaceId && workspaceId.trim()) {
-    const scope = workspaceId.trim();
+  const trimmed = workspaceId?.trim() || null;
+  if (trimmed) {
+    const scope: string | null = trimmed;
     let deleted = false;
     await assertStoreWritable(file, scope);
     await mutateJsonArray<T>(
@@ -135,13 +174,20 @@ async function deleteFromFile<T extends { id: string }>(file: string, id: string
     );
     return deleted;
   }
-  for (const scope of scopesFor(workspaceId)) {
-    const rows = await readJsonArray<T>(file, scope).catch(() => [] as T[]);
-    if (!rows.some((r) => r.id === id)) continue;
-    await mutateJsonArray<T>(file, (all) => all.filter((r) => r.id !== id), scope);
-    return true;
-  }
-  return false;
+  const found = await findInFile<T>(file, id, trimmed);
+  if (!found) return false;
+  const owner: string | null = found.scope;
+  await assertStoreWritable(file, owner);
+  let deleted = false;
+  await mutateJsonArray<T>(
+    file,
+    (rows) => rows.filter((r) => {
+      if (r.id === id) { deleted = true; return false; }
+      return true;
+    }),
+    owner,
+  );
+  return deleted;
 }
 
 // --- Model modules -------------------------------------------------------

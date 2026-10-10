@@ -39,6 +39,7 @@ import {
   localGetModelModule,
   localUpsertModelModule,
   localDeleteModelModule,
+  localModelModuleOwnerScope,
   localListInstructionModules,
   localGetInstructionModule,
   localUpsertInstructionModule,
@@ -563,7 +564,11 @@ export async function updateModelModule(id: string, body: UpdateModelModuleBody,
     const existing = await localGetModelModule(id, workspaceId);
     if (!existing) return null;
     const row: ModelModule = { ...existing, ...(updates as any), updatedAt: new Date() };
-    await localUpsertModelModule(serializeRow(row), workspaceId);
+    // Owner-folder write-back: the row may live in a different folder than
+    // the caller named (unscoped update after a scoped create). Writing to
+    // the named scope would strand a second copy and leave the read path
+    // serving the stale original.
+    await localUpsertModelModule(serializeRow(row), await localModelModuleOwnerScope(id, workspaceId));
     await invalidateRuntimeModelCache();
     return row;
   }

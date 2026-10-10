@@ -28,10 +28,11 @@ export default function AgentProfileModal() {
     addRuntimeOverride,
     deleteRuntimeOverride,
     toggleRuntimeOverride,
-    tools
+    tools,
+    updateAgent
   } = useCrowdOSStore();
 
-  const { showSuccess } = useToast();
+  const { showSuccess, showError } = useToast();
   const [dmText, setDmText] = useState('');
   const [studioOpen, setStudioOpen] = useState(false);
   const dialogRef = useRef<HTMLDivElement>(null);
@@ -44,10 +45,16 @@ export default function AgentProfileModal() {
   const [patchPanelOpen, setPatchPanelOpen] = useState(false);
   const [patchType, setPatchType] = useState<'instruction' | 'model' | 'toolkit'>('instruction');
   const [patchInstructionPrompt, setPatchInstructionPrompt] = useState('');
-  const [patchModelTemp, setPatchModelTemp] = useState(0.7);
-  const [patchModelMaxTokens, setPatchModelMaxTokens] = useState(2048);
+  // Raw-input state so clearing a box never stores NaN; empty falls back
+  // to the last good value when the patch is applied.
+  const [patchModelTemp, setPatchModelTemp] = useState('0.7');
+  const [patchModelMaxTokens, setPatchModelMaxTokens] = useState('2048');
   const [patchToolkitTools, setPatchToolkitTools] = useState<string[]>([]);
   const [patchReason, setPatchReason] = useState('');
+
+  // Context-cap override: raw-string state so clearing the box stores ''
+  // (never NaN). Empty means null = inherit the workspace default.
+  const [ctxCapRaw, setCtxCapRaw] = useState<string | null>(null);
 
   const agent = agents.find(ag => ag.id === selectedAgentId);
 
@@ -99,7 +106,12 @@ export default function AgentProfileModal() {
     if (patchType === 'instruction') {
       patchObj = { systemPrompt: patchInstructionPrompt };
     } else if (patchType === 'model') {
-      patchObj = { temperature: patchModelTemp, maxTokens: patchModelMaxTokens };
+      const parsedTemp = parseFloat(patchModelTemp);
+      const parsedMax = parseInt(patchModelMaxTokens, 10);
+      patchObj = {
+        temperature: Number.isFinite(parsedTemp) ? parsedTemp : 0.7,
+        maxTokens: Number.isFinite(parsedMax) ? parsedMax : 2048,
+      };
     } else if (patchType === 'toolkit') {
       patchObj = { enabledToolIds: patchToolkitTools };
     }
@@ -115,6 +127,44 @@ export default function AgentProfileModal() {
     showSuccess('Behavior Hot-Patched', `Applied temporary override to @${agent.name}.`);
     setPatchReason('');
     setPatchPanelOpen(false);
+  };
+
+  // Context-cap override: seed the raw box from the agent when the modal
+  // opens or the selection changes; null/undefined seeds empty (inherit).
+  useEffect(() => {
+    if (!agentProfileModalOpen) return;
+    const cap = agent?.contextTokenCap;
+    setCtxCapRaw(typeof cap === 'number' && Number.isFinite(cap) ? String(cap) : '');
+    // Seed on open/selection only; typing must not be clobbered.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [agentProfileModalOpen, selectedAgentId]);
+
+  const trimmedCtxCap = (ctxCapRaw ?? '').trim();
+  const parsedCtxCap = trimmedCtxCap === '' ? null : parseInt(trimmedCtxCap, 10);
+  const isCtxCapValid =
+    trimmedCtxCap === '' ||
+    (Number.isFinite(parsedCtxCap) && (parsedCtxCap as number) >= 1 && String(parsedCtxCap) === trimmedCtxCap);
+
+  const handleSaveCtxCap = async () => {
+    if (!agent) return;
+    if (!isCtxCapValid) {
+      showError('Validation Error', 'Context cap must be a positive whole number, or empty to inherit.');
+      return;
+    }
+    const next = parsedCtxCap === null ? null : (parsedCtxCap as number);
+    const current = typeof agent.contextTokenCap === 'number' ? agent.contextTokenCap : null;
+    if (next === current || (next === null && (agent.contextTokenCap ?? null) === null)) return;
+    try {
+      await updateAgent(agent.id, { contextTokenCap: next });
+      showSuccess(
+        next === null ? 'Context Cap Cleared' : 'Context Cap Updated',
+        next === null
+          ? `@${agent.name} now inherits the workspace default.`
+          : `@${agent.name} context cap set to ${next.toLocaleString()} tokens.`,
+      );
+    } catch (err) {
+      showError('Update Failed', err instanceof Error ? err.message : 'Failed to update context cap.');
+    }
   };
 
   useEffect(() => {
@@ -283,6 +333,47 @@ export default function AgentProfileModal() {
                 )}
               </div>
 
+              {/* CONTEXT CAP OVERRIDE */}
+              <div className="bg-zinc-950 border border-zinc-900 p-2.5 rounded-lg space-y-1.5">
+                <label htmlFor="agent-context-cap" className="text-zinc-500 font-medium text-[11px] block">
+                  Context cap (tokens)
+                </label>
+                <div className="flex items-center gap-2">
+                  <input
+                    id="agent-context-cap"
+                    type="number"
+                    min="1"
+                    step="1"
+                    inputMode="numeric"
+                    value={ctxCapRaw ?? ''}
+                    onChange={(e) => setCtxCapRaw(e.target.value)}
+                    onBlur={() => { if (trimmedCtxCap !== '' && isCtxCapValid) void handleSaveCtxCap(); }}
+                    onKeyDown={(e) => { if (e.key === 'Enter') void handleSaveCtxCap(); }}
+                    placeholder="Workspace default"
+                    aria-label="Context cap in tokens, empty inherits workspace default"
+                    aria-invalid={!isCtxCapValid}
+                    className="w-full bg-zinc-900 border border-zinc-800 rounded px-2 py-1 focus:outline-none text-[11px] text-zinc-200 font-mono placeholder-zinc-650"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => void handleSaveCtxCap()}
+                    disabled={!isCtxCapValid}
+                    className="shrink-0 px-2 py-1 rounded bg-zinc-900 border border-zinc-800 text-zinc-300 font-mono text-[10px] hover:bg-zinc-800 transition cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+                  >
+                    Save
+                  </button>
+                </div>
+                {!isCtxCapValid ? (
+                  <p className="text-[10px] font-mono text-rose-400">
+                    Enter a positive whole number, or clear to inherit.
+                  </p>
+                ) : trimmedCtxCap === '' ? (
+                  <p className="text-[10px] font-mono text-zinc-500">
+                    Empty inherits the workspace default.
+                  </p>
+                ) : null}
+              </div>
+
               {/* ACTIVE OVERRIDES AUDIT ROSTER */}
               <div className="space-y-2 pt-1">
                 <div className="flex items-center justify-between">
@@ -408,7 +499,7 @@ export default function AgentProfileModal() {
                             min="0"
                             max="2"
                             value={patchModelTemp}
-                            onChange={(e) => setPatchModelTemp(parseFloat(e.target.value))}
+                            onChange={(e) => setPatchModelTemp(e.target.value)}
                             className="w-full bg-zinc-900 border border-zinc-800 rounded px-2 py-1 focus:outline-none text-[11px] text-zinc-200 font-mono"
                           />
                         </div>
@@ -418,7 +509,7 @@ export default function AgentProfileModal() {
                             type="number"
                             min="1"
                             value={patchModelMaxTokens}
-                            onChange={(e) => setPatchModelMaxTokens(parseInt(e.target.value))}
+                            onChange={(e) => setPatchModelMaxTokens(e.target.value)}
                             className="w-full bg-zinc-900 border border-zinc-800 rounded px-2 py-1 focus:outline-none text-[11px] text-zinc-200 font-mono"
                           />
                         </div>

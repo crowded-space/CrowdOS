@@ -210,4 +210,59 @@ describe("Context Pipeline & Modular Architecture", () => {
       }),
     ).rejects.toMatchObject({ code: "MODEL_MODULE_NOT_CONFIGURED" });
   });
+
+  it("seeds the default per-agent input context cap at 128k tokens", async () => {
+    const mockAgent: any = {
+      id: "test-agent-cap-default",
+      name: "CapDefault",
+      title: "Cap Default",
+      authorityLevel: 2,
+      status: "idle",
+      memorySharingPolicy: "full",
+    };
+
+    const packet = await contextPipeline.assemble({
+      agent: mockAgent,
+      channelId: "chan-01",
+      workspaceId: "ws-01",
+      userInput: "Hello.",
+      runtimeType: "agentic",
+      modelConfig: { provider: "custom", modelName: "explicit-test-model" },
+    });
+
+    // No agent or custom cap set: the pipeline seed (128k) survives ContextLimit.
+    expect(packet.policies.maxTokenBudget).toBe(131072);
+  });
+
+  it("preserves cap precedence: agent cap wins over custom override over the 128k default", async () => {
+    const baseAgent: any = {
+      id: "test-agent-cap-precedence",
+      name: "CapPrecedence",
+      title: "Cap Precedence",
+      authorityLevel: 2,
+      status: "idle",
+      memorySharingPolicy: "full",
+    };
+    const base = {
+      channelId: "chan-01",
+      workspaceId: "ws-01",
+      userInput: "Hello.",
+      runtimeType: "agentic" as const,
+      modelConfig: { provider: "custom", modelName: "explicit-test-model" } as const,
+    };
+
+    const agentWins = await contextPipeline.assemble({
+      ...base,
+      agent: { ...baseAgent, contextTokenCap: 5000 },
+      customOverrides: { contextTokenCap: 6000 },
+    });
+    expect(agentWins.policies.maxTokenBudget).toBe(5000);
+
+    const customWins = await contextPipeline.assemble({
+      ...base,
+      agent: baseAgent,
+      customOverrides: { contextTokenCap: 6000 },
+    });
+    expect(customWins.policies.maxTokenBudget).toBe(6000);
+  });
 });
