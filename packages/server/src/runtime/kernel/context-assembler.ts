@@ -40,13 +40,18 @@ export interface AssembleOptions {
   runId?: string | null;
   /** §26 interpreter_output, computed by the Executor via interpret(). */
   interpreterOutput?: InterpreterOutput;
+  /**
+   * Advisory operator identity + preference (client profile). Null/undefined =
+   * no preference; the operator-context middleware then pushes no block.
+   */
+  operatorContext?: { name: string; tag: string; preference: string } | null;
 }
 
 export class ContextAssembler {
   async assemble(
     options: AssembleOptions
   ): Promise<ContextPacket & { _modelConfig: ModelModuleConfig }> {
-    const { agent, channelId, workspaceId, userInput, runtimeType, modelConfig, policyOverrides, abortSignal, runId, interpreterOutput } = options;
+    const { agent, channelId, workspaceId, userInput, runtimeType, modelConfig, policyOverrides, abortSignal, runId, interpreterOutput, operatorContext } = options;
     const obsMod: typeof import("../../observability/observability-gate.js") | null = await import("../../observability/observability-gate.js").catch(() => null);
     const tracing = obsMod?.observabilityGate ?? null;
     const span = tracing ? tracing.startSpan("assemble", { runId: runId ?? null, channelId, agentId: agent.id, attributes: { runtimeType } }) : null;
@@ -59,6 +64,7 @@ export class ContextAssembler {
         runtimeType,
         modelConfig,
         abortSignal,
+        operatorContext: operatorContext ?? null,
       });
 
       const policies: RuntimePolicy = {

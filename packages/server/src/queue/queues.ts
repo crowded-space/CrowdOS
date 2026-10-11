@@ -17,6 +17,12 @@ export interface EnqueueRunInput {
   explicitRuntime?: string | null;
   /** §6 channel pin forwarded so the worker's Router resolves it identically. */
   preferredRuntime?: string | null;
+  /**
+   * Advisory operator display + preference (client profile). Clamped at the
+   * socket enqueue site, re-validated in the worker (untrusted job data).
+   * Null = inject nothing into agent context.
+   */
+  operatorContext?: { name: string; tag: string; preference: string } | null;
   // ponytail: untyped by design — checkpoint shape owned by runs, queue just ferries it
   resumeContext?: unknown;
   resumeFrom?: unknown;

@@ -3,6 +3,7 @@ import { MessageSquare, X, Clock, Archive, Plus, Send, GitBranch } from 'lucide-
 import { socket } from '@/src/config/socket';
 import { useCrowdOSStore } from '@/stores/crowdOsStore';
 import type { Message } from '@/types/crowdOs';
+import { loadOperatorProfile } from './operator-profile-model';
 import { DiffViewer } from './DiffViewer';
 import ApprovalCard from './messages/ApprovalCard';
 import { RedactedText } from './messages/RedactedText';
@@ -210,7 +211,7 @@ export default function ThreadDrawer({ channelId, open, onClose, onOpenThread, r
       const res = await fetch(`/api/threads/${encodeURIComponent(selectedThread.id)}/messages`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ content, authorId: 'local-user', authorName: 'User' }),
+        body: JSON.stringify({ content, authorId: 'local-user', authorName: loadOperatorProfile().name || 'User', authorTag: loadOperatorProfile().tag || 'Human' }),
       });
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));

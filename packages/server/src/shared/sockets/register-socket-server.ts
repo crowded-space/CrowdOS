@@ -800,10 +800,23 @@ export function registerSocketServer(httpServer: HttpServer, broker: EventBroker
         // 2. Persist the human operator's message — author identity is the
         // server-verified key identity; client authorId/authorName claims are
         // advisory only and never persisted (SEC-2). Messages owns the table.
+        // authorTag rides in metadata (no schema change); userPreference is
+        // never persisted — it threads per-request into runtime context.
         const authorId = identity.userId;
+        const rawAuthorName = (payload as any).authorName;
         const authorName = identity.mode === "apikey"
           ? (identity.label || identity.keyId || authorId)
-          : ((payload as any).authorName || (authorId === "user-1" ? "Juan Hamzah" : authorId));
+          : (typeof rawAuthorName === "string" && rawAuthorName.trim()
+            ? rawAuthorName.trim().slice(0, 80)
+            : (authorId === "user-1" ? "Juan Hamzah" : authorId));
+        const rawTag = (payload as any).authorTag;
+        const authorTag = typeof rawTag === "string" && rawTag.trim()
+          ? rawTag.trim().slice(0, 24)
+          : "Human";
+        const rawPref = (payload as any).userPreference;
+        const userPreference = typeof rawPref === "string" && rawPref.trim()
+          ? rawPref.trim().slice(0, 2000)
+          : null;
 
         const userMsg = await messageGate.append(
           {
@@ -814,9 +827,14 @@ export function registerSocketServer(httpServer: HttpServer, broker: EventBroker
             authorType: "user",
             content,
             mentions: resolvedMentions,
+            metadata: { authorTag },
           },
           { broker }
         );
+
+        const operatorContext = userPreference
+          ? { name: authorName, tag: authorTag, preference: userPreference }
+          : null;
 
         // 3. Process mentions and triggers
         // AGT-003: scope the roster to this message's workspace. An
@@ -852,6 +870,7 @@ export function registerSocketServer(httpServer: HttpServer, broker: EventBroker
               explicitRuntime,
               preferredRuntime,
               librarianAgentId: 'agent-librarian',
+              operatorContext,
             });
           } catch (err: any) {
             console.error(`[Socket] Execution failed for agent @${agent.name}:`, err?.message || err);
@@ -967,6 +986,7 @@ export function registerSocketServer(httpServer: HttpServer, broker: EventBroker
                   workspaceId: msgWorkspaceId,
                   explicitRuntime: explicitRuntime ?? null,
                   preferredRuntime: preferredRuntime ?? null,
+                  operatorContext,
                 });
                 broker.emit("run.queued" as never, { runId, channelId, agentId: agent.id } as never, { channelId });
                 console.log(`[Socket][Queue] Enqueued run ${runId} for @${agent.name} in #${channelId} (msg ${userMsg.id})`);

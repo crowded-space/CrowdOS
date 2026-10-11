@@ -7,8 +7,9 @@ import { useShallow } from 'zustand/react/shallow';
 import WorkspaceDropdown from './WorkspaceDropdown';
 import InlineChannelModal from './modals/InlineChannelModal';
 import ChannelButton from './ChannelButton';
+import OperatorProfileModal from './modals/OperatorProfileModal';
 import ThemeToggle from '@/components/ui/ThemeToggle';
-import { loadOperatorProfile, saveOperatorProfile, OPERATOR_DEFAULT_NAME } from './operator-profile-model';
+import { loadOperatorProfile } from './operator-profile-model';
 
 interface WorkspaceSidebarProps {
   onClose?: () => void;
@@ -54,9 +55,7 @@ export default function WorkspaceSidebar({ onClose }: WorkspaceSidebarProps) {
 
   const [filter, setFilter] = useState('');
   const [operatorProfile, setOperatorProfile] = useState(() => loadOperatorProfile());
-  const [operatorEditing, setOperatorEditing] = useState(false);
-  const [operatorName, setOperatorName] = useState(operatorProfile.name);
-  const [operatorEmail, setOperatorEmail] = useState(operatorProfile.email);
+  const [profileOpen, setProfileOpen] = useState(false);
   const operatorInitials = useMemo(() => {
     const parts = operatorProfile.name.trim().split(/\s+/).filter(Boolean);
     if (parts.length === 0) return 'LO';
@@ -354,86 +353,26 @@ export default function WorkspaceSidebar({ onClose }: WorkspaceSidebarProps) {
 
       {/* Operator profile — sticky bottom, safe area */}
       <div className="bg-[#09090b] border-t border-zinc-900 p-2 flex items-center justify-between gap-1 select-none shrink-0" id="sidebar-user-section">
-        <div className="flex items-center gap-1 min-w-0">
+        <button
+          type="button"
+          onClick={() => setProfileOpen(true)}
+          aria-label="Open user profile"
+          title="Open user profile"
+          className="flex items-center gap-1 min-w-0 text-left rounded-xl px-1 py-0.5 hover:bg-zinc-900/60 transition focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500/30 cursor-pointer"
+        >
           <div className="relative w-9 h-9 rounded-xl bg-amber-500/12 border border-amber-500/20 text-amber-400 flex items-center justify-center text-[11px] shrink-0 font-bold">
             {operatorInitials}
             <span className="absolute -bottom-0.5 -right-0.5 w-3 h-3 rounded-full bg-zinc-500 border-2 border-[#09090b]" title="Local profile - presence unknown (no live source)" />
           </div>
           <div className="min-w-0 leading-tight">
-            {operatorEditing ? (
-              <div className="space-y-1">
-                <label htmlFor="operator-name-input" className="sr-only">Operator name</label>
-                <input
-                  id="operator-name-input"
-                  type="text"
-                  value={operatorName}
-                  onChange={(e) => setOperatorName(e.target.value)}
-                  placeholder="Local operator"
-                  maxLength={80}
-                  autoComplete="off"
-                  className="w-full min-h-[32px] rounded-lg border border-zinc-800 bg-zinc-900/60 px-2 py-1 text-[12px] text-zinc-100 placeholder:text-zinc-600 focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500/30"
-                />
-                <label htmlFor="operator-email-input" className="sr-only">Operator email</label>
-                <input
-                  id="operator-email-input"
-                  type="email"
-                  value={operatorEmail}
-                  onChange={(e) => setOperatorEmail(e.target.value)}
-                  placeholder="email (optional)"
-                  maxLength={120}
-                  autoComplete="off"
-                  className="w-full min-h-[32px] rounded-lg border border-zinc-800 bg-zinc-900/60 px-2 py-1 text-[12px] text-zinc-100 placeholder:text-zinc-600 focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500/30"
-                />
-                <div className="flex items-center gap-1 pt-0.5">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      const next = { name: operatorName.trim() || OPERATOR_DEFAULT_NAME, email: operatorEmail.trim() };
-                      saveOperatorProfile(next);
-                      setOperatorProfile(loadOperatorProfile());
-                      setOperatorEditing(false);
-                    }}
-                    className="px-2 py-1 text-[11px] font-semibold rounded-md bg-indigo-600 hover:bg-indigo-500 text-white transition focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500/30 cursor-pointer"
-                  >
-                    Save
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setOperatorName(operatorProfile.name);
-                      setOperatorEmail(operatorProfile.email);
-                      setOperatorEditing(false);
-                    }}
-                    className="px-2 py-1 text-[11px] font-semibold rounded-md bg-zinc-900 hover:bg-zinc-800 text-zinc-300 border border-zinc-800 transition focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500/30 cursor-pointer"
-                  >
-                    Cancel
-                  </button>
-                </div>
-              </div>
-            ) : (
-              <>
             <div className="text-[13px] font-semibold text-zinc-100 truncate tracking-[-0.01em]">
               {operatorProfile.name}
             </div>
             <div className="text-[11px] text-zinc-500 truncate font-mono">
-              {operatorProfile.email ? operatorProfile.email : 'Single-user shell'}
+              {operatorProfile.tag}
             </div>
-            <button
-              type="button"
-              onClick={() => {
-                setOperatorName(operatorProfile.name);
-                setOperatorEmail(operatorProfile.email);
-                setOperatorEditing(true);
-              }}
-              aria-label="Edit operator profile"
-              className="mt-0.5 px-1.5 py-0.5 text-[10.5px] font-semibold rounded-md text-zinc-500 hover:text-zinc-200 hover:bg-zinc-900 border border-transparent hover:border-zinc-800 transition focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500/30 cursor-pointer"
-            >
-              Edit
-            </button>
-              </>
-            )}
           </div>
-        </div>
+        </button>
 
         <div className="flex items-center gap-1 shrink-0 [&>button]:w-7 [&>button]:h-7">
           <ThemeToggle />
@@ -450,6 +389,14 @@ export default function WorkspaceSidebar({ onClose }: WorkspaceSidebarProps) {
           </button>
         </div>
       </div>
+
+      <OperatorProfileModal
+        open={profileOpen}
+        onClose={() => {
+          setProfileOpen(false);
+          setOperatorProfile(loadOperatorProfile());
+        }}
+      />
     </div>
   );
 }

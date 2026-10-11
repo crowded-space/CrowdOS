@@ -21,6 +21,7 @@ export function MessageRouter({ message, agentLevel = 3, toolExecutions }: Messa
         <HumanMessage 
           id={message.id}
           authorName={message.authorName} 
+          authorTag={(message as any).authorTag ?? (message.metadata as any)?.authorTag}
           content={message.content} 
           timestamp={message.timestamp} 
           attachments={message.attachments}

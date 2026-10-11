@@ -12,6 +12,11 @@ export interface ContextBuildContext {
   modelConfig?: ModelModuleConfig;
   abortSignal?: AbortSignal;
   customOverrides?: Record<string, unknown> & { contextTokenCap?: number };
+  /**
+   * Advisory operator identity + preference (client profile). Null/undefined =
+   * no preference set; middlewares must push nothing for it.
+   */
+  operatorContext?: { name: string; tag: string; preference: string } | null;
 }
 
 export interface MutableContextPacket {

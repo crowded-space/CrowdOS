@@ -144,6 +144,14 @@ export interface UserMessageEventPayload {
   mentions: string[];
   mode?: Mode;
   runtimeMode?: Mode;
+  /**
+   * Advisory operator display fields (client profile). authorId is NEVER
+   * trusted — the socket path derives it from the verified identity (SEC-2).
+   * userPreference null/empty means inject nothing into agent context.
+   */
+  authorName?: string;
+  authorTag?: string;
+  userPreference?: string | null;
 }
 
 export interface BrokerEventMap {

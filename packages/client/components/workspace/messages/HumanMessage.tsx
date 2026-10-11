@@ -8,6 +8,7 @@ import { useCrowdOSStore } from '@/stores/crowdOsStore';
 interface HumanMessageProps {
   id?: string;
   authorName: string;
+  authorTag?: string;
   content: string;
   timestamp: string;
   attachments?: Attachment[];
@@ -17,7 +18,7 @@ interface HumanMessageProps {
   editedAt?: string;
 }
 
-export default function HumanMessage({ id, authorName, content, timestamp, attachments, mentions, originalMessageId, editedFrom, editedAt }: HumanMessageProps) {
+export default function HumanMessage({ id, authorName, authorTag, content, timestamp, attachments, mentions, originalMessageId, editedFrom, editedAt }: HumanMessageProps) {
   const timeStr = new Date(timestamp).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
   const editResend = useCrowdOSStore(s => s.editResend);
   const [editing, setEditing] = useState(false);
@@ -59,7 +60,7 @@ export default function HumanMessage({ id, authorName, content, timestamp, attac
             {authorName}
           </span>
           <span className="text-[10px] font-medium bg-amber-500/15 text-amber-300 px-1.5 py-0.5 rounded border border-amber-500/20">
-            Human
+            {authorTag || 'Human'}
           </span>
           <span className="text-[11px] text-zinc-500 font-mono ml-auto sm:ml-0">
             {timeStr}

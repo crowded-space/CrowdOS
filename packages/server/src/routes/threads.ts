@@ -99,7 +99,7 @@ export async function threadRoutes(app: FastifyInstance) {
   });
 
   // POST /api/threads/:threadId/messages  — temporary sub-session main Session channel stays main, thread inherits channel mount
-  app.post<{ Params: { threadId: string }; Body: { content: string; authorId?: string; authorName?: string } }>("/api/threads/:threadId/messages", async (request, reply) => {
+  app.post<{ Params: { threadId: string }; Body: { content: string; authorId?: string; authorName?: string; authorTag?: string } }>("/api/threads/:threadId/messages", async (request, reply) => {
     const context = threadContext(request);
     const thread = await threadGate.get(request.params.threadId, context);
     if (!thread) return reply.status(404).send({ error: "Not Found", message: "Thread not found" });
@@ -114,6 +114,9 @@ export async function threadRoutes(app: FastifyInstance) {
     const mentions = await mentionParser.parseMentions(content);
     const authorId = request.body.authorId ?? "local-user";
     const authorName = request.body.authorName ?? "User";
+    // Advisory display tag rides in metadata (no schema change); defaults to Human.
+    const rawTag = request.body.authorTag;
+    const authorTag = typeof rawTag === "string" && rawTag.trim() ? rawTag.trim().slice(0, 24) : "Human";
     // XD-008: single-emit ownership. The broker goes INTO append so the
     // domain emits exactly once; the old manual route emit is deleted (it
     // would double-deliver the moment append ever gained a broker).
@@ -133,6 +136,7 @@ export async function threadRoutes(app: FastifyInstance) {
         authorType: "user",
         content,
         mentions,
+        metadata: { authorTag },
       },
       broker ? { broker } : undefined
     );

@@ -57,6 +57,21 @@ export async function processRunJob(job: Job<RunJobData>): Promise<unknown> {
   const rawPreferred = (job.data as { preferredRuntime?: unknown }).preferredRuntime;
   const preferredRuntime = typeof rawPreferred === "string" && KNOWN_RUNTIMES.has(rawPreferred) ? rawPreferred : undefined;
   const resumeContext = (job.data as unknown as { resumeContext?: unknown; resumeFrom?: unknown }).resumeContext ?? (job.data as unknown as { resumeContext?: unknown; resumeFrom?: unknown }).resumeFrom ?? null;
+  // Operator context: untrusted job data — same clamps as the socket path.
+  // Invalid/empty degrades to null (inject nothing), never a failure.
+  const rawOp = (job.data as { operatorContext?: unknown }).operatorContext;
+  let operatorContext: { name: string; tag: string; preference: string } | null = null;
+  if (rawOp && typeof rawOp === "object") {
+    const rec = rawOp as Record<string, unknown>;
+    const pref = typeof rec.preference === "string" ? rec.preference.trim().slice(0, 2000) : "";
+    if (pref) {
+      operatorContext = {
+        name: typeof rec.name === "string" && rec.name.trim() ? rec.name.trim().slice(0, 80) : "operator",
+        tag: typeof rec.tag === "string" && rec.tag.trim() ? rec.tag.trim().slice(0, 24) : "Human",
+        preference: pref,
+      };
+    }
+  }
 
   const [{ runtimeGate }, { agentGate }, { getSharedBroker }] = await Promise.all([
     import("../runtime/runtime-gate.js"),
@@ -176,6 +191,7 @@ export async function processRunJob(job: Job<RunJobData>): Promise<unknown> {
       librarianAgentId: "agent-librarian",
       runId: (runId as string | undefined) ?? null,
       resumeContext: resumeContext as unknown as null,
+      operatorContext,
     };
     let scopedExecute: ((req: unknown) => Promise<unknown>) | null = null;
     try {

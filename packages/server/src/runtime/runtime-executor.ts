@@ -33,6 +33,11 @@ export interface ExecuteRequest {
   abortSignal?: AbortSignal
   runId?: string | null
   resumeContext?: ResumeContext | null
+  /**
+   * Advisory operator identity + preference (client profile). Null = the
+   * operator set no preference and nothing is injected into context.
+   */
+  operatorContext?: { name: string; tag: string; preference: string } | null
 }
 
 export class RuntimeExecutor {
@@ -55,7 +60,7 @@ export class RuntimeExecutor {
   }
 
   async execute(req: ExecuteRequest): Promise<RuntimeResult> {
-    const { agent, channelId, workspaceId, userInput, broker, preferredRuntime, explicitRuntime, librarianAgentId, abortSignal, runId: requestedRunId, resumeContext } = req
+    const { agent, channelId, workspaceId, userInput, broker, preferredRuntime, explicitRuntime, librarianAgentId, abortSignal, runId: requestedRunId, resumeContext, operatorContext } = req
 
     let run: RunRow | null = null
     let isResume = false
@@ -128,6 +133,7 @@ export class RuntimeExecutor {
         abortSignal,
         runId: run?.id ?? null,
         interpreterOutput,
+        operatorContext: operatorContext ?? null,
       })
       if (isResume && resumeContext) {
         (packet as unknown as Record<string, unknown>).resumeContext = resumeContext

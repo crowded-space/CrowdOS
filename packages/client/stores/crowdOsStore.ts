@@ -13,6 +13,7 @@ import type { PageCursor } from './messagePagination';
 import { apiClient, setActiveWorkspaceId } from '../src/api/client';
 import { setActiveWorkspaceIdGetter, withTenantHeaders } from '../src/config/pin';
 import { isScreenlockError, useScreenLockStore } from './screenLockStore';
+import { loadOperatorProfile } from '../components/workspace/operator-profile-model';
 
 // UX-7: DEMO_FALLBACK honesty — when false, outages show errors, not seeded demo data
 const DEMO_FALLBACK: boolean = (() => {
@@ -2928,12 +2929,23 @@ const initialSelectedMode: ComposerMode = (() => {
     addMessage: (msg) => {
       const activeCh = get().activeChannelId;
       if (!activeCh) return;
+      // Operator identity rides every send: the server derives authorId from
+      // the socket identity (SEC-2) and treats these as advisory display fields.
+      let profile: { name: string; tag: string; preference: string | null };
+      try {
+        profile = loadOperatorProfile();
+      } catch {
+        profile = { name: 'Local operator', tag: 'Human', preference: null };
+      }
       socket.emit('user:message', {
         channelId: activeCh,
         content: msg.content,
         mentions: msg.mentions || [],
-       mode: (msg as any).mode || (msg as any).runtimeMode || get().selectedMode,
+        mode: (msg as any).mode || (msg as any).runtimeMode || get().selectedMode,
         runtimeMode: (msg as any).mode || (msg as any).runtimeMode || get().selectedMode,
+        authorName: (msg as any).authorName || profile.name,
+        authorTag: (msg as any).authorTag || profile.tag,
+        userPreference: (msg as any).userPreference ?? profile.preference ?? null,
       });
     },
 
@@ -4018,6 +4030,12 @@ const initialSelectedMode: ComposerMode = (() => {
         if (seen.has(entry.id)) continue;
         seen.add(entry.id);
         try {
+          let profile: { name: string; tag: string; preference: string | null };
+          try {
+            profile = loadOperatorProfile();
+          } catch {
+            profile = { name: 'Local operator', tag: 'Human', preference: null };
+          }
           socket.emit('user:message' as any, {
             channelId: entry.channelId,
             content: entry.content,
@@ -4025,6 +4043,9 @@ const initialSelectedMode: ComposerMode = (() => {
             mode: entry.runtimeMode,
             runtimeMode: entry.runtimeMode,
             outboxId: entry.id,
+            authorName: profile.name,
+            authorTag: profile.tag,
+            userPreference: profile.preference ?? null,
           } as any);
         } catch {
           const next = get().outbox.map((e) =>

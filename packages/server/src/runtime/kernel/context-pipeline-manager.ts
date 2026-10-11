@@ -23,6 +23,7 @@ const modelModuleCache = new TtlCache<ModelModuleConfig>(30_000, 200);
 
 import { IdentityAuthorityMiddleware } from "./middlewares/identity-authority-middleware.js";
 import { ChannelAwarenessMiddleware } from "./middlewares/channel-awareness-middleware.js";
+import { OperatorContextMiddleware } from "./middlewares/operator-context-middleware.js";
 import { InstructionStackMiddleware } from "./middlewares/instruction-stack-middleware.js";
 import { SkillContextMiddleware } from "./middlewares/skill-context-middleware.js";
 import { ToolSchemaMiddleware } from "./middlewares/tool-schema-middleware.js";
@@ -45,6 +46,7 @@ export class ContextPipelineManager {
       new InstructionStackMiddleware(),        // 15 — instructions second
       new IdentityAuthorityMiddleware(),       // 20 — persona third (constraints > instructions > persona)
       new ChannelAwarenessMiddleware(),        // 21
+      new OperatorContextMiddleware(),         // 22 — operator preference (absent when unset)
       new SkillContextMiddleware(),            // 30
       new ToolSchemaMiddleware(),              // 40
       new MemoryRetrievalMiddleware(),         // 60
