@@ -1,7 +1,7 @@
 ﻿import type { FastifyInstance } from "fastify";
-import { eq, and, asc } from "drizzle-orm";
-import { getDb } from "../shared/config/database.js";
-import { agentInstructionStacks } from "../db/schema.js";
+import { resolveTier } from "../shared/config/database.js";
+import { localModeDegraded } from "../shared/core/local-mode-guard.js";
+import { tierContextFor } from "../workspace/workspace-gate.js";
 import { skillsGate } from "../skills/skills-gate.js";
 import { agentGate } from "../agents/agent-gate.js";
 import { moduleGate } from "../modules/module-gate.js";
@@ -29,25 +29,22 @@ export async function studioRoutes(app: FastifyInstance) {
         return reply.status(404).send({ statusCode: 404, error: "Not Found", message: "Agent not found" });
       }
 
-      const db = (request as any).db ?? getDb();
       const workspaceId = requestedWorkspaceId ?? agent.workspaceId ?? null;
+      // Explicit handle pins PG exactly; null/undefined (local-only) falls
+      // into the tier-aware gate ports — never ambient getDb(), which throws
+      // bare DATABASE_URL for local workspaces and 500'd every manifest.
+      const reqDb = (request as any).db ?? undefined;
 
       // Manifest slots are independent once the agent row is known, so fetch them in one batch.
-      // Module slots go through moduleGate (tier-aware, workspace-scoped to the agent).
+      // Module + stack slots go through their owning gates (tier-aware,
+      // workspace-scoped to the agent). No direct table reads from the route.
       const [rawModel, stackLinks, activeSkills, resolvedToolIds, constraintsModule, toolkitModule] = await Promise.all([
         agent.modelModuleId
           ? moduleGate.model.get(agent.modelModuleId, workspaceId)
           : Promise.resolve(null),
-        db.query.agentInstructionStacks.findMany({
-          where: and(
-            eq(agentInstructionStacks.agentId, agent.id),
-            eq(agentInstructionStacks.isEnabled, true)
-          ),
-          orderBy: [asc(agentInstructionStacks.priorityOrder)],
-          with: { instructionModule: true },
-        }),
-        skillsGate.getAgentSkills(agent.id),
-        skillsGate.getResolvedToolsForAgent(agent.id),
+        agentGate.getInstructionStack(agent.id, reqDb, workspaceId),
+        skillsGate.getAgentSkills(agent.id, workspaceId),
+        skillsGate.getResolvedToolsForAgent(agent.id, workspaceId),
         agent.constraintsModuleId
           ? moduleGate.constraints.get(agent.constraintsModuleId, workspaceId)
           : Promise.resolve(null),
@@ -111,12 +108,15 @@ export async function studioRoutes(app: FastifyInstance) {
       const agentId = request.params.id;
       const { modelModuleId, instructionModuleIds, skillIds, toolkitModuleId, constraintsModuleId } = request.body;
       const workspaceId = workspaceIdFrom(request);
-      const db = (request as any).db ?? getDb();
 
       const agent = await agentGate.getById(agentId, (request as any).db, workspaceId);
       if (!agent) {
         return reply.status(404).send({ statusCode: 404, error: "Not Found", message: "Agent not found" });
       }
+      const effectiveWorkspaceId = workspaceId ?? agent.workspaceId ?? null;
+      // Explicit handle pins PG exactly; null/undefined (local-only) lets
+      // the gates resolve the tier — never ambient getDb().
+      const reqDb = (request as any).db ?? undefined;
 
       // 1. Update Agent FKs through the gate: reference validation plus
       // roster-cache invalidation belong to Agents (direct agents-table
@@ -127,22 +127,37 @@ export async function studioRoutes(app: FastifyInstance) {
       if (constraintsModuleId !== undefined) agentUpdates.constraintsModuleId = constraintsModuleId;
 
       if (Object.keys(agentUpdates).length > 0) {
-        await agentGate.update(agentId, agentUpdates, db, workspaceId);
+        await agentGate.update(agentId, agentUpdates, reqDb, effectiveWorkspaceId);
       }
 
       // 2. Update Instruction Stack if provided
       if (instructionModuleIds && Array.isArray(instructionModuleIds)) {
-        // XD-015: atomic replace through the Agents gate (all-or-nothing).
-        // No direct agentInstructionStacks writes from the route.
-        await agentGate.replaceInstructionStack(agentId, instructionModuleIds);
+        // XD-015: atomic replace through the Agents gate (all-or-nothing per
+        // tier: PG transaction / local file swap). No direct
+        // agentInstructionStacks writes from the route.
+        await agentGate.replaceInstructionStack(agentId, instructionModuleIds, reqDb, effectiveWorkspaceId);
       }
 
       // 3. Update Skills if provided
       if (skillIds && Array.isArray(skillIds)) {
         // SK-001: atomic replace through the Skills gate (all-or-nothing in
         // one transaction + cache invalidation owned by the domain). No
-        // direct agentSkills writes from the route.
-        await skillsGate.replaceAgentSkills(agentId, skillIds);
+        // direct agentSkills writes from the route. Skill links are PG-only
+        // (the catalog has no local tier): a non-empty assignment in a
+        // local-only workspace fails honestly instead of 500ing on getDb().
+        const { tier } = resolveTier(await tierContextFor(effectiveWorkspaceId));
+        if (tier === "local") {
+          if (skillIds.length > 0) {
+            const degraded = localModeDegraded("Skill assignments");
+            throw Object.assign(new Error(degraded.message), {
+              statusCode: degraded.statusCode,
+              code: degraded.code,
+              suggestion: degraded.suggestion,
+            });
+          }
+        } else {
+          await skillsGate.replaceAgentSkills(agentId, skillIds);
+        }
       }
 
       // Invalidate remaining hot-path caches after manifest mutation

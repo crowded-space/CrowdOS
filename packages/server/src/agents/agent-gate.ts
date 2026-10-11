@@ -65,9 +65,14 @@ export const agentGate = {
   touchHeartbeat: (agentIds: string[], db?: any) => agentRegistry.touchHeartbeat(agentIds, db),
   sweepOrphans: (broker: any, opts?: { orphanAfterMs?: number; isLive?: (agentId: string) => boolean }) =>
     agentRegistry.sweepOrphans(broker, opts),
-  // XD-015: atomic instruction-stack replacement (withTransaction).
-  replaceInstructionStack: (agentId: string, instructionModuleIds: string[]) =>
-    agentRegistry.replaceInstructionStack(agentId, instructionModuleIds),
+  // XD-015: atomic instruction-stack replacement (PG transaction / local
+  // file swap by tier). Explicit handle pins PG exactly; otherwise the
+  // workspace tier decides.
+  replaceInstructionStack: (agentId: string, instructionModuleIds: string[], db?: any, workspaceId?: string | null) =>
+    agentRegistry.replaceInstructionStack(agentId, instructionModuleIds, db, workspaceId),
+  // Studio-manifest stack read (PG join / local file + Modules gate by tier).
+  getInstructionStack: (agentId: string, db?: any, workspaceId?: string | null) =>
+    agentRegistry.getInstructionStack(agentId, db, workspaceId),
   // File-tier ports: sync/seed/snapshot callers route through the gate
   // instead of importing the local store (AGENTS.md §2 gate-only).
   listLocalAgents: (filters?: AgentRegistryFilters) => localListAgents(filters),

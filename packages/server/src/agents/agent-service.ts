@@ -11,6 +11,10 @@ import {
   localSetAgentStatus,
   localUpsertAgent,
 } from "./agent-local-store.js";
+import {
+  localListInstructionStackLinks,
+  localReplaceInstructionStack,
+} from "./agent-instruction-stack-local-store.js";
 import { skillsGate } from "../skills/skills-gate.js";
 import { forEachWorkspaceDb } from "../workspace/workspace-gate.js";
 import { markAgentWorking, markAgentIdle } from "../shared/core/agent-heartbeat.js";
@@ -648,11 +652,113 @@ export class AgentRegistry {
 
   /** Sole owner write for `agents.status` + `runtime_states`: atomic flip + heartbeat + `agent:status`. */
   /**
+   * Studio-manifest stack read, tier-aware. An explicit handle pins PG
+   * exactly (request scope); otherwise the workspace tier decides: local
+   * serves the file store (module rows resolved through the Modules gate),
+   * dual gap-fills PG on the owning handle. Never throws for a missing
+   * stack — an agent without links reads as [].
+   */
+  async getInstructionStack(agentId: string, dbOverride?: any, workspaceId?: string | null): Promise<any[]> {
+    if (dbOverride) {
+      return dbOverride.query.agentInstructionStacks.findMany({
+        where: and(
+          eq(agentInstructionStacks.agentId, agentId),
+          eq(agentInstructionStacks.isEnabled, true),
+        ),
+        orderBy: [asc(agentInstructionStacks.priorityOrder)],
+        with: { instructionModule: true },
+      });
+    }
+    let scope = workspaceId !== undefined ? workspaceId : null;
+    if (scope === null) {
+      const agent = await this.getById(agentId, undefined, undefined).catch(() => null);
+      scope = agent?.workspaceId ?? null;
+    }
+    const ctx = await tierContextFor(scope);
+    if (resolveTier(ctx).tier === "local") {
+      const links = await localListInstructionStackLinks(agentId, scope);
+      const { moduleGate } = await import("../modules/module-gate.js");
+      return Promise.all(
+        links.map(async (l) => ({
+          ...l,
+          instructionModule: await moduleGate.instruction.get(l.instructionModuleId, scope).catch(() => null),
+        })),
+      );
+    }
+    // AGT-001: the PG gap-fill runs on the owning workspace's record handle —
+    // the ambient pool can be a different database in split-DB deployments.
+    const pgHandle = await this.pgHandleFor(scope);
+    const links = await pgCatchNull(() =>
+      (pgHandle ?? getDb()).query.agentInstructionStacks.findMany({
+        where: and(
+          eq(agentInstructionStacks.agentId, agentId),
+          eq(agentInstructionStacks.isEnabled, true),
+        ),
+        orderBy: [asc(agentInstructionStacks.priorityOrder)],
+        with: { instructionModule: true },
+      }),
+    );
+    return links ?? [];
+  }
+
+  /**
    * XD-015: atomic instruction-stack replacement (sibling of SK-001).
    * The studio manifest path did route-owned delete+insert with no
    * transaction — a mid-write failure left the stack half-replaced.
+   * Tier-aware: an explicit handle pins the PG transaction exactly;
+   * otherwise the workspace tier decides (local validates module ids up
+   * front, then swaps the file under one lock — all-or-nothing per tier).
    */
-  async replaceInstructionStack(agentId: string, instructionModuleIds: string[]): Promise<void> {
+  async replaceInstructionStack(
+    agentId: string,
+    instructionModuleIds: string[],
+    dbOverride?: any,
+    workspaceId?: string | null,
+  ): Promise<void> {
+    if (dbOverride) {
+      await runWithDb(dbOverride, () =>
+        withTransaction(async (tx: any) => {
+          await tx.delete(agentInstructionStacks).where(eq(agentInstructionStacks.agentId, agentId));
+          if (instructionModuleIds.length > 0) {
+            const now = Date.now().toString(36);
+            await tx.insert(agentInstructionStacks).values(
+              instructionModuleIds.map((mid, i) => ({
+                id: `ais_${agentId}_${i + 1}_${now}`,
+                agentId,
+                instructionModuleId: mid,
+                priorityOrder: (i + 1) * 10,
+                isEnabled: true,
+              })),
+            );
+          }
+        }),
+      );
+      invalidateRosterCache();
+      return;
+    }
+    let scope = workspaceId !== undefined ? workspaceId : null;
+    if (scope === null) {
+      const agent = await this.getById(agentId, undefined, undefined).catch(() => null);
+      scope = agent?.workspaceId ?? null;
+    }
+    const ctx = await tierContextFor(scope);
+    if (resolveTier(ctx).tier === "local") {
+      // Validate before any write: the PG leg enforces existence via FK, so
+      // the local leg must refuse unknown ids up front to stay all-or-nothing.
+      const { moduleGate } = await import("../modules/module-gate.js");
+      for (const mid of instructionModuleIds) {
+        if (!(await moduleGate.instruction.get(mid, scope))) {
+          throw new Error(`Instruction module not found: ${mid}`);
+        }
+      }
+      await localReplaceInstructionStack(
+        agentId,
+        instructionModuleIds,
+        scope,
+      );
+      invalidateRosterCache();
+      return;
+    }
     await withTransaction(async (tx: any) => {
       await tx.delete(agentInstructionStacks).where(eq(agentInstructionStacks.agentId, agentId));
       if (instructionModuleIds.length > 0) {
