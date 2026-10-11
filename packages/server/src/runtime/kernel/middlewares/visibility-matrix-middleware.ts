@@ -1,6 +1,7 @@
 ﻿import { messageGate } from "../../../messages/message-gate.js";
 import { agentLockStore } from "../../../shared/core/agent-lock-store.js";
 import { wrapUntrusted } from "../../../shared/core/untrusted-wrapper.js";
+import { userDisplayTag } from "./operator-tag.js";
 import type { IContextMiddleware, MutableContextPacket, ContextBuildContext, HistoryMessage } from "../context-types.js";
 
 /**
@@ -56,7 +57,7 @@ export function getOrCreateSharedHistory(
 
 function formatBracketTag(m: any, isSelf: boolean, agentName: string): string {
   const type = m.authorType || "agent";
-  const level = type === "user" ? "Stakeholder" : `L${m.authorLevel ?? "?"}`;
+  const level = type === "user" ? userDisplayTag(m) : `L${m.authorLevel ?? "?"}`;
   const selfTag = isSelf ? "SELF" : "OTHER";
   // Use authorName as handle; human placeholder future UserProfile will flow via authorName
   const safeName = (m.authorName || "User").replace(/[\[\]|]/g, "");

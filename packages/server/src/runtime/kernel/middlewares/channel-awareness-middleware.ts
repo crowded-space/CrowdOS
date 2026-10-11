@@ -4,6 +4,7 @@ import { agentLockStore } from "../../../shared/core/agent-lock-store.js";
 import { wrapUntrusted } from "../../../shared/core/untrusted-wrapper.js";
 import type { IContextMiddleware, MutableContextPacket, ContextBuildContext } from "../context-types.js";
 import { getOrCreateSharedHistory, SHARED_HISTORY_WINDOW } from "./visibility-matrix-middleware.js";
+import { userDisplayTag } from "./operator-tag.js";
 import { SOURCE_INTEGRITY_POINTER } from "./identity-authority-middleware.js";
 
 /**
@@ -46,7 +47,7 @@ export class ChannelAwarenessMiddleware implements IContextMiddleware {
         messageGate.listRecent(channelId, SHARED_HISTORY_WINDOW),
       );
       const recent = shared.slice(0, 30);
-      const distinct = new Map<string, { name: string; level: string; type: string }>();
+      const distinct = new Map<string, { name: string; level: string; type: string; tag: string }>();
       for (const m of recent) {
         if (m.isInternalMonologue) continue;
         const key = `${m.authorId}:${m.authorName}`;
@@ -55,6 +56,7 @@ export class ChannelAwarenessMiddleware implements IContextMiddleware {
             name: m.authorName || "Unknown",
             level: String(m.authorLevel || "unknown"),
             type: String(m.authorType || "agent"),
+            tag: userDisplayTag(m),
           });
         }
         if (distinct.size >= 12) break;
@@ -62,12 +64,12 @@ export class ChannelAwarenessMiddleware implements IContextMiddleware {
       // Ensure self is represented even if never spoken
       const selfKey = `${agent.id}:${agent.name}`;
       if (!distinct.has(selfKey)) {
-        distinct.set(selfKey, { name: agent.name, level: String(agent.authorityLevel), type: "agent" });
+        distinct.set(selfKey, { name: agent.name, level: String(agent.authorityLevel), type: "agent", tag: "Stakeholder" });
       }
 
       for (const [, info] of distinct) {
         const isSelf = info.name === agent.name;
-        const label = info.type === "user" ? "human | Stakeholder" : `agent | L${info.level}`;
+        const label = info.type === "user" ? `human | ${info.tag}` : `agent | L${info.level}`;
         const suffix = isSelf ? " [YOU — SELF]" : " [OTHER]";
         const rawLine = `- @${info.name} (${label})${suffix}`;
         rosterLines.push(wrapUntrusted("roster", rawLine));
