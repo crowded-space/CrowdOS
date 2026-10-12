@@ -1415,6 +1415,99 @@ export class ToolRegistry {
         }
       },
     });
+
+    // 19. Zone A artifacts: create_artifact — L0+L1.
+    //
+    // Realizes the `artifact.create` capability (§21). The agent supplies a
+    // type + body; the SERVER derives workspace, producer, run, and the file
+    // path under the workspace artifactDir (`vfs/artifacts/<runId>/<id>.<ext>`
+    // via artifactsGate.create). There is deliberately NO path/workspaceId/
+    // producerAgent parameter — a free path would let an L1 agent escape the
+    // artifact folder or clobber another run's file.
+    //
+    // `authLevelRequired: 1` admits L0+L1 and rejects L2/L3 non-omniscient
+    // agents through the same executor comparison as every other tool. The
+    // grant itself is universal (UNIVERSAL_TOOL_IDS) so default agents need no
+    // toolkit edit; the level check is what keeps it L0+L1.
+    this.register({
+      id: "create_artifact",
+      name: "create_artifact",
+      displayName: "Create Artifact",
+      description:
+        "Produce a durable artifact (report, analysis, citations, generated file) " +
+        "stored under the workspace artifact folder (vfs/artifacts) and attached to the run. " +
+        "Pass the artifact type and its text body; the server assigns the id, path, workspace, and producer. " +
+        "(Levels 0-1.)",
+      category: "filesystem",
+      sourceType: "native",
+      parameters: {
+        type: "object",
+        properties: {
+          type: {
+            type: "string",
+            description:
+              "Artifact kind: reasoning_trace, execution_log, analysis_report, generated_component, task_result, runtime_snapshot, file, diff, report, citations.",
+          },
+          content: { type: "string", description: "Text body stored as the artifact content." },
+          semanticTags: {
+            type: "array",
+            items: { type: "string" },
+            description: "Optional tags for later retrieval.",
+          },
+          metadata: {
+            type: "object",
+            description: "Optional JSON metadata (e.g. channelId for event fan-out).",
+          },
+          dedupeKey: {
+            type: "string",
+            description: "Optional idempotency key: a retry with the same key in the same workspace returns the existing row.",
+          },
+        },
+        required: ["type", "content"],
+      },
+      dangerLevel: "moderate",
+      effectClass: "write",
+      authLevelRequired: 1,
+      handler: async (args, ctx) => {
+        try {
+          const ARTIFACT_TYPES = new Set([
+            "reasoning_trace", "execution_log", "analysis_report", "generated_component",
+            "task_result", "runtime_snapshot", "file", "diff", "report", "citations",
+          ]);
+          const type = typeof args?.type === "string" ? args.type.trim() : "";
+          if (!ARTIFACT_TYPES.has(type)) {
+            return { success: false, output: "", error: `Unknown artifact type "${type}".` };
+          }
+          const content = typeof args?.content === "string" ? args.content : "";
+          if (!content) {
+            return { success: false, output: "", error: "create_artifact requires a string content body." };
+          }
+          const agentId = ctx?.agentId;
+          if (!agentId) {
+            return { success: false, output: "", error: "create_artifact requires an agent context." };
+          }
+          const { artifactsGate } = await import("../artifacts/artifacts-gate.js");
+          const row = await artifactsGate.create({
+            workspaceId: ctx?.workspaceId ?? "default",
+            producerAgent: agentId,
+            runId: (ctx?.runId as string | null | undefined) ?? null,
+            type: type as never,
+            contentRef: content,
+            semanticTags: Array.isArray(args?.semanticTags)
+              ? (args.semanticTags as unknown[]).filter((t): t is string => typeof t === "string")
+              : [],
+            metadata: (args?.metadata as Record<string, unknown> | undefined) ?? {},
+            dedupeKey: typeof args?.dedupeKey === "string" ? (args.dedupeKey as string) : null,
+          });
+          return {
+            success: true,
+            output: JSON.stringify({ artifactId: row.id, path: row.path, type: row.artifactType }, null, 2),
+          };
+        } catch (err: any) {
+          return { success: false, output: "", error: err?.message || String(err) };
+        }
+      },
+    });
   }
 }
 

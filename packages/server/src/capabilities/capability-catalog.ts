@@ -49,7 +49,7 @@ export const BUILTIN_CAPABILITIES: readonly CapabilityDescriptor[] = [
     id: "artifact.create",
     domain: "workspace",
     summary: "Produce a durable artifact (diff, report, citations) attached to the run.",
-    tools: [],
+    tools: ["create_artifact"],
     source: "builtin",
   },
 

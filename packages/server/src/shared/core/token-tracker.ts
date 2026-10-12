@@ -49,10 +49,10 @@ export class TokenTracker {
     runId?: string | null,
     workspaceId?: string | null,
   ): Promise<boolean> {
-    // Record-only DB: local-tier workspaces skip silently (no env-pool
-    // leakage, no per-turn error noise). Callers without a workspace resolve
-    // it best-effort from the channel (local-first lookup); unknown stays
-    // legacy best-effort below.
+    // Local-first (§17): the local file tier is truth and is always written.
+    // PG is a best-effort replica leg when the workspace tier is dual.
+    // Callers without a workspace resolve it best-effort from the channel
+    // (local-first lookup); unknown stays legacy best-effort below.
     if (workspaceId === undefined) {
       try {
         const { channelGate } = await import("../../channels/channel-gate.js");
@@ -62,29 +62,22 @@ export class TokenTracker {
         workspaceId = null;
       }
     }
+    let isDual = false;
     if (workspaceId !== undefined && workspaceId !== null) {
       try {
         const { tierContextFor } = await import("../../workspace/workspace-gate.js");
         const { resolveTier } = await import("../config/database.js");
-        if (resolveTier(await tierContextFor(workspaceId)).tier !== "dual") return false;
+        isDual = resolveTier(await tierContextFor(workspaceId)).tier === "dual";
       } catch {
-        return false;
+        isDual = false;
       }
-    }
-    let db: ReturnType<typeof getDb>;
-    try {
-      db = getDb();
-    } catch (err) {
-      const { isConnectionError } = await import("../config/database.js");
-      if (isConnectionError(err)) return false;
-      throw err;
     }
     const totalTokens = promptTokens + completionTokens;
 
     // MODEL-1: incremental cost (USD per 1k tokens). Budget units stay
     // TOKEN-denominated, so cost is logged for analytics only.
     // Field names avoid "*token*" — the shared redactor masks such keys.
-    const costUsd = await TokenTracker.computeCostUsd(modelModuleId, promptTokens, completionTokens);
+    const costUsd = await TokenTracker.computeCostUsd(modelModuleId, promptTokens, completionTokens, workspaceId ?? null);
     logMetric({
       stage: "token.cost",
       channelId,
@@ -95,35 +88,77 @@ export class TokenTracker {
       costUsd,
     });
 
-    // 1. Insert Usage Log record (SCL-3: runId keyed for per-run ledger)
+    // 1. Local-first truth: always append + increment the file tier.
     const usageId = `tok-${Date.now()}-${randomUUID().slice(0, 4)}`;
-    await db.insert(tokenUsageLog).values({
-      id: usageId,
-      agentId: agent.id,
-      channelId,
-      modelModuleId,
-      ...(runId ? { runId } : {}),
-      promptTokens,
-      completionTokens,
-      totalTokens,
-      timestamp: new Date(),
-    } as typeof tokenUsageLog.$inferInsert);
+    const { localAppendTokenUsage, localIncrementBudget } = await import("./token-usage-local-store.js");
+    await localAppendTokenUsage(
+      {
+        id: usageId,
+        agentId: agent.id,
+        channelId,
+        modelModuleId,
+        runId: runId ?? null,
+        promptTokens,
+        completionTokens,
+        totalTokens,
+        timestamp: new Date().toISOString(),
+        workspaceId: workspaceId ?? null,
+      },
+      workspaceId ?? null,
+    );
+    const localLedger = await localIncrementBudget(totalTokens, workspaceId ?? null);
 
-    // 2. Atomic O(1) ledger increment carrying the fresh cap back
-    const ledger = await TokenTracker.incrementBudgetLedger(totalTokens);
-    if (!ledger) {
-      // No settings row: nothing to enforce, keep legacy no-op semantics
-      broker.emit("workspace:sync", {}, { channelId });
-      return false;
+    // 2. PG replica leg (dual tier, plus legacy null-workspace best-effort).
+    // A connection-class failure degrades to the local ledger; logic errors
+    // still propagate so a real defect is never masked as "no spend".
+    let pgLedger: { consumedTokens: number; globalSoftCap: number } | null = null;
+    const shouldTryPg = isDual || workspaceId === null;
+    if (shouldTryPg) {
+      try {
+        const db = getDb();
+        await db.insert(tokenUsageLog).values({
+          id: usageId,
+          agentId: agent.id,
+          channelId,
+          modelModuleId,
+          ...(runId ? { runId } : {}),
+          promptTokens,
+          completionTokens,
+          totalTokens,
+          timestamp: new Date(),
+        } as typeof tokenUsageLog.$inferInsert);
+        const ledger = await TokenTracker.incrementBudgetLedger(totalTokens);
+        if (ledger) pgLedger = ledger;
+      } catch (err) {
+        const { isConnectionError } = await import("../config/database.js");
+        if (!isConnectionError(err)) throw err;
+      }
     }
 
-    const globalSoftCap = ledger.globalSoftCap;
-    const consumedTokens = ledger.consumedTokens;
+    // Prefer the PG ledger when the replica leg committed (dashboard reads
+    // PG in dual mode); otherwise enforce on the local truth tier.
+    const effective = pgLedger ?? localLedger;
+    // No settings row on either tier is impossible now (local always has a
+    // default cap), but keep the honest sync emit shape.
+    const globalSoftCap = effective.globalSoftCap;
+    const consumedTokens = effective.consumedTokens;
     console.log(`[TokenTracker] Consumed tokens: ${consumedTokens} / ${globalSoftCap}`);
 
     // Emit live usage sync to frontend
     broker.emit("workspace:sync", {}, { channelId });
 
+    return TokenTracker.enforceBudget(broker, agent, channelId, modelModuleId, consumedTokens, globalSoftCap);
+  }
+
+  /** Shared enforcement: soft-cap exceeded + 80% warning (CTX-1 edge-triggered). */
+  private static async enforceBudget(
+    broker: EventBroker,
+    agent: AgentProfile,
+    channelId: string,
+    modelModuleId: string | null,
+    consumedTokens: number,
+    globalSoftCap: number,
+  ): Promise<boolean> {
     // 3. Exceeded check
     if (consumedTokens >= globalSoftCap) {
       console.warn(`[TokenTracker] Global budget soft cap exceeded! consumed ${consumedTokens} >= ${globalSoftCap}`);
@@ -181,18 +216,38 @@ export class TokenTracker {
   private static async computeCostUsd(
     modelModuleId: string | null,
     promptTokens: number,
-    completionTokens: number
+    completionTokens: number,
+    workspaceId?: string | null,
   ): Promise<number | null> {
     if (!modelModuleId) return null;
-    const rateKey = `${dbScopeKey()}:${modelModuleId}`;
+    const ws = workspaceId?.trim() ? workspaceId.trim() : null;
+    const rateKey = `${ws ? `ws:${ws}` : dbScopeKey()}:${modelModuleId}`;
     let rate = costPer1kCache.get(rateKey);
     if (rate === undefined) {
-      const [row] = await getDb()
-        .select({ costPer1k: modelModules.costPer1k })
-        .from(modelModules)
-        .where(eq(modelModules.id, modelModuleId))
-        .limit(1);
-      rate = row && row.costPer1k != null ? Number(row.costPer1k) : null;
+      // Hot path first (existing DB behavior); a local-tier workspace has no
+      // PG handle here, so fall through to the tier-aware module gate.
+      let resolved: number | null | undefined;
+      try {
+        const [row] = await getDb()
+          .select({ costPer1k: modelModules.costPer1k })
+          .from(modelModules)
+          .where(eq(modelModules.id, modelModuleId))
+          .limit(1);
+        resolved = row && row.costPer1k != null ? Number(row.costPer1k) : null;
+      } catch {
+        resolved = undefined;
+      }
+      if (resolved === undefined) {
+        try {
+          const { moduleGate } = await import("../../modules/module-gate.js");
+          const mod = await moduleGate.model.get(modelModuleId, ws).catch(() => null);
+          const raw = (mod as { costPer1k?: number | null } | null)?.costPer1k;
+          resolved = raw != null ? Number(raw) : null;
+        } catch {
+          resolved = null;
+        }
+      }
+      rate = resolved ?? null;
       costPer1kCache.set(rateKey, rate);
     }
     if (rate == null) return null;
@@ -264,6 +319,9 @@ export async function reconcileBudgetUsage(now: Date = new Date()): Promise<Budg
       totals.reconciled = totals.reconciled || Boolean(row);
     });
   });
+  // Local file ledgers stay converged via the hot-path increment in
+  // trackUsage (same O(1) scheme as PG). A file-log sweep for local-only
+  // workspaces is future work — see token-usage-local-store localReconcileBudget.
   return totals;
 }
 

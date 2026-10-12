@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { promises as fs } from "node:fs";
 import { join } from "node:path";
 import { eq, desc, lt, and, sql } from "drizzle-orm";
-import { getDb } from "../shared/config/database.js";
+import { getDb, isConnectionError, isDatabaseConfigured } from "../shared/config/database.js";
 import { artifacts } from "../db/schema.js";
 // Gate-only: the Workspace domain exposes the artifact-dir resolution ports, so
 // Artifacts never reaches past its facade (Domain Facade Standard §2).
@@ -13,6 +13,12 @@ import {
   resolveWorkspaceFolder,
   toFolderRelative,
 } from "../workspace/workspace-gate.js";
+import {
+  localGetArtifact,
+  localListArtifactsByRun,
+  localListArtifactsByWorkspace,
+  localUpsertArtifact,
+} from "./artifact-local-store.js";
 import type { CreateArtifactInput, ArtifactRow } from "./artifact-types.js";
 
 // ─── Artifacts repository (canon: workspace artifactDir) ───────────────
@@ -85,19 +91,21 @@ export async function writeArtifactFile(input: CreateArtifactInput, artifactId: 
 }
 
 export async function createArtifact(input: CreateArtifactInput): Promise<ArtifactRow> {
-  const db = getDb();
   const id = "art_" + randomUUID().slice(0, 8) + "_" + Date.now().toString(36);
   const now = new Date();
-  // Canon: generation defaults to the workspace artifactDir. An explicit
-  // input.path is respected as the stored reference, but the body still lands in
-  // the workspace own artifact folder (never in a user repository).
+  // Local-first (§17): the file body + local index ARE the commit, so
+  // create_artifact works with no DATABASE_URL. The DB row is a best-effort
+  // replica. Canon: generation defaults to the workspace artifactDir. An
+  // explicit input.path is respected as the stored reference, but the body
+  // still lands in the workspace own artifact folder (never in a user
+  // repository).
   const written = await writeArtifactFile(input, id);
   const storedPath = written ?? input.path ?? null;
-  const [row] = await db.insert(artifacts).values({
+  const localRow: ArtifactRow = {
     id,
     workspaceId: input.workspaceId,
     producerAgent: input.producerAgent,
-    artifactType: input.type as any,
+    artifactType: input.type,
     path: storedPath,
     semanticTags: input.semanticTags ?? [],
     metadata: written ? { ...(input.metadata ?? {}), artifactPath: written } : (input.metadata ?? {}),
@@ -107,10 +115,50 @@ export async function createArtifact(input: CreateArtifactInput): Promise<Artifa
     afterHash: input.afterHash ?? null,
     patch: input.patch ?? null,
     contentRef: input.contentRef ?? null,
-  }).returning();
-  const created = row as unknown as ArtifactRow;
-  // SCL-3/ART-1: emit artifact events for observability and client sync (CTX-1 phantom handler fix)
-  // Explicit literal emits so check-events regex can detect them.
+  };
+  // Best-effort like the body write: a filesystem failure must not fail
+  // artifact creation (the returned row stays a valid pointer).
+  try {
+    await localUpsertArtifact(localRow);
+  } catch {}
+  if (!isDatabaseConfigured()) {
+    await emitArtifactEvents(input, id);
+    return localRow;
+  }
+  try {
+    const db = getDb();
+    const [row] = await db.insert(artifacts).values({
+      id,
+      workspaceId: input.workspaceId,
+      producerAgent: input.producerAgent,
+      artifactType: input.type as any,
+      path: storedPath,
+      semanticTags: input.semanticTags ?? [],
+      metadata: written ? { ...(input.metadata ?? {}), artifactPath: written } : (input.metadata ?? {}),
+      createdAt: now,
+      runId: input.runId ?? null,
+      beforeHash: input.beforeHash ?? null,
+      afterHash: input.afterHash ?? null,
+      patch: input.patch ?? null,
+      contentRef: input.contentRef ?? null,
+    }).returning();
+    const created = row as unknown as ArtifactRow;
+    await emitArtifactEvents(input, id);
+    return created;
+  } catch (err) {
+    // Configured-but-unreachable PG: the local commit already stands, so a
+    // replica-leg failure must never surface as a caller-visible error.
+    if (isConnectionError(err)) {
+      await emitArtifactEvents(input, id);
+      return localRow;
+    }
+    throw err;
+  }
+}
+
+// SCL-3/ART-1: emit artifact events for observability and client sync (CTX-1 phantom handler fix)
+// Explicit literal emits so check-events regex can detect them.
+async function emitArtifactEvents(input: CreateArtifactInput, artifactId: string): Promise<void> {
   try {
     // Shared instance: a fresh EventBroker would reach no subscriber.
     const { getSharedBroker } = await import("../event-broker/event-broker-gate.js");
@@ -118,7 +166,7 @@ export async function createArtifact(input: CreateArtifactInput): Promise<Artifa
     if (!broker) {
       console.warn("[artifacts] dropped artifact.created/updated: no shared broker registered");
     } else {
-      const payload = { runId: input.runId ?? null, artifactId: id, artifactType: input.type, workspaceId: input.workspaceId } as never;
+      const payload = { runId: input.runId ?? null, artifactId, artifactType: input.type, workspaceId: input.workspaceId } as never;
       const opts = { channelId: (input.metadata as Record<string, unknown> | undefined)?.channelId as string | undefined } as never;
       if (input.type === "diff") {
         broker.emit("diff.created", payload, opts);
@@ -128,44 +176,61 @@ export async function createArtifact(input: CreateArtifactInput): Promise<Artifa
       broker.emit("artifact.updated", payload, opts);
     }
   } catch {}
-  return created;
 }
 
 export async function getArtifactById(id: string): Promise<ArtifactRow | null> {
-  const db = getDb();
-  const [row] = await db.select().from(artifacts).where(eq(artifacts.id, id)).limit(1);
-  return (row as unknown as ArtifactRow) ?? null;
+  if (!isDatabaseConfigured()) return localGetArtifact(id);
+  try {
+    const db = getDb();
+    const [row] = await db.select().from(artifacts).where(eq(artifacts.id, id)).limit(1);
+    return (row as unknown as ArtifactRow) ?? null;
+  } catch (err) {
+    if (isConnectionError(err)) return localGetArtifact(id);
+    throw err;
+  }
 }
 
 export async function listArtifactsByRun(runId: string, opts?: { limit?: number; offset?: number }): Promise<ArtifactRow[]> {
-  const db = getDb();
-  const limit = Math.min(200, Math.max(1, opts?.limit ?? 200));
-  const offset = Math.min(10000, Math.max(0, opts?.offset ?? 0));
-  // ponytail: explicit columns + truncate patch/contentRef blobs (full body via getArtifactById)
-  const rows = await db.select({
-    id: artifacts.id, workspaceId: artifacts.workspaceId, producerAgent: artifacts.producerAgent,
-    artifactType: artifacts.artifactType, path: artifacts.path, semanticTags: artifacts.semanticTags,
-    metadata: artifacts.metadata, createdAt: artifacts.createdAt, runId: artifacts.runId,
-    beforeHash: artifacts.beforeHash, afterHash: artifacts.afterHash,
-    patch: sql<string | null>`substring(${artifacts.patch} from 1 for 500)`,
-    contentRef: sql<string | null>`substring(${artifacts.contentRef} from 1 for 500)`,
-  }).from(artifacts).where(eq(artifacts.runId, runId)).orderBy(desc(artifacts.createdAt)).limit(limit).offset(offset);
-  return rows as unknown as ArtifactRow[];
+  if (!isDatabaseConfigured()) return localListArtifactsByRun(runId, opts);
+  try {
+    const db = getDb();
+    const limit = Math.min(200, Math.max(1, opts?.limit ?? 200));
+    const offset = Math.min(10000, Math.max(0, opts?.offset ?? 0));
+    // ponytail: explicit columns + truncate patch/contentRef blobs (full body via getArtifactById)
+    const rows = await db.select({
+      id: artifacts.id, workspaceId: artifacts.workspaceId, producerAgent: artifacts.producerAgent,
+      artifactType: artifacts.artifactType, path: artifacts.path, semanticTags: artifacts.semanticTags,
+      metadata: artifacts.metadata, createdAt: artifacts.createdAt, runId: artifacts.runId,
+      beforeHash: artifacts.beforeHash, afterHash: artifacts.afterHash,
+      patch: sql<string | null>`substring(${artifacts.patch} from 1 for 500)`,
+      contentRef: sql<string | null>`substring(${artifacts.contentRef} from 1 for 500)`,
+    }).from(artifacts).where(eq(artifacts.runId, runId)).orderBy(desc(artifacts.createdAt)).limit(limit).offset(offset);
+    return rows as unknown as ArtifactRow[];
+  } catch (err) {
+    if (isConnectionError(err)) return localListArtifactsByRun(runId, opts);
+    throw err;
+  }
 }
 
 export async function listArtifactsByWorkspace(workspaceId: string, opts?: { limit?: number; offset?: number }): Promise<ArtifactRow[]> {
-  const db = getDb();
-  const limit = Math.min(200, Math.max(1, opts?.limit ?? 200));
-  const offset = Math.min(10000, Math.max(0, opts?.offset ?? 0));
-  const rows = await db.select({
-    id: artifacts.id, workspaceId: artifacts.workspaceId, producerAgent: artifacts.producerAgent,
-    artifactType: artifacts.artifactType, path: artifacts.path, semanticTags: artifacts.semanticTags,
-    metadata: artifacts.metadata, createdAt: artifacts.createdAt, runId: artifacts.runId,
-    beforeHash: artifacts.beforeHash, afterHash: artifacts.afterHash,
-    patch: sql<string | null>`substring(${artifacts.patch} from 1 for 500)`,
-    contentRef: sql<string | null>`substring(${artifacts.contentRef} from 1 for 500)`,
-  }).from(artifacts).where(eq(artifacts.workspaceId, workspaceId)).orderBy(desc(artifacts.createdAt)).limit(limit).offset(offset);
-  return rows as unknown as ArtifactRow[];
+  if (!isDatabaseConfigured()) return localListArtifactsByWorkspace(workspaceId, opts);
+  try {
+    const db = getDb();
+    const limit = Math.min(200, Math.max(1, opts?.limit ?? 200));
+    const offset = Math.min(10000, Math.max(0, opts?.offset ?? 0));
+    const rows = await db.select({
+      id: artifacts.id, workspaceId: artifacts.workspaceId, producerAgent: artifacts.producerAgent,
+      artifactType: artifacts.artifactType, path: artifacts.path, semanticTags: artifacts.semanticTags,
+      metadata: artifacts.metadata, createdAt: artifacts.createdAt, runId: artifacts.runId,
+      beforeHash: artifacts.beforeHash, afterHash: artifacts.afterHash,
+      patch: sql<string | null>`substring(${artifacts.patch} from 1 for 500)`,
+      contentRef: sql<string | null>`substring(${artifacts.contentRef} from 1 for 500)`,
+    }).from(artifacts).where(eq(artifacts.workspaceId, workspaceId)).orderBy(desc(artifacts.createdAt)).limit(limit).offset(offset);
+    return rows as unknown as ArtifactRow[];
+  } catch (err) {
+    if (isConnectionError(err)) return localListArtifactsByWorkspace(workspaceId, opts);
+    throw err;
+  }
 }
 
 export async function purgeExpiredArtifacts(before: Date): Promise<number> {

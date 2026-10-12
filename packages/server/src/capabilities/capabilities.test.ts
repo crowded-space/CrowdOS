@@ -248,6 +248,28 @@ describe("§21 authority-level filter mirrors ToolExecutor", () => {
     mockTiers({ liveTools: ["read_file"], authorized: ["read_file"], agent: { authorityLevel: 3, isOmniscient: true } });
     expect((await capabilitiesGate.visibleFor("agent-1")).map((v) => v.id)).toContain("filesystem.read");
   });
+
+  it("advertises artifact.create to L0/L1 and hides it from L2/L3", async () => {
+    // Stage 1: artifact.create is realized by create_artifact (authLevelRequired 1).
+    mockTiers({
+      liveTools: ["create_artifact"],
+      authorized: ["create_artifact"],
+      authLevels: { create_artifact: 1 },
+      agent: { authorityLevel: 1, isOmniscient: false },
+    });
+    expect((await capabilitiesGate.visibleFor("agent-1")).map((v) => v.id)).toContain("artifact.create");
+    const expanded = await capabilitiesGate.expand("agent-1", "artifact.create");
+    expect(expanded!.toolSchemas.map((t) => t.name)).toEqual(["create_artifact"]);
+
+    mockTiers({
+      liveTools: ["create_artifact"],
+      authorized: ["create_artifact"],
+      authLevels: { create_artifact: 1 },
+      agent: { authorityLevel: 2, isOmniscient: false },
+    });
+    expect((await capabilitiesGate.visibleFor("agent-1")).map((v) => v.id)).not.toContain("artifact.create");
+    expect(await capabilitiesGate.expand("agent-1", "artifact.create")).toBeNull();
+  });
 });
 
 describe("§21 descriptor listing", () => {

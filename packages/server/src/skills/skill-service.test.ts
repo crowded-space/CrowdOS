@@ -227,6 +227,7 @@ vi.mock("../tools/tools-gate.js", () => ({
     "lock_out",
     "open_detail",
     "load_skill",
+    "create_artifact",
   ],
 }));
 
@@ -242,6 +243,7 @@ const UNIVERSALS = [
   "lock_out",
   "open_detail",
   "load_skill",
+  "create_artifact",
 ];
 
 function row(overrides: Row = {}): Row {

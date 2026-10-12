@@ -22,6 +22,10 @@ export const UNIVERSAL_TOOL_IDS = [
   "lock_out",
   "open_detail",
   "load_skill",
+  // Zone A artifact verb: granted to every tier, enforced to L0+L1 by its
+  // authLevelRequired: 1 (grant broadly, enforce by level — same shape as the
+  // other entries, whose own levels do the tiering).
+  "create_artifact",
 ];
 
 export const toolsGate = {

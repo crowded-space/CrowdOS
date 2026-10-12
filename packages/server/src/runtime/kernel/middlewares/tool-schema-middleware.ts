@@ -22,12 +22,13 @@ import type { IContextMiddleware, MutableContextPacket, ContextBuildContext } fr
  * descriptor and no escape hatch would be invisible AND unreachable.
  */
 export const DEFERRED_TOOL_IDS: ReadonlySet<string> = new Set<string>([
-  // ── Workspace ─── filesystem.read / filesystem.write ──────────────────
+  // ── Workspace ─── filesystem.read / filesystem.write / artifact.create ───
   "read_file",
   "list_directory",
   "write_file",
   "edit_file",
   "delete_file",
+  "create_artifact",
   // ── Execution ─── sandbox.exec ────────────────────────────────
   "execute_bash",
   "execute_safe",

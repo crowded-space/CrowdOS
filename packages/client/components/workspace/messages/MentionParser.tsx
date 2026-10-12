@@ -1,10 +1,11 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, memo } from 'react';
 import { Copy, Check, ChevronDown, ChevronUp, Code2 } from 'lucide-react';
 import { useCrowdOSStore } from '@/stores/crowdOsStore';
 import { stripToolCalls } from '@crowdspace/shared';
 import { highlightCode } from '../code-highlight';
 import { RedactedText } from './RedactedText';
 import { countSecrets } from './secret-redaction';
+import { splitStreamBlocks } from './streaming-blocks';
 
 interface MentionParserProps {
   text: string;
@@ -153,6 +154,57 @@ function CodeSandboxBlock({ language, code }: { language: string; code: string }
   );
 }
 
+interface streamPart {
+  type: string;
+  content?: string;
+  language?: string;
+}
+
+function splitCodeParts(cleanText: string): streamPart[] {
+  const result: streamPart[] = [];
+  let lastIndex = 0;
+  let match: RegExpExecArray | null;
+  CODE_BLOCK_REGEX.lastIndex = 0;
+
+  while ((match = CODE_BLOCK_REGEX.exec(cleanText)) !== null) {
+    const textBefore = cleanText.slice(lastIndex, match.index);
+    if (textBefore) {
+      result.push({ type: 'markdown', content: textBefore });
+    }
+    result.push({
+      type: 'codeblock',
+      language: match[1] || 'plaintext',
+      content: match[2].trim(),
+    });
+    lastIndex = CODE_BLOCK_REGEX.lastIndex;
+  }
+
+  const textAfter = cleanText.slice(lastIndex);
+  if (textAfter) {
+    result.push({ type: 'markdown', content: textAfter });
+  }
+
+  return result;
+}
+
+function renderStreamPart(part: streamPart, index: number, mentionRegex: RegExp): React.ReactNode {
+  if (part.type === 'codeblock') {
+    return (
+      <CodeSandboxBlock
+        key={index}
+        language={part.language || 'plaintext'}
+        code={part.content || ''}
+      />
+    );
+  }
+
+  return (
+    <div key={index} className="space-y-2 min-w-0 max-w-full overflow-hidden">
+      {renderMarkdownParagraphs(part.content || '', mentionRegex)}
+    </div>
+  );
+}
+
 export default function MentionParser({ text }: MentionParserProps) {
   const agents = useCrowdOSStore((state) => state.agents);
 
@@ -162,54 +214,55 @@ export default function MentionParser({ text }: MentionParserProps) {
 
   const mentionRegex = useMemo(() => buildMentionRegex(agentNames), [agentNames]);
 
-  const parts = useMemo(() => {
-    const result: Array<{ type: string; content?: string; language?: string }> = [];
-    let lastIndex = 0;
-    let match: RegExpExecArray | null;
-    CODE_BLOCK_REGEX.lastIndex = 0;
-
-    while ((match = CODE_BLOCK_REGEX.exec(cleanText)) !== null) {
-      const textBefore = cleanText.slice(lastIndex, match.index);
-      if (textBefore) {
-        result.push({ type: 'markdown', content: textBefore });
-      }
-      result.push({
-        type: 'codeblock',
-        language: match[1] || 'plaintext',
-        content: match[2].trim(),
-      });
-      lastIndex = CODE_BLOCK_REGEX.lastIndex;
-    }
-
-    const textAfter = cleanText.slice(lastIndex);
-    if (textAfter) {
-      result.push({ type: 'markdown', content: textAfter });
-    }
-
-    return result;
-  }, [cleanText]);
+  const parts = useMemo(() => splitCodeParts(cleanText), [cleanText]);
 
   if (parts.length === 0) return null;
 
   return (
     <div className="space-y-3 font-sans text-zinc-300 select-text min-w-0 max-w-full overflow-hidden">
-      {parts.map((part, index) => {
-        if (part.type === 'codeblock') {
-          return (
-            <CodeSandboxBlock
-              key={index}
-              language={part.language || 'plaintext'}
-              code={part.content || ''}
-            />
-          );
-        }
+      {parts.map((part, index) => renderStreamPart(part, index, mentionRegex))}
+    </div>
+  );
+}
 
-        return (
-          <div key={index} className="space-y-2 min-w-0 max-w-full overflow-hidden">
-            {renderMarkdownParagraphs(part.content || '', mentionRegex)}
-          </div>
-        );
-      })}
+// Streaming renderer: completed blocks are memoized (never re-render once
+// fixed); only the trailing pending block updates per flush. An unclosed code
+// fence renders as a plain <pre> until the closing fence arrives, so code
+// layout never shifts mid-block. Completed keys are index+length so the list
+// only grows at the end and existing nodes keep identity.
+const CompletedStreamBlock = memo(function CompletedStreamBlock({ source }: { source: string }) {
+  const agents = useCrowdOSStore((state) => state.agents);
+  const mentionRegex = useMemo(() => buildMentionRegex(agents.map(a => a.name)), [agents]);
+  const parts = useMemo(() => splitCodeParts(source), [source]);
+  return (
+    <>{parts.map((part, index) => renderStreamPart(part, index, mentionRegex))}</>
+  );
+});
+
+export function StreamingMention({ text }: MentionParserProps) {
+  const agents = useCrowdOSStore((state) => state.agents);
+  const mentionRegex = useMemo(() => buildMentionRegex(agents.map(a => a.name)), [agents]);
+  const { completed, pending, pendingIsCode } = useMemo(
+    () => splitStreamBlocks(stripToolCalls(text)),
+    [text]
+  );
+
+  if (completed.length === 0 && !pending) return null;
+
+  return (
+    <div className="space-y-3 font-sans text-zinc-300 select-text min-w-0 max-w-full overflow-hidden">
+      {completed.map((block, i) => (
+        <CompletedStreamBlock key={`${i}-${block.length}`} source={block} />
+      ))}
+      {pending && (pendingIsCode ? (
+        <pre className="pending-code font-mono text-xs leading-relaxed whitespace-pre-wrap break-words bg-zinc-950 border border-zinc-800 rounded-lg p-3 overflow-x-auto">
+          <RedactedText text={pending} mono />
+        </pre>
+      ) : (
+        <div className="pending-block space-y-2 min-w-0 max-w-full overflow-hidden">
+          {renderMarkdownParagraphs(pending, mentionRegex)}
+        </div>
+      ))}
     </div>
   );
 }

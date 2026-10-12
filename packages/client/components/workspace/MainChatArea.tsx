@@ -11,6 +11,7 @@ import {
 import { useCrowdOSStore } from '@/stores/crowdOsStore';
 import MessageRouter from './messages/MessageRouter';
 import MentionParser from './messages/MentionParser';
+import { useStickToBottom } from './messages/use-stick-to-bottom';
 import PresenceIndicator from './ui/PresenceIndicator';
 import { Attachment, Agent, Message, ToolExecution } from '@/types/crowdOs';
 import { useToast } from '@/components/ui/ToastProvider';
@@ -268,7 +269,6 @@ export default function MainChatArea({ onOpenSearch, onOpenSidebar }: MainChatAr
     return () => clearTimeout(timer);
   }, [inputText, selectedMentions, selectedMode, activeChannelId]);
 
-  const endRef = useRef<HTMLDivElement>(null);
   const composerRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -355,8 +355,11 @@ export default function MainChatArea({ onOpenSearch, onOpenSidebar }: MainChatAr
     }
   };
 
-  const scrollContainerRef = useRef<HTMLDivElement>(null);
-  const [isUserScrolledUp, setIsUserScrolledUp] = useState(false);
+  // Follow-scroll owns the scroll container: wheel/touch intent (never the
+  // `scroll` event, which also fires for our own pins) decides follow mode.
+  const { containerRef: scrollContainerRef, followStream, resume, isAtBottom, scrollHandlers } =
+    useStickToBottom<HTMLDivElement>();
+  const isUserScrolledUp = !isAtBottom;
   const [missedCount, setMissedCount] = useState(0);
   const lastMessageCountRef = useRef(0);
   const firstMsgIdRef = useRef<string | null>(null);
@@ -444,29 +447,21 @@ export default function MainChatArea({ onOpenSearch, onOpenSidebar }: MainChatAr
     }
   };
 
-  // Handle scroll events — rAF-throttled + passive to avoid layout thrash
+  // Scroll listener serves upward paging only. Follow-mode intent comes from
+  // wheel/touch handlers (the `scroll` event also fires for programmatic
+  // pins and must never cancel follow mode). rAF-throttled + passive-safe.
   const scrollRafRef = useRef<number | null>(null);
   const handleScroll = () => {
     if (scrollRafRef.current) return;
     scrollRafRef.current = requestAnimationFrame(() => {
       scrollRafRef.current = null;
-      if (!scrollContainerRef.current) return;
-      const { scrollTop, scrollHeight, clientHeight } = scrollContainerRef.current;
-      const distanceFromBottom = scrollHeight - scrollTop - clientHeight;
-      setIsUserScrolledUp(distanceFromBottom > 120);
       void maybeLoadOlder();
     });
   };
-  useEffect(() => () => { if (scrollRafRef.current) cancelAnimationFrame(scrollRafRef.current); }, []);
-
-  const scrollToBottom = (smooth = true) => {
-    endRef.current?.scrollIntoView({ behavior: smooth ? 'smooth' : 'auto' });
-    setIsUserScrolledUp(false);
-    setMissedCount(0);
-  };
-
-  // Smart Auto-scroll: smooth for brand-new messages, instant during token
-  // streaming (avoids fighting smooth-scroll animations dozens of times/sec).
+  // Follow-scroll: new rows and token updates share one path — an instant
+  // container pin while following, so smooth-scroll animations never stack at
+  // token rate. Scrolled-up users keep their position and collect a missed
+  // count instead of being yanked. User-triggered jumps use resume() (smooth).
   useEffect(() => {
     const grew = currentMessages.length !== lastMessageCountRef.current;
     const prevFirstId = firstMsgIdRef.current;
@@ -478,21 +473,12 @@ export default function MainChatArea({ onOpenSearch, onOpenSidebar }: MainChatAr
     lastMessageCountRef.current = currentMessages.length;
     if (isPrepend) return;
 
-    if (grew && !isUserScrolledUp) {
-      endRef.current?.scrollIntoView({ behavior: 'smooth' });
-    } else if (!grew && !isUserScrolledUp) {
-      // Content update within existing messages (streaming): pin instantly
-      const el = scrollContainerRef.current;
-      if (el && el.scrollHeight - el.scrollTop - el.clientHeight < 240) {
-        el.scrollTop = el.scrollHeight;
-      }
-    }
-
-    // Track missed messages while the user is reading history
-    if (grew && isUserScrolledUp) {
+    if (!isUserScrolledUp) {
+      followStream();
+    } else if (grew) {
       setMissedCount(c => Math.min(c + 1, 99));
     }
-  }, [currentMessages, isUserScrolledUp]);
+  }, [currentMessages, isUserScrolledUp, followStream]);
 
   // Handle caret input change for mention detection
   const handleInputChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
@@ -632,6 +618,11 @@ export default function MainChatArea({ onOpenSearch, onOpenSidebar }: MainChatAr
     // Phase E: a sent composer clears its persisted draft (store is source;
     // the mirror write-through follows inside clearDraft).
     if (activeChannelId) clearDraft(activeChannelId);
+
+    // The user acted in this channel: resume follow so their message lands
+    // in view (user-triggered, smooth is fine here).
+    setMissedCount(0);
+    resume();
 
     // Return focus to the composer so rapid follow-up messages need zero clicks
     requestAnimationFrame(() => composerRef.current?.focus());
@@ -858,6 +849,9 @@ export default function MainChatArea({ onOpenSearch, onOpenSidebar }: MainChatAr
 
   useEffect(() => {
     setOpenRunThreadId(null);
+    // Fresh channel starts followed at the latest message.
+    setMissedCount(0);
+    resume();
   }, [activeChannelId]);
 
   return (
@@ -1031,13 +1025,19 @@ export default function MainChatArea({ onOpenSearch, onOpenSidebar }: MainChatAr
         onCancel={() => setConfirmOverflowOpen(false)}
       />
 
-      {/* Message stream area — responsive padding, calm rhythm */}
+      {/* Message stream area — responsive padding, calm rhythm. Follow-scroll
+          pins via container scrollTo(instant) while streaming; intent comes
+          from wheel/touch (never the scroll event). Bottom padding clears the
+          composer so the last line is never hidden behind it. */}
       <div
         ref={scrollContainerRef}
         onScroll={handleScroll}
+        onWheel={scrollHandlers.onWheel}
+        onTouchMove={scrollHandlers.onTouchMove}
+        style={{ overflowAnchor: 'auto', paddingBottom: 96 }}
         className={`flex-1 overflow-y-auto px-3 sm:px-4 lg:px-6 ${
           selectedSandboxFile && sandboxView === 'full' ? 'py-0' : 'py-4 sm:py-6'
-        } transition-[padding] duration-300 ease-[cubic-bezier(0.16,1,0.3,1)] space-y-3 sm:space-y-4 scrollbar-thin scroll-smooth overscroll-contain contain-paint select-text selection:bg-indigo-500/30 relative`}
+        } transition-[padding] duration-300 ease-[cubic-bezier(0.16,1,0.3,1)] space-y-3 sm:space-y-4 scrollbar-thin scroll-auto overscroll-contain contain-paint select-text selection:bg-indigo-500/30 relative`}
       >
         {activeRunId && (
           <div className="sticky top-0 z-10">
@@ -1217,14 +1217,12 @@ export default function MainChatArea({ onOpenSearch, onOpenSidebar }: MainChatAr
             )}
           </div>
         )}
-        <div ref={endRef} />
-
         {/* Floating Jump to Present Button */}
         {isUserScrolledUp && (
           <div className="sticky bottom-3 flex justify-center w-full pointer-events-none z-20">
             <button
-              onClick={() => scrollToBottom(true)}
-              className="pointer-events-auto flex items-center gap-1.5 px-3.5 py-2 min-h-[36px] rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-medium shadow-[0_8px_24px_rgba(10,14,32,0.55)] transition-all duration-200 hover:scale-[1.03] active:scale-[0.97] cursor-pointer border border-indigo-400/30"
+              onClick={() => { setMissedCount(0); resume(); }}
+              className="jump-latest pointer-events-auto flex items-center gap-1.5 px-3.5 py-2 min-h-[36px] rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-medium shadow-[0_8px_24px_rgba(10,14,32,0.55)] transition-all duration-200 hover:scale-[1.03] active:scale-[0.97] cursor-pointer border border-indigo-400/30"
             >
               {missedCount > 0 ? (
                 <span className="tnum min-w-[18px] h-[18px] px-1 flex items-center justify-center rounded bg-white/20 text-[10px] font-mono font-semibold">

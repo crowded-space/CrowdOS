@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo } from 'react';
 import { Brain, Sparkles, AlertCircle, Wrench, ChevronDown, ChevronUp, Square, RotateCcw, RefreshCw, History } from 'lucide-react';
 import MentionParser from './MentionParser';
+import { StreamingMention } from './MentionParser';
 import AttachmentsView from './AttachmentsView';
 import ToolExecutionMessage from './ToolExecutionMessage';
 import { AgentLevel, Attachment, AgentTurnStep, AgentTurnStatus, ToolExecution } from '@/types/crowdOs';
@@ -227,10 +228,17 @@ export default function AgentMessage({
           </div>
         )}
 
-        {/* Main Response Content — middle per spec */}
+        {/* Main Response Content — middle per spec. While streaming, completed
+            markdown blocks are memoized and only the pending tail re-renders;
+            the container keeps a min-height so it never starts at 0px, with a
+            blinking caret (layout-neutral) instead of a shifting spinner. */}
         {content ? (
-          <div className="text-sm text-zinc-300 leading-relaxed font-sans select-text overflow-x-auto">
-            <MentionParser text={content} />
+          <div
+            className={`text-sm text-zinc-300 leading-relaxed font-sans select-text overflow-x-auto${isStreaming ? ' streaming-message' : ''}`}
+            style={isStreaming ? { minHeight: '1.5em' } : undefined}
+          >
+            {isStreaming ? <StreamingMention text={content} /> : <MentionParser text={content} />}
+            {isStreaming && !isCancelled && <span className="stream-caret" aria-hidden="true" />}
           </div>
         ) : (
           isStreaming && !hasMonologue && (

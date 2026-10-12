@@ -780,6 +780,11 @@ export class ToolExecutor {
         channelId: partialCtx?.channelId || "general",
         workspaceId: partialCtx?.workspaceId || "default",
         authorityLevel: agent.authorityLevel,
+        // Thread the run through: handlers branch on ctx.runId (FS compensation
+        // journaling, open_detail expansion recording, artifact run linkage).
+        // The field exists on the type but was never set here, so those paths
+        // silently saw null on every call.
+        runId: partialCtx?.runId ?? null,
         abortSignal: partialCtx?.abortSignal,
         logger: partialCtx?.logger || {
           info: (msg, meta) => console.log(`[ToolExecutor:${toolId}]`, msg, meta ?? ""),

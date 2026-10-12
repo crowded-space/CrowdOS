@@ -58,7 +58,7 @@ _archive/
 e2e-screenshots/
 
 # Documentation workspace (not codebase, never commit)
-re-docs/
+
 
 
 # CrowdOS runtime data (registries, file stores, outboxes)

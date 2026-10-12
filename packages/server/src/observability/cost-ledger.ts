@@ -4,6 +4,15 @@ import { tokenUsageLog, modelModules, runs } from "../db/schema.js";
 import { moduleGate } from "../modules/module-gate.js";
 import { logMetric } from "../shared/core/structured-log.js";
 
+export interface CostLedgerQuery {
+  runId?: string | null;
+  channelId?: string | null;
+  agentId?: string | null;
+  limit?: number;
+  /** Workspace scope for local-first reads; undefined keeps legacy ambient-DB behavior. */
+  workspaceId?: string | null;
+}
+
 /**
  * SCL-3: per-run cost ledger.
  * Computes USD cost as token_usage_log × model_modules.cost_per_1k
@@ -68,12 +77,59 @@ export function computeRowCostUsd(
   return (rate * (row.promptTokens + row.completionTokens)) / 1000;
 }
 
-export async function getPerRunCostLedger(opts: {
-  runId?: string | null;
-  channelId?: string | null;
-  agentId?: string | null;
-  limit?: number;
-} = {}): Promise<CostLedgerEntry[]> {
+export async function getPerRunCostLedger(opts: CostLedgerQuery = {}): Promise<CostLedgerEntry[]> {
+  // Workspace-scoped reads go local-first (§17); legacy unscoped callers
+  // keep the ambient-DB path with a local-file degrade on outage.
+  if (opts.workspaceId !== undefined) {
+    const { tierContextFor } = await import("../workspace/workspace-gate.js");
+    const { withStoreFallback } = await import("../shared/config/database.js");
+    const ws = opts.workspaceId ?? null;
+    const ctx = await tierContextFor(ws).catch(() => ({ workspaceId: ws }));
+    return withStoreFallback(ctx, () => readPgLedger(opts), () => readLocalLedger(opts, ws));
+  }
+  try {
+    return await readPgLedger(opts);
+  } catch (err) {
+    const { isConnectionError, isSchemaMismatchError, NO_DATABASE_CODE } = await import("../shared/config/database.js");
+    if (isConnectionError(err) || isSchemaMismatchError(err) || (err as { code?: unknown })?.code === NO_DATABASE_CODE) {
+      return readLocalLedger(opts, null);
+    }
+    throw err;
+  }
+}
+
+async function readLocalLedger(opts: CostLedgerQuery, workspaceId: string | null): Promise<CostLedgerEntry[]> {
+  const { localListTokenUsage } = await import("../shared/core/token-usage-local-store.js");
+  const rows = await localListTokenUsage(workspaceId, {
+    runId: opts.runId ?? null,
+    channelId: opts.channelId ?? null,
+    agentId: opts.agentId ?? null,
+    limit: clampObsLimit(opts.limit),
+  });
+  let costMap = new Map<string, number | null>();
+  try {
+    const models = await moduleGate.model.list({ workspaceId: workspaceId ?? undefined } as never).catch(() => []);
+    for (const m of models as Array<{ id: string; costPer1k?: number | null }>) {
+      costMap.set(m.id, m.costPer1k != null ? Number(m.costPer1k) : null);
+    }
+  } catch {}
+  return rows.map((r) => ({
+    runId: r.runId ?? null,
+    agentId: r.agentId,
+    channelId: r.channelId,
+    modelModuleId: r.modelModuleId ?? null,
+    promptTokens: r.promptTokens,
+    completionTokens: r.completionTokens,
+    totalTokens: r.totalTokens,
+    costUsd: computeRowCostUsd(
+      { promptTokens: r.promptTokens, completionTokens: r.completionTokens },
+      r.modelModuleId ? (costMap.get(r.modelModuleId) ?? null) : null,
+    ),
+    timestamp: new Date(r.timestamp),
+  }));
+}
+
+async function readPgLedger(opts: CostLedgerQuery): Promise<CostLedgerEntry[]> {
   const db = getDb();
   const limit = clampObsLimit(opts.limit);
 
@@ -237,11 +293,7 @@ async function attachRunMeta(list: PerRunCostRollup[]): Promise<void> {
   } catch {}
 }
 
-export async function getPerRunRollup(opts: {
-  runId?: string | null;
-  channelId?: string | null;
-  limit?: number;
-} = {}): Promise<PerRunCostRollup[]> {
+export async function getPerRunRollup(opts: CostLedgerQuery = {}): Promise<PerRunCostRollup[]> {
   const entries = await getPerRunCostLedger(opts);
   const list = rollupFromEntries(entries);
   await attachRunMeta(list);
@@ -255,16 +307,19 @@ export async function getPerRunRollup(opts: {
   return list;
 }
 
-export async function getCostDashboard(opts: { limit?: number } = {}): Promise<CostDashboard> {
+export async function getCostDashboard(opts: CostLedgerQuery = {}): Promise<CostDashboard> {
   const limit = clampObsLimit(opts.limit);
+  const ws = opts.workspaceId !== undefined ? (opts.workspaceId ?? null) : undefined;
   // One ledger fetch batched with the model-meta lookup; rollups derive pure from the same rows.
   // M-03 note: the ledger entries resolve on the ambient ALS handle (tenant
-  // scoped when the caller runs inside runWithDb/request scope). The
-  // model-meta lookup is by-id metadata for display names only; full
-  // workspace threading awaits a workspace-aware model-meta port.
+  // scoped when the caller runs inside runWithDb/request scope) unless an
+  // explicit workspaceId pins the local-first path. The model-meta lookup is
+  // workspace-aware when the caller names one.
   const [entries, modelRows] = await Promise.all([
-    getPerRunCostLedger({ limit }),
-    moduleGate.model.list().then(
+    getPerRunCostLedger(ws === undefined ? { limit } : { limit, workspaceId: ws }),
+    (ws === undefined
+      ? moduleGate.model.list()
+      : moduleGate.model.list({ workspaceId: ws ?? undefined } as never)).then(
       (rows) => rows,
       () => [] as never[],
     ),
@@ -307,8 +362,9 @@ export async function getCostDashboard(opts: { limit?: number } = {}): Promise<C
 // workspace's totals to another.
 const verifyCache = new Map<string, { at: number; value: { match: boolean; ledgerTotal: number; recomputedTotal: number; deltaPct: number } }>();
 
-export async function verifyLedgerAccuracy(opts: { limit?: number } = {}): Promise<{ match: boolean; ledgerTotal: number; recomputedTotal: number; deltaPct: number }> {
-  const scope = dbScopeKey();
+export async function verifyLedgerAccuracy(opts: CostLedgerQuery = {}): Promise<{ match: boolean; ledgerTotal: number; recomputedTotal: number; deltaPct: number }> {
+  const ws = opts.workspaceId !== undefined ? (opts.workspaceId ?? null) : undefined;
+  const scope = ws !== undefined ? `ws:${ws ?? "default"}` : dbScopeKey();
   // OBS-004: like-for-like — verify the same window the served dashboard read
   // uses (its default when no limit is given), so the verified total and the
   // served total always cover the same rows.
@@ -316,7 +372,7 @@ export async function verifyLedgerAccuracy(opts: { limit?: number } = {}): Promi
   const cacheKey = `${scope}:${limit}`;
   const hit = verifyCache.get(cacheKey);
   if (hit && Date.now() - hit.at < 60_000) return hit.value;
-  const dashboard = await getCostDashboard({ limit });
+  const dashboard = await getCostDashboard(ws === undefined ? { limit } : { limit, workspaceId: ws });
   // Recompute via SQL SUM aggregate over the SAME window — single row, no full-table fetch.
   const db = getDb();
   let rawTotal = dashboard.totalCostUsd;
