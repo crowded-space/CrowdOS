@@ -1,4 +1,5 @@
 import React from 'react';
+import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'motion/react';
 import { AlertTriangle, X } from 'lucide-react';
 
@@ -66,7 +67,11 @@ export default function ConfirmDialog({
     }
   };
 
-  return (
+  // Portal the overlay to document.body: when mounted inside the sidebar
+  // <nav>, that nav's non-none `translate` (Tailwind v4) becomes the
+  // containing block for position:fixed below xl, pinning the dialog inside
+  // the ~300px sidebar instead of centering it in the viewport.
+  return createPortal(
     <AnimatePresence>
       {open && (
         <div
@@ -145,6 +150,7 @@ export default function ConfirmDialog({
           </motion.div>
         </div>
       )}
-    </AnimatePresence>
+    </AnimatePresence>,
+    document.body
   );
 }
