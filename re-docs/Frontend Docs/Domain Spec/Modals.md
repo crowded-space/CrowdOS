@@ -41,7 +41,7 @@ Non-goals: sidebar chrome (see Workspace Shell), message rendering (see Chat Are
 8. QuickAsk capture (Phase G): `App.tsx` summons on Ctrl/Cmd+Shift+K (palette keeps Ctrl/Cmd+K) and mounts `<QuickAsk/>` lazy in `Suspense`; `crowdos:quick-ask-open` event bridges the two capture palette verbs to the panel; `QuickAsk.tsx` asks in place via `addMessage` (offline `queueSend` with will-send copy) and expands via Shift+Enter to the full composer with a best-effort `setDraft` backup.
 8. Agent profile: open via `openAgentProfileModal(id)` (roster rows, message avatars, search); shared overlay focus moves to `Close agent profile`, traps Tab inside the dialog, and restores the originating trigger on close/Escape. DM `AgentProfileModal.tsx:72-86`; patch apply `AgentProfileModal.tsx:88-112`; override toggle/revert inline `AgentProfileModal.tsx:297-337`; Open Agent Studio `AgentProfileModal.tsx:210-217` embeds studio modal `AgentProfileModal.tsx:533-537`. Open studio uses negative vertical margins to reach 24px high without moving the module row; the DM command is non-shrinking at 24×24.
 9. Inline channel: opened from sidebar category `+`; validation `InlineChannelModal.tsx:47-53`; create `InlineChannelModal.tsx:55-69` → `createChannel(catId, slug, desc)` + toast + close; the header close button is `w-6 h-6`.
-10. Confirm: `ConfirmDialog.tsx:29-67` Escape/Tab-trap/scroll-lock; danger styling + labels per caller.
+10. Confirm: `ConfirmDialog.tsx:30-68` Escape/Tab-trap/scroll-lock; danger styling + labels per caller; overlay portaled to `document.body` (`ConfirmDialog.tsx:75-157`) so the off-canvas sidebar's non-none `translate` cannot become the containing block for the `fixed` layer.
 
 ## Current Implementation
 
@@ -54,7 +54,7 @@ Non-goals: sidebar chrome (see Workspace Shell), message rendering (see Chat Are
 | `workspace/modals/AgentProfileModal.tsx` | Agent dossier: identity, module cards, hot-patch roster + composer, hierarchy, DM footer, studio launcher |
 | `workspace/modals/OperatorProfileModal.tsx` | User profile: username + user tag + optional preference, portaled to `document.body`; persists to `crowdos_operator` via `workspace/operator-profile-model.ts` on save |
 | `workspace/modals/InlineChannelModal.tsx` | Single-channel creator with category picker + slug validation; portaled to `document.body` so transformed sidebar ancestors cannot constrain its fixed overlay |
-| `ui/ConfirmDialog.tsx` | Shared confirm: danger-aware role/focus, Escape/backdrop/Tab-trap, body lock |
+| `ui/ConfirmDialog.tsx` | Shared confirm: danger-aware role/focus, Escape/backdrop/Tab-trap, body lock; portaled to `document.body` so transformed sidebar ancestors cannot constrain its fixed overlay |
 
 ## Props & Store
 
@@ -69,7 +69,7 @@ Non-goals: sidebar chrome (see Workspace Shell), message rendering (see Chat Are
 
 ## Relations
 
-- Parents: `App.tsx` lazy-mounts the three big modals in `Suspense`; `InlineChannelModal` is instantiated by `WorkspaceSidebar` but portals its overlay to `document.body`; `ConfirmDialog` is reused by dropdown (leave), chat (clear logs), and settings (deletes).
+- Parents: `App.tsx` lazy-mounts the three big modals in `Suspense`; `InlineChannelModal` is instantiated by `WorkspaceSidebar` but portals its overlay to `document.body`; `ConfirmDialog` is reused by dropdown (leave), chat (clear logs), and settings (deletes), and portals its overlay to `document.body` for the same reason (the sidebar `<nav>` carries a non-none `translate` below `xl`, which would otherwise become the containing block for its `fixed` overlay and pin the dialog inside the sidebar).
 - Children: settings → `ModelCardsTab`, `CrowIcon`, `AgentStudioModal`, `ScreenLockSettingsPanel`, `MountsInspector`, `DiagnosticsTab`, `AuditTab`, `ConfirmDialog`; mounts cards → per-level `FolderMountPicker`; profile → `PresenceIndicator`, `StatusBadge`, `AgentStudioModal`.
 - Store: settings/profile/search/channel actions on `crowdOsStore`; toasts via `ToastProvider`.
 - API: search `GET /api/search?q=&limit=`; agent/role/channel/budget mutations via store (endpoints not enumerated here).

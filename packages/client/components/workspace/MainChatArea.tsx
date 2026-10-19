@@ -18,7 +18,6 @@ import { useToast } from '@/components/ui/ToastProvider';
 import ConfirmDialog from '@/components/ui/ConfirmDialog';
 import EmojiPickerPopover from './EmojiPickerPopover';
 import ModeSelector from './ModeSelector';
-import ComposerPreflight from './ComposerPreflight';
 import { overflowState, projectedSendLength, shortPath } from './composer-preflight-model';
 import { sourceHint, sourceLabel } from './explorer-model';
 import { StatusStrip } from './StatusStrip';
@@ -1501,34 +1500,6 @@ export default function MainChatArea({ onOpenSearch, onOpenSidebar }: MainChatAr
             onCostOpen={() => setRightPanelView('telemetry')}
             elapsedMs={null}
             runStartedAt={null}
-          />
-          {/* Phase B preflight line: status above the textarea, wired to Send. */}
-          <ComposerPreflight
-            mode={selectedMode}
-            resolvedTo={null}
-            pinnedAgents={stickyMentions.map((ag) => ({
-              agent: ag,
-              onRemove: (id: string) => {
-                if (activeChannelId) {
-                  setStickyMentionsByChannel((prev) => ({
-                    ...prev,
-                    [activeChannelId]: (prev[activeChannelId] || []).filter((m) => m.id !== id),
-                  }));
-                }
-              },
-            }))}
-            mount={{
-              path: mountScope.path,
-              source: mountScope.source,
-              onOpen: () => setRightPanelView('repo'),
-            }}
-            charCount={projectedSendLength(inputText, [...selectedMentions, ...stickyMentions].map((a) => a.name))}
-            maxChars={MAX_MESSAGE_LEN}
-            onOverflowConfirm={() => setConfirmOverflowOpen(true)}
-            contextPct={null}
-            contextBreakdown={null}
-            scope={null}
-            costHint={null}
           />
           <textarea
             ref={composerRef}
