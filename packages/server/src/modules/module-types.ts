@@ -1,5 +1,11 @@
 export type ProviderEngine = "google" | "openai" | "anthropic" | "ollama" | "custom";
 
+/** Wire protocol the module speaks; unset = the provider's native protocol. */
+export type ApiEndpoint = "google" | "anthropic" | "openai-completion" | "openai-responses";
+
+/** Reasoning depth; "none"/unset = provider default (no reasoning knob sent). */
+export type ThinkingLevel = "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
+
 /** Reusable LLM configuration module */
 export interface ModelModule {
   id: string;
@@ -8,6 +14,8 @@ export interface ModelModule {
   modelName: string;
   apiKey?: string | null;
   endpointUrl?: string;
+  apiEndpoint?: ApiEndpoint | null;
+  thinkingLevel?: ThinkingLevel | null;
   temperature: number;
   topP: number;
   maxOutputTokens: number;

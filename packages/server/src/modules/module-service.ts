@@ -227,14 +227,40 @@ export async function testConnectionHelper(
   provider: string,
   modelName: string,
   apiKey?: string | null,
-  endpointUrl?: string | null
+  endpointUrl?: string | null,
+  apiEndpoint?: string | null
 ): Promise<ConnectionTestResult> {
   if (!apiKey && provider !== "ollama" && provider !== "custom") {
     return { success: false, message: `Missing API key for provider ${provider}` };
   }
 
   try {
-    if (provider === "google") {
+    if ((provider === "openai" || provider === "custom") && apiEndpoint === "openai-responses") {
+      // OpenAI Responses wire protocol: the probe must hit the same endpoint
+      // shape the runtime will (never the chat-completions one).
+      const base = (endpointUrl || (provider === "custom" ? "" : "https://api.openai.com/v1")).replace(/\/+$/, "");
+      if (!base) {
+        return { success: false, message: "Responses endpoint needs an endpointUrl" };
+      }
+      const response = await fetch(`${base}/responses`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${apiKey || ""}`
+        },
+        body: JSON.stringify({
+          model: modelName,
+          input: "ping",
+          max_output_tokens: 1
+        }),
+        signal: AbortSignal.timeout(3000)
+      });
+      if (response.ok) {
+        return { success: true, message: "Successfully connected to the OpenAI-Responses endpoint." };
+      }
+      const errText = await response.text();
+      return { success: false, message: `Responses endpoint returned status ${response.status}: ${errText}` };
+    } else if (provider === "google") {
       try {
         if (!modelName) {
           return { success: false, message: "Missing model name for provider google" };
@@ -613,7 +639,7 @@ export async function testModelModule(id: string, workspaceId?: string | null) {
       console.warn(`[modules] testModelModule: stored apiKey undecryptable for ${id}, probing with stored value as-is`);
     }
   }
-  return testConnectionHelper(module.provider, module.modelName, probeKey, module.endpointUrl);
+  return testConnectionHelper(module.provider, module.modelName, probeKey, module.endpointUrl, module.apiEndpoint);
 }
 
 // --- Instruction Modules ---

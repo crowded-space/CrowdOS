@@ -93,6 +93,12 @@ export interface Message {
 
 export type ProviderType = 'google' | 'openai' | 'anthropic' | 'ollama' | 'custom';
 
+// API endpoint (wire protocol) the module speaks; '' = provider native.
+export type ApiEndpointType = 'google' | 'anthropic' | 'openai-completion' | 'openai-responses';
+
+// Reasoning depth; 'none' = provider default (no reasoning knob sent).
+export type ThinkingLevelType = 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
+
 export interface ModelProfile {
   id: string;
   label: string;
@@ -186,6 +192,8 @@ export interface ModelModule {
   provider?: ProviderType;
   apiKey?: string;
   baseUrl?: string;
+  apiEndpoint?: ApiEndpointType;
+  thinkingLevel?: ThinkingLevelType;
   temperature?: number; // 0.0 - 2.0
   maxTokens?: number;
   topP?: number;

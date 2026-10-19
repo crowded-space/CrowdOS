@@ -277,6 +277,13 @@ export class GoogleAdapter implements IProviderAdapter {
       },
     }
 
+    // Thinking level (Model Modules): 'none'/unset = provider default. Raw
+    // pass-through as thinkingLevel (Gemini 3 vocabulary) — the API validates
+    // which levels its model supports.
+    if (config.thinkingLevel && config.thinkingLevel !== 'none') {
+      (body.generationConfig as Record<string, unknown>).thinkingConfig = { thinkingLevel: config.thinkingLevel }
+    }
+
     if (request.systemPrompt) {
       body.systemInstruction = { parts: [{ text: request.systemPrompt }] }
     }

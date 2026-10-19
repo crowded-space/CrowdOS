@@ -50,7 +50,7 @@ Non-goals (other domains):
   Scope hygiene (2026-09-23): production upserts without a workspace scope throw instead of silently filing rows under the `default` folder; unscoped writes remain allowed under `VITEST` as the documented per-test fixture mechanism (`upsertScope`).
   Corruption guard (2026-09-26): every write path verifies the existing file first (`assertStoreWritable`, `:92-111`) — non-empty non-JSON or non-array content throws `{ code: "MODULE_STORE_CORRUPT", statusCode: 500 }` **before** any mutation, so a corrupt store is never overwritten; missing/empty files are created.
 - `modules/module-types.ts` → shapes. `ModelModule` (provider/modelName/apiKey nullable/endpointUrl/temperature/topP/maxOutputTokens/stopSequences/maxRecentMessages/enableCompression/compressionThreshold/**costPer1k nullable**), `InstructionModule` (base/runtimePatchable), `ToolkitModule` (tools), `ConstraintsModule` (rules/disallowedActions), `CapabilitiesModule` (skills/functionSchemas), `ProviderEngine` (5), `ModuleType`, `ModuleUnion`.
-- `modules/module-validators.ts` → zod. `providerEngineSchema` 5-value enum; per-kind create schemas with optional-array defaults; `apiKey: z.string().min(1).nullable().optional()`; `maxOutputTokens` 1–1,000,000, `maxRecentMessages` 1–10,000; all update schemas `.partial()` (inherit bounds); `paramIdSchema`.
+- `modules/module-validators.ts` → zod. `providerEngineSchema` 5-value enum; `apiEndpointSchema`/`thinkingLevelSchema` 4/7-value enums (Great Group 23b); per-kind create schemas with optional-array defaults; `apiKey: z.string().min(1).nullable().optional()`; `maxOutputTokens` 1–1,000,000, `maxRecentMessages` 1–10,000; all update schemas `.partial()` (inherit bounds); `paramIdSchema`.
 - `modules/module-gate.ts` → facade. Bare re-exports of every service port plus `moduleGate` object: `findReferencingAgent`, `findReferencingAgents`, `validateReferences`, `ensureDefaults`, and per-kind `{ list, get, create, update, remove }` namespaces (only `model` has `test`) — there is **no** `moduleGate.listAll`, `moduleGate.testConnection`, or `DEFAULT_MODEL_MODULE_ID` object entry (trimmed 2026-09-26; bare `listAllModules`/`testConnectionHelper` remain).
 
 ## Ports
@@ -60,9 +60,13 @@ Non-goals (other domains):
 - `ConstraintsModule` — constraints module record type.
 - `CapabilitiesModule` — capabilities module record type.
 - `ProviderEngine` — `google | openai | anthropic | ollama | custom` type.
+- `ApiEndpoint` — wire-protocol type: `google | anthropic | openai-completion | openai-responses` (unset = provider native). Honored at runtime only by the openai/custom providers choosing the OpenAI Responses wire protocol (see Runtime domain).
+- `ThinkingLevel` — reasoning depth type: `none | minimal | low | medium | high | xhigh | max` (`none`/unset = provider default, no knob sent).
 - `ModuleType` — `model | instruction | toolkit | constraints | capabilities` type.
 - `ModuleUnion` — any module record type.
 - `providerEngineSchema` — validator for provider engine.
+- `apiEndpointSchema` — validator for the model module wire-protocol override (Great Group 23b).
+- `thinkingLevelSchema` — validator for the model module reasoning depth.
 - `modelModuleSchema` — validator for model module creation body.
 - `updateModelModuleSchema` — validator for model module update body.
 - `instructionModuleSchema` — validator for instruction module creation body.

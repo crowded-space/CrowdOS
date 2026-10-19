@@ -205,5 +205,12 @@
       "tag": "0028_drop-approval-requests-scope-hash",
       "breakpoints": true
     }
+    ,{
+      "idx": 29,
+      "version": "7",
+      "when": 1791331200001,
+      "tag": "0029_model_module_endpoint_thinking",
+      "breakpoints": true
+    }
   ]
 }

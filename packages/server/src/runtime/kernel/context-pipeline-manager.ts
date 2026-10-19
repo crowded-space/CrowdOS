@@ -110,6 +110,8 @@ export class ContextPipelineManager {
             modelName: row.modelName,
             apiKey: storedKey || envApiKey || undefined,
             endpointUrl: row.endpointUrl ?? undefined,
+            apiEndpoint: row.apiEndpoint ?? undefined,
+            thinkingLevel: row.thinkingLevel ?? undefined,
             temperature: row.temperature ?? undefined,
             maxOutputTokens: row.maxOutputTokens ?? undefined,
             topP: row.topP ?? 0.95,

@@ -1,6 +1,6 @@
 ﻿import React, { useState } from 'react';
 import { useCrowdOSStore } from '@/stores/crowdOsStore';
-import { ModelModule, ProviderType } from '@/types/crowdOs';
+import { ModelModule, ProviderType, ApiEndpointType, ThinkingLevelType } from '@/types/crowdOs';
 import { Plus, Trash2, CheckCircle2, AlertCircle, RefreshCw, Cpu, RotateCcw } from 'lucide-react';
 import { useToast } from '@/components/ui/ToastProvider';
 import ConfirmDialog from '@/components/ui/ConfirmDialog';
@@ -25,6 +25,11 @@ export default function ModelCardsTab() {
   const [modelName, setModelName] = useState('');
   const [apiKey, setApiKey] = useState('');
   const [baseUrl, setBaseUrl] = useState('');
+  // '' = auto (provider default). The four named endpoints override the wire
+  // protocol; the server honors openai-responses for the OpenAI-dialect providers.
+  const [apiEndpoint, setApiEndpoint] = useState('');
+  // 'none' = provider default (no reasoning knob sent).
+  const [thinkingLevel, setThinkingLevel] = useState<ThinkingLevelType>('none');
   // Numeric fields keep the raw input so clearing the box never stores NaN:
   // empty means "leave unchanged on edit, default on create".
   const [temperature, setTemperature] = useState('0.7');
@@ -81,6 +86,8 @@ export default function ModelCardsTab() {
     setModelName('');
     setApiKey('');
     setBaseUrl('');
+    setApiEndpoint('');
+    setThinkingLevel('none');
     setTemperature(String(DEFAULT_TEMPERATURE));
     setMaxTokens(String(DEFAULT_MAX_TOKENS));
     setEditingId(null);
@@ -96,6 +103,8 @@ export default function ModelCardsTab() {
     // mask back would overwrite the stored credential. Blank = keep existing.
     setApiKey('');
     setBaseUrl(mod.baseUrl || '');
+    setApiEndpoint(mod.apiEndpoint || '');
+    setThinkingLevel(mod.thinkingLevel || 'none');
     setTemperature(mod.temperature != null && Number.isFinite(mod.temperature) ? String(mod.temperature) : '');
     setMaxTokens(mod.maxTokens != null && Number.isFinite(mod.maxTokens) ? String(mod.maxTokens) : '');
     setFormOpen(true);
@@ -122,6 +131,10 @@ export default function ModelCardsTab() {
       modelProfileId: modelName,
       apiKey: trimmedKey || undefined,
       baseUrl,
+      // '' = auto / 'none' = off: map both to undefined so nothing is sent
+      // and legacy rows (no columns) keep their meaning.
+      apiEndpoint: (apiEndpoint as ApiEndpointType) || undefined,
+      thinkingLevel: thinkingLevel !== 'none' ? thinkingLevel : undefined,
       temperature: tempValue,
       maxTokens: maxValue
     };
@@ -298,6 +311,40 @@ export default function ModelCardsTab() {
             </div>
           </div>
 
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 leading-snug">
+            <div className="space-y-1">
+              <label className="text-zinc-500 block font-medium text-[11px]">API endpoint</label>
+              <select
+                value={apiEndpoint}
+                onChange={(e) => setApiEndpoint(e.target.value as ApiEndpointType | '')}
+                className="w-full bg-zinc-900 border border-zinc-800 focus:border-zinc-700 focus:ring-1 focus:ring-zinc-700/40 rounded px-2.5 py-1.5 text-xs text-zinc-200 focus:outline-none cursor-pointer"
+              >
+                <option value="">Provider default</option>
+                <option value="google">Google</option>
+                <option value="anthropic">Anthropic</option>
+                <option value="openai-completion">OpenAI-Completion</option>
+                <option value="openai-responses">OpenAI-Responses</option>
+              </select>
+            </div>
+
+            <div className="space-y-1">
+              <label className="text-zinc-500 block font-medium text-[11px]">Thinking level</label>
+              <select
+                value={thinkingLevel}
+                onChange={(e) => setThinkingLevel(e.target.value as ThinkingLevelType)}
+                className="w-full bg-zinc-900 border border-zinc-800 focus:border-zinc-700 focus:ring-1 focus:ring-zinc-700/40 rounded px-2.5 py-1.5 text-xs text-zinc-200 focus:outline-none cursor-pointer"
+              >
+                <option value="none">none</option>
+                <option value="minimal">minimal</option>
+                <option value="low">low</option>
+                <option value="medium">medium</option>
+                <option value="high">high</option>
+                <option value="xhigh">xhigh</option>
+                <option value="max">max</option>
+              </select>
+            </div>
+          </div>
+
           <div className="space-y-1">
             <label className="text-zinc-500 block font-bold font-mono text-[10px]">CUSTOM BASE ENDPOINT URL (OPTIONAL)</label>
             <input
@@ -371,6 +418,18 @@ export default function ModelCardsTab() {
                   <span>Temp {mod.temperature ?? 0.7}</span>
                   <span className="text-zinc-600">•</span>
                   <span>Max Tokens {mod.maxTokens ?? 2048}</span>
+                  {mod.apiEndpoint && (
+                    <>
+                      <span className="text-zinc-600">•</span>
+                      <span>Endpoint {mod.apiEndpoint}</span>
+                    </>
+                  )}
+                  {mod.thinkingLevel && mod.thinkingLevel !== 'none' && (
+                    <>
+                      <span className="text-zinc-600">•</span>
+                      <span>Thinking {mod.thinkingLevel}</span>
+                    </>
+                  )}
                 </div>
                 {mod.baseUrl && (
                   <div className="text-[9px] font-mono text-zinc-550 italic block truncate">

@@ -51,13 +51,32 @@ export class AnthropicAdapter implements IProviderAdapter {
       messages,
     }
 
+    // Thinking level (Model Modules): Anthropic has no level enum, so levels
+    // map to thinking budget_tokens (ponytail: flat map, not a dollars SDK).
+    // 'none'/unset = provider default. While thinking is on the API requires
+    // the default temperature (1), so the knob is omitted, and max_tokens
+    // must exceed the budget.
+    const thinkingBudget: Record<string, number> = {
+      minimal: 1024,
+      low: 2048,
+      medium: 4096,
+      high: 8192,
+      xhigh: 16384,
+      max: 32000,
+    }
+    const budget = config.thinkingLevel ? thinkingBudget[config.thinkingLevel] : undefined
+    if (budget) {
+      body.thinking = { type: 'enabled', budget_tokens: budget }
+      body.max_tokens = Math.max(config.maxOutputTokens ?? 2048, budget + 1)
+    }
+
     if (request.systemPrompt) {
       body.system = request.systemPrompt
     }
 
     if (request.temperature !== undefined) {
-      body.temperature = request.temperature
-    } else if (config.temperature !== undefined) {
+      if (!budget) body.temperature = request.temperature
+    } else if (config.temperature !== undefined && !budget) {
       // ponytail: request wins, config fallback — was config-silent vs openai/ollama/custom
       body.temperature = config.temperature
     }

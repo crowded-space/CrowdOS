@@ -2330,6 +2330,8 @@ const initialSelectedMode: ComposerMode = (() => {
             provider: m.provider,
             apiKey: m.apiKey,
             baseUrl: m.endpointUrl,
+            apiEndpoint: m.apiEndpoint || undefined,
+            thinkingLevel: m.thinkingLevel || undefined,
             temperature: m.temperature,
             maxTokens: m.maxOutputTokens,
             topP: m.topP,
@@ -3213,6 +3215,8 @@ const initialSelectedMode: ComposerMode = (() => {
             modelName: mod.modelProfileId,
             apiKey: mod.apiKey || '',
             endpointUrl: mod.baseUrl || null,
+            apiEndpoint: mod.apiEndpoint || undefined,
+            thinkingLevel: mod.thinkingLevel && mod.thinkingLevel !== 'none' ? mod.thinkingLevel : undefined,
             temperature: mod.temperature ?? 0.7,
             topP: mod.topP ?? 0.9,
             maxOutputTokens: mod.maxTokens || 2048,
@@ -3239,6 +3243,10 @@ const initialSelectedMode: ComposerMode = (() => {
         if (patch.modelProfileId !== undefined) body.modelName = patch.modelProfileId;
         if (patch.apiKey !== undefined && patch.apiKey !== '') body.apiKey = patch.apiKey;
         if (patch.baseUrl !== undefined) body.endpointUrl = patch.baseUrl || null;
+        // apiEndpoint: absent = untouched; ''/null = clear to provider default.
+        if (patch.apiEndpoint !== undefined) body.apiEndpoint = patch.apiEndpoint || null;
+        // thinkingLevel: absent = untouched; 'none'/null = clear (provider default).
+        if (patch.thinkingLevel !== undefined) body.thinkingLevel = (!patch.thinkingLevel || patch.thinkingLevel === 'none') ? null : patch.thinkingLevel;
         if (patch.temperature != null && Number.isFinite(patch.temperature)) body.temperature = patch.temperature;
         if (patch.topP != null && Number.isFinite(patch.topP)) body.topP = patch.topP;
         if (patch.maxTokens != null && Number.isFinite(patch.maxTokens)) body.maxOutputTokens = patch.maxTokens;

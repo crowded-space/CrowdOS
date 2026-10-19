@@ -5,11 +5,15 @@ import type {
   ConstraintsModule,
   CapabilitiesModule,
   ProviderEngine,
+  ApiEndpoint,
+  ThinkingLevel,
   ModuleType,
   ModuleUnion
 } from "./module-types.js";
 import {
   providerEngineSchema,
+  apiEndpointSchema,
+  thinkingLevelSchema,
   modelModuleSchema,
   updateModelModuleSchema,
   instructionModuleSchema,
@@ -78,11 +82,15 @@ export type {
   ConstraintsModule,
   CapabilitiesModule,
   ProviderEngine,
+  ApiEndpoint,
+  ThinkingLevel,
   ModuleType,
   ModuleUnion
 };
 export {
   providerEngineSchema,
+  apiEndpointSchema,
+  thinkingLevelSchema,
   modelModuleSchema,
   updateModelModuleSchema,
   instructionModuleSchema,

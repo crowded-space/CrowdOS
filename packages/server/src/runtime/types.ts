@@ -207,6 +207,10 @@ export interface ModelModuleConfig {
   modelName: string
   apiKey?: string
   endpointUrl?: string
+  /** Wire protocol override (google | anthropic | openai-completion | openai-responses); unset = provider native. */
+  apiEndpoint?: string
+  /** Reasoning depth (none|minimal|low|medium|high|xhigh|max); 'none'/unset = provider default. */
+  thinkingLevel?: string
   temperature?: number
   maxOutputTokens?: number
   topP?: number

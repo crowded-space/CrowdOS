@@ -2,6 +2,10 @@ import { z } from "zod";
 
 export const providerEngineSchema = z.enum(["google", "openai", "anthropic", "ollama", "custom"]);
 
+export const apiEndpointSchema = z.enum(["google", "anthropic", "openai-completion", "openai-responses"]);
+
+export const thinkingLevelSchema = z.enum(["none", "minimal", "low", "medium", "high", "xhigh", "max"]);
+
 const nonEmptyUpdate = { message: "Update body must not be empty" };
 
 export const modelModuleSchema = z.object({
@@ -10,6 +14,8 @@ export const modelModuleSchema = z.object({
   modelName: z.string().min(1),
   apiKey: z.string().min(1).nullable().optional(),
   endpointUrl: z.string().url().nullable().optional(),
+  apiEndpoint: apiEndpointSchema.nullable().optional(),
+  thinkingLevel: thinkingLevelSchema.nullable().optional(),
   temperature: z.number().min(0).max(2),
   topP: z.number().min(0).max(1),
   maxOutputTokens: z.number().int().min(1).max(1_000_000),

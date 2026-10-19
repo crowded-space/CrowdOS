@@ -91,6 +91,7 @@ Non-goals (other domains):
 - `OpenAIAdapter` — `provider: 'openai'` adapter.
 - `OllamaAdapter` — `provider: 'ollama'` adapter.
 - `CustomAdapter` — `provider: 'custom'` OpenAI-compatible adapter.
+- `callOpenAIResponses` / `usesResponsesProtocol` (`openai-responses.ts`) — OpenAI Responses wire protocol (`POST {base}/responses`) used when a model module sets `apiEndpoint: "openai-responses"` (Modules Great Group 23b); the OpenAI and Custom adapters branch to it at the top of `call()`, all other providers keep their native wire. `thinkingLevel` maps per provider: `reasoning_effort` (chat/completions, raw pass-through), `reasoning: { effort }` (responses, temperature dropped while on), `generationConfig.thinkingConfig.thinkingLevel` (Google), `thinking.budget_tokens` level budget map (Anthropic: minimal 1024 → max 32000, temperature dropped, `max_tokens` kept above the budget); `'none'`/unset = provider default with no knob sent.
 - `ConversationalRuntime` — single-call runtime class.
 - `AgenticRuntime` — tool-loop runtime class.
 - `SwarmRuntime` — swarm runtime class.

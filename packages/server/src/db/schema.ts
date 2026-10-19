@@ -78,6 +78,8 @@ export const modelModules = pgTable("model_modules", {
   modelName: text("model_name").notNull(),
   apiKey: text("api_key"),
   endpointUrl: text("endpoint_url"),
+  apiEndpoint: text("api_endpoint"),
+  thinkingLevel: text("thinking_level"),
   temperature: real("temperature").notNull(),
   topP: real("top_p").notNull(),
   maxOutputTokens: integer("max_output_tokens").notNull(),

@@ -1,6 +1,7 @@
 import type { IProviderAdapter, ModelModuleConfig, LLMRequest, LLMResponse , RawToolCall} from '../types.js'
 import { isProviderError } from './provider-errors.js'
 import { providerFetch, type GuardedProviderCall } from './provider-http.js'
+import { callOpenAIResponses, usesResponsesProtocol } from './openai-responses.js'
 
 export class CustomAdapter implements IProviderAdapter {
   readonly provider = 'custom'
@@ -13,6 +14,9 @@ export class CustomAdapter implements IProviderAdapter {
     onChunk?: (chunk: { content: string; thoughts?: string; isThoughts?: boolean }) => void,
     options?: { signal?: AbortSignal }
   ): Promise<LLMResponse> {
+    if (usesResponsesProtocol(config)) {
+      return callOpenAIResponses(config, request, onChunk, options)
+    }
     const modelName = config.modelName
     if (!modelName) {
       throw new Error('[CustomAdapter] Missing model name. Bind the agent to a model module with an explicit model.')
@@ -61,6 +65,12 @@ export class CustomAdapter implements IProviderAdapter {
       messages,
       max_tokens: config.maxOutputTokens ?? 2048,
       temperature: config.temperature ?? 0.7,
+    }
+
+    // Thinking level (Model Modules): 'none'/unset = provider default. Raw
+    // pass-through — the endpoint validates its own vocabulary (OpenAI-compatible).
+    if (config.thinkingLevel && config.thinkingLevel !== 'none') {
+      body.reasoning_effort = config.thinkingLevel
     }
 
     if (request.tools && request.tools.length > 0) {
