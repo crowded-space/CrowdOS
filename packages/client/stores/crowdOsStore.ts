@@ -536,6 +536,12 @@ interface CrowdOSState {
   selectedSandboxRoot: 'effective' | 'workspace-local' | null;
   filesystemRevision: number;
   rightPanelView: rightPanelView;
+  // B4 live browser panel: latest frame per workspace (replaced, never
+  // appended) plus the change-only open/url/title state from the socket.
+  browserFrameByWorkspace: Record<string, { dataUrl: string; ts: number }>;
+  browserStateByWorkspace: Record<string, { open: boolean; url: string | null; title: string | null }>;
+  startBrowserWatch: (workspaceId?: string) => void;
+  stopBrowserWatch: (workspaceId?: string) => void;
   leftSidebarCollapsed: boolean;
   settingsModalOpen: boolean;
   agentProfileModalOpen: boolean;
@@ -1700,6 +1706,36 @@ const initialSelectedMode: ComposerMode = (() => {
   socket.on('diff.created' as any, handleArtifactCreated);
   socket.on('artifact.updated' as any, handleArtifactCreated);
 
+  // B4 browser panel: frames are replace-only per workspace, so a 1 fps stream
+  // costs one image in memory; the panel unmounts (unsubscribe) when hidden.
+  socket.on('browser:frame' as any, (raw: any) => {
+    const workspaceId = raw?.workspaceId;
+    if (typeof workspaceId !== 'string' || !workspaceId) return;
+    if (typeof raw.mimeType !== 'string' || typeof raw.data !== 'string') return;
+    const ts = typeof raw.ts === 'number' ? raw.ts : Date.now();
+    set((state: any) => ({
+      browserFrameByWorkspace: {
+        ...state.browserFrameByWorkspace,
+        [workspaceId]: { dataUrl: 'data:' + raw.mimeType + ';base64,' + raw.data, ts },
+      },
+    }));
+  });
+
+  socket.on('browser:state' as any, (raw: any) => {
+    const workspaceId = raw?.workspaceId;
+    if (typeof workspaceId !== 'string' || !workspaceId) return;
+    set((state: any) => ({
+      browserStateByWorkspace: {
+        ...state.browserStateByWorkspace,
+        [workspaceId]: {
+          open: raw.open === true,
+          url: typeof raw.url === 'string' ? raw.url : null,
+          title: typeof raw.title === 'string' ? raw.title : null,
+        },
+      },
+    }));
+  });
+
   socket.on('run.status_changed' as any, (raw: any) => {
     const { payload, seq } = unwrapEnvelope(raw);
     if (!payload) return;
@@ -1880,6 +1916,8 @@ const initialSelectedMode: ComposerMode = (() => {
     selectedSandboxRoot: null,
     filesystemRevision: 0,
     rightPanelView: 'roster' as rightPanelView,
+    browserFrameByWorkspace: {},
+    browserStateByWorkspace: {},
     leftSidebarCollapsed: false,
     settingsModalOpen: false,
     agentProfileModalOpen: false,
@@ -3451,6 +3489,16 @@ const initialSelectedMode: ComposerMode = (() => {
 
     // Sidebar & Modal Layout controls
     setRightPanelView: (view) => set({ rightPanelView: view }),
+    startBrowserWatch: (workspaceId) => {
+      const target = workspaceId ?? get().activeWorkspaceId;
+      if (!target) return;
+      try { socket.emit('browser:subscribe' as any, { workspaceId: target }); } catch {}
+    },
+    stopBrowserWatch: (workspaceId) => {
+      const target = workspaceId ?? get().activeWorkspaceId;
+      if (!target) return;
+      try { socket.emit('browser:unsubscribe' as any, { workspaceId: target }); } catch {}
+    },
     toggleLeftSidebar: () => set(s => ({ leftSidebarCollapsed: !s.leftSidebarCollapsed })),
     setSettingsModalOpen: (open) => set({ settingsModalOpen: open }),
     setWorkspaceSettingsTab: (tab) => set({ workspaceSettingsTab: tab }),

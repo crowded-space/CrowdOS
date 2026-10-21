@@ -35,14 +35,14 @@ Drift found and corrected this pass: (a) the native-handler enumeration named th
 * Tri-state Guard stays with executor owning the wait. Reusable-grant auto-approval keeps audit row plus both emits.
 * RWP batching preserves program order with results in request order. Timeout plus caller abort reaches handlers.
 * MCP transports are explicit: stdio supported, sse and http unimplemented. Empty-params registration against strict servers is forbidden.
-* Inline cron supports full cron or rejects non-conforming expressions. activeSchedules plus MCP sessions are durable or explicitly ephemeral with loss window.
+* Inline cron rejects expressions the local tier cannot track before persisting. Schedules are persisted in the workspace store and re-armed at boot by the Queue domain; MCP sessions are durable or explicitly ephemeral with a documented loss window.
 * mcp_servers table has a documented writer and sync path or is removed. Tools without explicit authLevel default deny or are explicitly public.
 * hardened-exec has a documented sandboxing, caps, and signal contract. Authority: Tools standard.
 ## Open gaps
 - `read_workspace_local` is the one realized native tool that no `BUILTIN_CAPABILITIES` descriptor names, so the capability index never advertises the workspace-local zone — whether L0 needs its own descriptors is unverified.
 - `CrowdTool` vs `ToolDefinition` are parallel tool interfaces with different shapes; which is canonical is unverified.
 - `safety/hardened-exec.ts` internals (sandboxing, output caps, signal handling) were not read — only the call contract is verified.
-- Inline cron fallback only understands `*/N * * * *` and `activeSchedules` is never persisted — restarts lose inline schedules.
+- Inline cron fallback only understands `*/N * * * *`; schedules are persisted in the workspace store and re-armed at boot by the Queue domain (`scheduler-local-store.ts`, `scheduler-rearm.ts`).
 - `mcp_servers` persistence is wired (TOLS-05, 2026-10-08): `registerMcpServer` upserts the row, `unregisterMcpServer` disconnects + deletes it, and boot `toolsGate.restoreMcpServers()` repopulates sessions (no DB ⇒ no-op) — server configs no longer vanish on restart.
 - `list()` shows tools without an explicit level to everyone including Level 3 — intent unverified.
 - `dispatch_agent` requires a live `globalBroker` and fails without one even in DB-backed contexts.

@@ -320,7 +320,7 @@ export function runtimeToComposerMode(runtime: string | null | undefined): Compo
   return RUNTIME_TO_COMPOSER_MODE[runtime as RuntimeType] ?? 'auto';
 }
 
-export type rightPanelView = 'roster' | 'repo' | 'jobs' | 'telemetry';
+export type rightPanelView = 'roster' | 'repo' | 'jobs' | 'telemetry' | 'browser';
 
 export interface Role {
   id: string;

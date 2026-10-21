@@ -3,9 +3,9 @@ import path from "node:path";
 import { sql } from "drizzle-orm";
 import { Guard } from "./safety/guard.js";
 import { execHardened } from "./safety/hardened-exec.js";
-import { messageGate } from "../messages/message-gate.js";
 import { globalBroker } from "../shared/sockets/register-socket-server.js";
 import { getDb } from "../shared/config/database.js";
+import { registerBrowserTools } from "./browser-tools.js";
 import type { ToolDefinition, ToolResult, ToolExecutionContext } from "./tool-types.js";
 
 // TOOL-1 · Honest tools — flag-gated rollback: when disabled the tools are
@@ -74,67 +74,6 @@ function stripTrailingSemicolons(s: string): string {
 function hasMultipleStatements(sql: string): boolean {
   const stripped = stripTrailingSemicolons(sql);
   return stripped.includes(";");
-}
-
-// Scheduler helpers — honest firing via EventBroker + persistence (DB-2)
-type ScheduleRecord = { id: string; cron: string; task: string; timer?: NodeJS.Timeout; interval?: NodeJS.Timeout; channelId?: string };
-export const activeSchedules = new Map<string, ScheduleRecord>();
-
-async function honestSchedulerEmit(
-  channelId: string,
-  task: string,
-  message: string | undefined,
-  workspaceId: string | undefined,
-): Promise<void> {
-  const effectiveChannelId = channelId || "general";
-  const content = message || `⏰ Scheduled task: ${task}`;
-  const { getSharedBroker } = await import("../event-broker/event-broker-gate.js");
-  // ponytail: single shared instance — no orphan new EventBroker(), warn-and-skip when unregistered.
-  const brokerInst = (getSharedBroker() as unknown as { emit: (t: string, p: unknown, o?: unknown) => void } | null) ?? (globalBroker as unknown as { emit: (t: string, p: unknown, o?: unknown) => void } | null);
-  if (!brokerInst) {
-    console.warn("[scheduler] dropped scheduled emit: no shared broker registered");
-    return;
-  }
-  try {
-    const persisted = await messageGate.append(
-      {
-        channelId: effectiveChannelId,
-        authorId: "system-scheduler",
-        authorName: "Scheduler",
-        authorLevel: "system",
-        authorType: "system",
-        content,
-        workspaceId: workspaceId ?? null,
-      },
-      { broker: brokerInst as never }
-    );
-    void persisted;
-  } catch {
-    const ephemeral = {
-      id: `sched-msg-${Date.now()}`,
-      channelId: effectiveChannelId,
-      authorId: "system-scheduler",
-      authorName: "Scheduler",
-      authorLevel: "system",
-      authorType: "system",
-      content,
-      mentions: [],
-      isInternalMonologue: false,
-      sequenceNumber: 0,
-      timestamp: new Date(),
-    };
-    try {
-      (brokerInst as unknown as { emit: (t: string, p: unknown, o?: unknown) => void }).emit("message:new", ephemeral as never, { channelId: effectiveChannelId });
-    } catch {}
-  }
-  try {
-    (brokerInst as unknown as { emit: (t: string, p: unknown, o?: unknown) => void }).emit("scheduled:triggered" as string, {
-      id: `sched-${Date.now()}`,
-      channelId: effectiveChannelId,
-      task,
-      triggeredAt: new Date().toISOString(),
-    } as never, { channelId: effectiveChannelId });
-  } catch {}
 }
 
 // Channel-mount-aware root: channel → category → workspace → workspace dir.
@@ -658,7 +597,7 @@ export class ToolRegistry {
             channelId: { type: "string", description: "Target channel ID (defaults to invocation channel or 'general')" },
             cron: { type: "string", description: "Optional cron expression for repeatable schedule (e.g. '*/5 * * * *'). When provided, creates a repeatable BullMQ job instead of a one-shot delay." },
             message: { type: "string", description: "Optional custom message content posted when triggered (defaults to taskDescription)" },
-            targetAgentId: { type: "string", description: "Optional target agent (reserved — message still posted; future enqueues a run)" },
+            targetAgentId: { type: "string", description: "Optional target agent to wake. When set, the schedule starts a run for this agent with the scheduled message as input." },
             workspaceId: { type: "string", description: "Workspace ID override (defaults to invocation workspace or 'default')" },
           },
           required: ["taskDescription"],
@@ -676,16 +615,63 @@ export class ToolRegistry {
             const delayRaw = args?.delaySeconds;
             const id = `sched-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
 
-            // Cron path — repeatable BullMQ job (preferred) or inline setInterval fallback.
-            // Inline fallback only supports "*/N * * * *" (else error); BullMQ path
-            // accepts what BullMQ accepts.
+            // A1 · persist BEFORE arming. An armed schedule that dies with the
+            // process must still be known to the next boot, so the row is
+            // written first; a schedule we cannot persist is not armed at all
+            // (the caller sees the error instead of a schedule that silently
+            // disappears on restart).
+            const delaySeconds = delayRaw != null ? Number(delayRaw) : 0;
+            // The cron path ignores delaySeconds, so it is validated (and the
+            // row's nextRun computed) only for one-shots.
+            if (!cronRaw && (!Number.isFinite(delaySeconds) || delaySeconds < 0)) {
+              throw new Error("delaySeconds must be a non-negative number.");
+            }
+            // Cron shape is validated before the row is written: a rejected
+            // expression must not leave an active, never-armed schedule behind.
             if (cronRaw) {
-              const INLINE_CRON_RE = /^\*\/(\d+)\s+\*\s+\*\s+\*\s+\*$/;
               const looksLikeCron = /^[\d*\/,\-\s]+$/.test(cronRaw) || /^@/.test(cronRaw);
               if (!looksLikeCron) throw new Error(`Invalid cron expression: "${cronRaw}".`);
+            }
+            const { queueGate } = await import("../queue/queue-gate.js");
+            const isBullMq = queueGate.mode() === "bullmq";
+            // Inline cron only understands "*/N * * * *" (N 1..60). Reject it
+            // BEFORE the row is written: a persisted row that can never be
+            // armed is a silent-loss schedule. BullMQ accepts what BullMQ accepts.
+            const INLINE_CRON_RE = /^\*\/(\d+)\s+\*\s+\*\s+\*\s+\*$/;
+            const inlineCron = cronRaw.match(INLINE_CRON_RE);
+            const inlineStep = inlineCron ? Number(inlineCron[1]) : 0;
+            if (cronRaw && !isBullMq && (!inlineCron || inlineStep < 1 || inlineStep > 60)) {
+              throw new Error(`Unsupported cron for inline mode (use "*/N * * * *" with N 1-60, or bullmq mode): "${cronRaw}".`);
+            }
+
+            const row = await queueGate.saveSchedule({
+              id,
+              channelId,
+              workspaceId,
+              task,
+              message: message ?? null,
+              targetAgentId: args?.targetAgentId ? String(args.targetAgentId) : null,
+              cron: cronRaw || null,
+              delaySeconds: cronRaw ? null : delaySeconds,
+            });
+
+            // A persisted row that was never booked or armed cannot fire (boot
+            // re-arm is a no-op in bullmq mode; inline arming threw), so any
+            // post-save failure must deactivate it. Pre-save failures never
+            // reach here.
+            const compensateUnarmedSchedule = async (): Promise<void> => {
               try {
-                const { queueGate } = await import("../queue/queue-gate.js");
-                if (queueGate.mode() === "bullmq") {
+                await queueGate.deactivateSchedule(row.id, row.workspaceId);
+              } catch (cleanupErr) {
+                console.warn(`[tools] failed to deactivate unbooked schedule ${row.id}`, cleanupErr);
+              }
+            };
+
+            // Cron path — repeatable BullMQ job in bullmq mode, Queue-owned
+            // inline timer otherwise (Queue recalibrates it on boot).
+            if (cronRaw) {
+              if (isBullMq) {
+                try {
                   const q = queueGate.getSchedulerQueue();
                   if (!q) throw new Error("Scheduler queue unavailable (bullmq mode but no connection).");
                   await queueGate.startSchedulerWorker();
@@ -710,78 +696,63 @@ export class ToolRegistry {
                       },
                     },
                   );
-                  activeSchedules.set(id, { id, cron: cronRaw, task, channelId });
-                  return { success: true, output: `Scheduled repeatable task "${task}" with cron "${cronRaw}" on channel ${channelId}. ID: ${id}` };
+                } catch (err) {
+                  await compensateUnarmedSchedule();
+                  throw err;
                 }
-              } catch (e) {
-                // fall through to inline interval fallback if bullmq not ready
-                const msg = e instanceof Error ? e.message : String(e);
-                console.warn("[scheduler] bullmq cron schedule failed, falling back to inline interval:", msg);
+                return { success: true, output: `Scheduled repeatable task "${task}" with cron "${cronRaw}" on channel ${channelId}. ID: ${id}` };
               }
-              // Inline fallback only supports "*/N * * * *" — anything else errors
-              // (no silent 60s fallback).
-              const m = cronRaw.match(INLINE_CRON_RE);
-              if (!m) throw new Error(`Unsupported cron for inline fallback (use "*/N * * * *" or bullmq mode): "${cronRaw}".`);
-              const effectiveIntervalMs = Math.min(Number(m[1]) * 60_000, 2_147_483_647);
-              const interval = setInterval(() => {
-                void honestSchedulerEmit(channelId, task, message, workspaceId).catch((err) => {
-                  console.error("[scheduler] inline emit failed", err);
-                });
-              }, effectiveIntervalMs);
-              // Unref so tests/process can exit; still fires
-              (interval as unknown as { unref?: () => void }).unref?.();
-              activeSchedules.set(id, { id, cron: cronRaw, task, channelId, interval });
-              return { success: true, output: `Scheduled repeatable task "${task}" with cron "${cronRaw}" (inline fallback, every ${effectiveIntervalMs}ms) on channel ${channelId}. ID: ${id}` };
+              try {
+                await queueGate.armSchedule(row);
+              } catch (err) {
+                await compensateUnarmedSchedule();
+                throw err;
+              }
+              return { success: true, output: `Scheduled repeatable task "${task}" with cron "${cronRaw}" (inline, every ${inlineStep} min) on channel ${channelId}. ID: ${id}` };
             }
 
-            // One-shot delayed path
-            const delaySeconds = delayRaw != null ? Number(delayRaw) : 0;
-            if (!Number.isFinite(delaySeconds) || delaySeconds < 0) throw new Error("delaySeconds must be a non-negative number.");
+            // One-shot delayed path (delaySeconds validated above)
             // Clamp: setTimeout overflows past 2^31-1 ms (~24.8d) and fires in 1ms.
             const delayMs = Math.min(Math.max(0, Math.round(delaySeconds * 1000)), 2_147_483_647);
 
-            try {
-              const { queueGate } = await import("../queue/queue-gate.js");
-              if (queueGate.mode() === "bullmq") {
+            if (isBullMq) {
+              let job: { id?: unknown };
+              try {
                 const q = queueGate.getSchedulerQueue();
-                if (q) {
-                  await queueGate.startSchedulerWorker();
-                  const job = await q.add(
-                    "scheduled:trigger",
-                    {
-                      id,
-                      channelId,
-                      task,
-                      message,
-                      workspaceId,
-                      targetAgentId: args?.targetAgentId ? String(args.targetAgentId) : undefined,
-                      createdAt: new Date().toISOString(),
-                    },
-                    {
-                      delay: delayMs,
-                      jobId: id,
-                      removeOnComplete: { age: 3600 },
-                      removeOnFail: { age: 3600 },
-                    },
-                  );
-                  activeSchedules.set(id, { id, cron: `in ${delaySeconds}s`, task, channelId });
-                  return { success: true, output: `Scheduled task "${task}" in ${delaySeconds}s on channel ${channelId}. Job ${String(job.id)} ID: ${id}` };
-                }
+                if (!q) throw new Error("Scheduler queue unavailable (bullmq mode but no connection).");
+                await queueGate.startSchedulerWorker();
+                job = await q.add(
+                  "scheduled:trigger",
+                  {
+                    id,
+                    channelId,
+                    task,
+                    message,
+                    workspaceId,
+                    targetAgentId: args?.targetAgentId ? String(args.targetAgentId) : undefined,
+                    createdAt: new Date().toISOString(),
+                  },
+                  {
+                    delay: delayMs,
+                    jobId: id,
+                    removeOnComplete: { age: 3600 },
+                    removeOnFail: { age: 3600 },
+                  },
+                );
+              } catch (err) {
+                await compensateUnarmedSchedule();
+                throw err;
               }
-            } catch (e) {
-              const msg = e instanceof Error ? e.message : String(e);
-              console.warn("[scheduler] bullmq delayed schedule failed, falling back to inline timer:", msg);
+              return { success: true, output: `Scheduled task "${task}" in ${delaySeconds}s on channel ${channelId}. Job ${String(job.id)} ID: ${id}` };
             }
 
-            // Inline honest fallback: real setTimeout that emits via EventBroker (not console.log)
-            const timer = setTimeout(() => {
-              activeSchedules.delete(id);
-              void honestSchedulerEmit(channelId, task, message, workspaceId).catch((err) => {
-                console.error("[scheduler] inline emit failed", err);
-              });
-            }, delayMs);
-            (timer as unknown as { unref?: () => void }).unref?.();
-            activeSchedules.set(id, { id, cron: `in ${delaySeconds}s`, task, channelId, timer });
+            // Inline: the Queue domain owns the timer and the persisted nextRun.
+            try {
+              await queueGate.armSchedule(row);
+            } catch (err) {
+              await compensateUnarmedSchedule();
+              throw err;
+            }
             return { success: true, output: `Scheduled task "${task}" in ${delaySeconds}s on channel ${channelId}. ID: ${id}` };
           } catch (err: unknown) {
             const msg = err instanceof Error ? err.message : String(err);
@@ -1508,6 +1479,11 @@ export class ToolRegistry {
         }
       },
     });
+
+    // 20. Browser: browser_navigate / browser_screenshot — L0+L1. The session
+    // and the page belong to the Browser domain; these handlers only map tool
+    // args/ctx onto its gate.
+    registerBrowserTools(this);
   }
 }
 

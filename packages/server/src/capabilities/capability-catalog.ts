@@ -204,6 +204,21 @@ export const BUILTIN_CAPABILITIES: readonly CapabilityDescriptor[] = [
     tools: [],
     source: "builtin",
   },
+  {
+    id: "browse.web",
+    domain: "observation",
+    summary: "Drive a real browser and capture what it shows.",
+    tools: [
+      "browser_navigate",
+      "browser_screenshot",
+      "browser_click",
+      "browser_type",
+      "browser_read",
+      "browser_wait",
+      "browser_state",
+    ],
+    source: "builtin",
+  },
 
   // ── Knowledge ────────────────────────────────────────────────
   {

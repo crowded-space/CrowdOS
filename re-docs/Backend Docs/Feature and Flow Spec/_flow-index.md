@@ -22,6 +22,7 @@ Map only. Truth lives in the doc + its linked domain specs. Statuses mirror each
 | <Durable runs and checkpoints.md> | aligned | <../Domain Spec/Runs.md> |
 | <Queue delivery and housekeeping.md> | aligned | <../Domain Spec/Queue.md> |
 | <Tool registry, Guard and MCP.md> | aligned | <../Domain Spec/Tools.md> |
+| <Browser control flow.md> | aligned | <../Domain Spec/Browser.md> <../Domain Spec/Tools.md> <../Domain Spec/Artifacts.md> |
 | <Web search fan-out.md> | aligned | <../Domain Spec/SearchProviders.md> |
 | <Legacy L3 dispatch (retired).md> | legacy | <../Domain Spec/Agents.md> |
 | <Memory vault and embeddings.md> | aligned | <../Domain Spec/Memories.md> |

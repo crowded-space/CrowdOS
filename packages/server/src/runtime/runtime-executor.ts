@@ -2,6 +2,7 @@
 import type { EventBroker } from '../event-broker/event-broker-gate.js'
 import { runsGate } from '../runs/runs-gate.js'
 import type { RunRow, RunStatus } from '../runs/runs-gate.js'
+import { redactLogPayload } from '../shared/core/redact.js'
 import type { IRuntime, RuntimeResult, RuntimeType } from './types.js'
 import { ContextAssembler } from './kernel/context-assembler.js'
 import { interpret } from './interpreter.js'
@@ -179,7 +180,7 @@ export class RuntimeExecutor {
               )
               return;
             } catch (err) {
-              if (attempt === 2) console.error('[RuntimeExecutor] token usage lost after 3 attempts:', err);
+              if (attempt === 2) console.error('[RuntimeExecutor] token usage lost after 3 attempts:', redactLogPayload({ message: err instanceof Error ? err.message : String(err), stack: err instanceof Error ? err.stack : undefined }));
               else await new Promise((r) => setTimeout(r, 500 * (attempt + 1)));
             }
           }

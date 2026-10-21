@@ -1,7 +1,12 @@
 import { describe, it, expect, vi, beforeEach, afterEach, afterAll } from "vitest";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { ToolExecutor } from "./tool-executor.js";
-import { toolRegistry, activeSchedules } from "./tool-registry.js";
+import { toolRegistry } from "./tool-registry.js";
+import { queueGate } from "../queue/queue-gate.js";
 import { EventBroker, setSharedBroker, resetSharedBrokerForTests } from "../event-broker/event-broker-gate.js";
+import { setLocalStoreDirForTests } from "../shared/core/local-file.js";
 import * as databaseMod from "../shared/config/database.js";
 import * as seqMod from "../shared/core/sequence-number.js";
 import * as ulidMod from "../shared/core/ulid.js";
@@ -102,7 +107,7 @@ describe("TOOL-1 · Honest tools — query_database", () => {
     delete process.env.QUERY_DATABASE_ENABLED;
     delete process.env.SYSTEM_SCHEDULER_ENABLED;
     setFakeRows([]);
-    activeSchedules.clear();
+    queueGate.disarmAll();
     vi.restoreAllMocks();
     setupHonestSpies();
   });
@@ -111,11 +116,7 @@ describe("TOOL-1 · Honest tools — query_database", () => {
     vi.restoreAllMocks();
     clearQueries();
     setFakeRows([]);
-    activeSchedules.forEach((rec) => {
-      if (rec.timer) clearTimeout(rec.timer);
-      if (rec.interval) clearInterval(rec.interval as unknown as NodeJS.Timeout);
-    });
-    activeSchedules.clear();
+    queueGate.disarmAll();
   });
 
   it("returns true rows capped at 100 (honest, not canned)", async () => {
@@ -244,14 +245,16 @@ describe("TOOL-1 · Honest tools — query_database", () => {
 });
 
 describe("TOOL-1 · Honest tools — system_scheduler", () => {
+  let storeDir: string;
+
   beforeEach(() => {
+    // A1: the tool now persists the schedule, so the test writes into an
+    // isolated store instead of the live sandbox.
+    storeDir = mkdtempSync(join(tmpdir(), "crowdos-honest-sched-"));
+    setLocalStoreDirForTests(storeDir);
     clearQueries();
     setFakeRows([]);
-    activeSchedules.forEach((rec) => {
-      if (rec.timer) clearTimeout(rec.timer);
-      if ((rec as unknown as { interval?: NodeJS.Timeout }).interval) clearInterval((rec as unknown as { interval?: NodeJS.Timeout }).interval!);
-    });
-    activeSchedules.clear();
+    queueGate.disarmAll();
     delete process.env.QUERY_DATABASE_ENABLED;
     delete process.env.SYSTEM_SCHEDULER_ENABLED;
     process.env.QUEUE_MODE = "inline";
@@ -266,12 +269,10 @@ describe("TOOL-1 · Honest tools — system_scheduler", () => {
   afterEach(() => {
     vi.restoreAllMocks();
     resetSharedBrokerForTests();
-    activeSchedules.forEach((rec) => {
-      if (rec.timer) clearTimeout(rec.timer);
-      if ((rec as unknown as { interval?: NodeJS.Timeout }).interval) clearInterval((rec as unknown as { interval?: NodeJS.Timeout }).interval!);
-    });
-    activeSchedules.clear();
+    queueGate.disarmAll();
     delete process.env.QUEUE_MODE;
+    setLocalStoreDirForTests(null);
+    rmSync(storeDir, { recursive: true, force: true });
   });
 
   it("fires on time via EventBroker (inline honest, broker spy within 700ms)", async () => {
@@ -295,7 +296,7 @@ describe("TOOL-1 · Honest tools — system_scheduler", () => {
     spy.mockRestore();
   }, 10000);
 
-  it("one-shot returns schedule id and creates activeSchedules entry", async () => {
+  it("one-shot returns schedule id and persists an armed row", async () => {
     const res = await ToolExecutor.execute("agent-probe", "system_scheduler", {
       delaySeconds: 5,
       taskDescription: "id-test",
@@ -305,16 +306,13 @@ describe("TOOL-1 · Honest tools — system_scheduler", () => {
     const match = res.output.match(/ID:\s*(sched-[^\s]+)/);
     expect(match).not.toBeNull();
     const id = match![1];
-    expect(activeSchedules.has(id)).toBe(true);
-    expect(activeSchedules.get(id)?.task).toBe("id-test");
-    expect(activeSchedules.get(id)?.channelId).toBe("ch-1");
-    // cleanup
-    const rec = activeSchedules.get(id);
-    if (rec?.timer) clearTimeout(rec.timer);
-    activeSchedules.delete(id);
+    const rows = await queueGate.listActiveSchedules();
+    const row = rows.find((r) => r.id === id);
+    expect(row).toMatchObject({ task: "id-test", channelId: "ch-1", isActive: true });
+    expect(new Date(row!.nextRun as string).getTime()).toBeGreaterThan(Date.now());
   });
 
-  it("cron repeatable returns schedule id (inline fallback)", async () => {
+  it("cron repeatable returns schedule id (inline arm)", async () => {
     const res = await ToolExecutor.execute("agent-probe", "system_scheduler", {
       taskDescription: "cron-inline-test",
       cron: "*/5 * * * *",
@@ -326,11 +324,8 @@ describe("TOOL-1 · Honest tools — system_scheduler", () => {
     const match = res.output.match(/ID:\s*(sched-[^\s]+)/);
     expect(match).not.toBeNull();
     const id = match![1];
-    expect(activeSchedules.has(id)).toBe(true);
-    // cleanup interval
-    const rec = activeSchedules.get(id);
-    if ((rec as unknown as { interval?: NodeJS.Timeout })?.interval) clearInterval((rec as unknown as { interval?: NodeJS.Timeout }).interval!);
-    activeSchedules.delete(id);
+    const rows = await queueGate.listActiveSchedules();
+    expect(rows.find((r) => r.id === id)?.cron).toBe("*/5 * * * *");
   });
 
   it("tool is registered and classified as side-effect", async () => {

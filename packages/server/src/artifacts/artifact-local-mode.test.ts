@@ -1,7 +1,7 @@
 // create_artifact with no DATABASE_URL: the verb writes vfs/artifacts files
 // and serves the local index — never the "DATABASE_URL is not set" failure.
 // Gate-level round-trip plus the exact tool-dispatch path from the report.
-import { existsSync, readFileSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
@@ -67,6 +67,33 @@ describe("create_artifact without DATABASE_URL (local mode)", () => {
     expect(readFileSync(abs, "utf8")).toBe("# Channel Summary");
   });
 
+  it("writes a base64 data-URI body as binary and plain text as utf8", async () => {
+    const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0xff]);
+    const binary = await artifactsGate.create({
+      workspaceId: WS,
+      producerAgent: "agent-1",
+      runId: "run-binary-1",
+      type: "file",
+      path: "browser-screenshot.png",
+      contentRef: "data:image/png;base64," + png.toString("base64"),
+      metadata: {},
+    });
+    expect(binary.path).toMatch(/\.png$/);
+    const onDisk = readFileSync(join(dir, WS, binary.path!));
+    expect(onDisk.subarray(0, 4)).toEqual(Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+    expect(onDisk.equals(png)).toBe(true);
+
+    const text = await artifactsGate.create({
+      workspaceId: WS,
+      producerAgent: "agent-1",
+      runId: "run-binary-1",
+      type: "report",
+      contentRef: "plain utf8 body",
+      metadata: {},
+    });
+    expect(readFileSync(join(dir, WS, text.path!), "utf8")).toBe("plain utf8 body");
+  });
+
   it("round-trips get/list through the local index with DB listing parity", async () => {
     const body = "x".repeat(600);
     const created = await artifactsGate.create({
@@ -91,6 +118,26 @@ describe("create_artifact without DATABASE_URL (local mode)", () => {
 
     const byRun = await artifactsGate.listByRun("run-local-1");
     expect(byRun.map((r) => r.id)).toContain(created.id);
+  });
+
+  it("is idempotent for a caller dedupeKey: same row, no second file (local tier)", async () => {
+    const create = (dedupeKey: string) =>
+      artifactsGate.create({
+        workspaceId: WS,
+        producerAgent: "agent-1",
+        runId: "run-local-dedupe",
+        type: "report",
+        contentRef: "# once",
+        metadata: {},
+        dedupeKey,
+      });
+
+    const first = await create("k-1");
+    const second = await create("k-1");
+
+    expect(second.id).toBe(first.id);
+    expect((second.metadata as Record<string, unknown>).dedupeKey).toBe("k-1");
+    expect(readdirSync(join(dir, WS, "vfs", "artifacts", "run-local-dedupe"))).toHaveLength(1);
   });
 
   it("dispatches the create_artifact tool end to end with no database", async () => {

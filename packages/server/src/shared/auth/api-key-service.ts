@@ -125,10 +125,13 @@ async function findActiveKeys(): Promise<(ApiKeyRecord & { keyHash: string; keyH
     const revoked = (r as any).revokedAt;
     if (revoked) revokedIds.add(r.id);
   }
-  const byId = new Map<string, ApiKeyRecord & { keyHash: string }>();
+  const byId = new Map<string, ApiKeyRecord & { keyHash: string; keyHint?: string | null }>();
   for (const r of [...pgRows, ...localRows]) {
     if (revokedIds.has(r.id) || byId.has(r.id)) continue;
-    byId.set(r.id, { id: r.id, label: r.label ?? null, role: r.role, keyHash: (r as any).keyHash });
+    // keyHint must survive the map: verifyKey's O(1) fast path looks the row up by
+    // hint (see verifyKey). Dropping it here made every row hint-less, so every
+    // authenticated request scrypt-hashed EVERY stored key.
+    byId.set(r.id, { id: r.id, label: r.label ?? null, role: r.role, keyHash: (r as any).keyHash, keyHint: (r as any).keyHint ?? null });
   }
   return [...byId.values()];
 }

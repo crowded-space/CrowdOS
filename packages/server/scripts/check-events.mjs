@@ -55,6 +55,13 @@ const NON_BROKER_SOCKET_EVENTS = new Set([
   "approval:list",
   "approval:list:result",
   "approval:decided",
+  // Socket-direct live view (B3): one sink per workspace, never broker contract
+  // events. Subscribe/unsubscribe are whitelisted now because the server handler
+  // lands before the B4 client emitter (else "handled-never-emitted" fires).
+  "browser:frame",
+  "browser:state",
+  "browser:subscribe",
+  "browser:unsubscribe",
   "proxyReqWs",
 ]);
 

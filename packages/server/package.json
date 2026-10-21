@@ -21,8 +21,8 @@
     "gen:env-doc": "tsx scripts/generate-env-doc.mjs"
   },
   "dependencies": {
-    "@crowdspace/shared": "*",
     "@crowdspace/pi-core": "*",
+    "@crowdspace/shared": "*",
     "@fastify/cors": "^11.2.0",
     "@fastify/rate-limit": "^11.2.0",
     "bullmq": "^6.2.2",
@@ -30,6 +30,7 @@
     "drizzle-orm": "^0.45.2",
     "fastify": "^5.8.5",
     "ioredis": "^6.0.0",
+    "playwright": "1.60.0",
     "postgres": "^3.4.9",
     "socket.io": "^4.8.1",
     "zod": "^4.3.6"

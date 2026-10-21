@@ -87,7 +87,11 @@ export default function WorkspacePortal() {
 
   const existingNames = useMemo(() => (workspaces as Workspace[]).map((w) => w.name), [workspaces]);
   const nameCheck = validateWorkspaceName(workspaceName, existingNames);
-  const showNameError = workspaceName.trim().length > 0 && !nameCheck.ok;
+  // Discriminate with an explicit literal comparison, not `!nameCheck.ok`:
+  // the client tsconfig has no strictNullChecks, and truthiness narrowing of
+  // a union by a boolean-literal discriminant does not apply without it.
+  const showNameError = workspaceName.trim().length > 0 && nameCheck.ok === false;
+  const nameErrorText = nameCheck.ok === false ? workspaceNameError(nameCheck.reason) : '';
 
   const trimmedDb = dbUrl.trim();
   const dbShapeInvalid = trimmedDb.length > 0 && !isPostgresUrl(trimmedDb);
@@ -203,7 +207,7 @@ export default function WorkspacePortal() {
       const current = (workspaces as Workspace[]).find((w) => w.id === renaming.id);
       return n !== current?.name;
     }));
-    if (!check.ok) {
+    if (check.ok === false) {
       setRenaming({ ...renaming, error: workspaceNameError(check.reason) });
       return;
     }
@@ -324,7 +328,7 @@ export default function WorkspacePortal() {
                 <label htmlFor="portal-ws-name" className="block text-[13px] font-medium text-zinc-300">Workspace name</label>
                 <input id="portal-ws-name" ref={nameInputRef} value={workspaceName} onChange={(e) => setWorkspaceName(e.target.value)} placeholder="e.g. Swarm Research Core" autoComplete="off" aria-describedby="portal-ws-name-hint" aria-invalid={showNameError} className={INPUT} />
                 <p id="portal-ws-name-hint" className="text-[11px] text-zinc-600">Stored locally as a folder with this name.</p>
-                {showNameError && <p role="alert" className="text-[11px] text-rose-300">{workspaceNameError((validateWorkspaceName(workspaceName, existingNames) as { ok: false; reason: 'empty' | 'too-short' | 'too-long' | 'duplicate' | 'invalid-chars' }).reason)}</p>}
+                {showNameError && <p role="alert" className="text-[11px] text-rose-300">{nameErrorText}</p>}
               </div>
               <fieldset className="mt-5">
                 <legend className="text-[13px] font-medium text-zinc-300">Workspace mark</legend>

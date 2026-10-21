@@ -6,14 +6,14 @@
 //     vfs/.crowdos/workspace.json    runtime only (artifactDir + fsMounts)
 //     vfs/.crowdos/categories.json   ONLY place for categories
 //     vfs/.crowdos/channels.json     ONLY place for channels
-//     vfs/agents/<agentId>.json      one file per agent, single object
+//     vfs/agents/<sanitized agentId>.json  one file per agent, single object
 //     vfs/artifacts/                 plain files, no index
 //     vfs/src/
 //
 // The global workspaces.json stays the portal/hub index and wins on load; the
 // folder copy is a mirror rewritten from it. `vfs/` is a config sandbox and is
 // never a mount target.
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -50,6 +50,16 @@ import {
 } from "./workspace-paths.js";
 
 let base: string;
+
+/**
+ * Agent roster file name for an id. Mirrors `safeAgentFileId` in
+ * src/agents/agent-local-store.ts (every char outside [A-Za-z0-9_-] becomes
+ * "_"), then ".json" — the store keeps that helper private, so the rule is
+ * restated here and pinned by the tests below.
+ */
+function agentFileName(agentId: string): string {
+  return agentId.replace(/[^A-Za-z0-9_-]/g, "_") + ".json";
+}
 
 beforeEach(() => {
   base = mkdtempSync(join(tmpdir(), "crowdos-canon-"));
@@ -154,9 +164,9 @@ describe("canon per-workspace store scoping", () => {
 });
 
 describe("canon agent storage: one file per agent", () => {
-  it("writes <agentId>.json and reads it back by id", async () => {
+  it("writes <sanitized agentId>.json and reads it back by id", async () => {
     const agent = await localSeedDefaultAgent("ws-1");
-    const file = join(resolveWorkspaceAgentsDir("ws-1"), agent.id + ".json");
+    const file = join(resolveWorkspaceAgentsDir("ws-1"), agentFileName(agent.id));
     expect(existsSync(file)).toBe(true);
 
     const raw = JSON.parse(readFileSync(file, "utf8"));
@@ -177,12 +187,18 @@ describe("canon agent storage: one file per agent", () => {
   });
 
   it("keeps rosters isolated per workspace", async () => {
-    await localSeedDefaultAgent("ws-a");
-    await localSeedDefaultAgent("ws-b");
+    const a = await localSeedDefaultAgent("ws-a");
+    const b = await localSeedDefaultAgent("ws-b");
     expect((await localListAgents({ workspaceId: "ws-a" })).length).toBe(1);
     expect((await localListAgents({ workspaceId: "ws-b" })).length).toBe(1);
-    expect(existsSync(join(resolveWorkspaceAgentsDir("ws-a"), "agent-default-assistant.json"))).toBe(true);
-    expect(existsSync(join(resolveWorkspaceAgentsDir("ws-b"), "agent-default-assistant.json"))).toBe(true);
+    // AGT-016: the seed id is namespaced per workspace, so two workspaces
+    // never share an agents.id PK (and never share a file name).
+    expect(a.id).toBe("ws-a:default-assistant");
+    expect(b.id).toBe("ws-b:default-assistant");
+    expect(a.id).not.toBe(b.id);
+    // Each workspace folder holds exactly its own roster file.
+    expect(readdirSync(resolveWorkspaceAgentsDir("ws-a"))).toEqual(["ws-a_default-assistant.json"]);
+    expect(readdirSync(resolveWorkspaceAgentsDir("ws-b"))).toEqual(["ws-b_default-assistant.json"]);
   });
 });
 

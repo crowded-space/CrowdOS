@@ -8,6 +8,7 @@ Map only. Truth lives in gates + their doc. Statuses:
 | Agents | `agents/agent-gate.ts` | `Agents.md` | draft |
 | Approvals | `approvals/approval-gate.ts` | `Approvals.md` | draft |
 | Artifacts | `artifacts/artifacts-gate.ts` | `Artifacts.md` | draft |
+| Browser | `Browser/browser-gate.ts` | `Browser.md` | draft |
 | Channels | `channels/channel-gate.ts` | `Channels.md` | draft |
 | ChannelMounts | `channel-mounts/channel-mount-gate.ts` | `ChannelMounts.md` | draft |
 | Capabilities | `capabilities/capabilities-gate.ts` | `Capabilities.md` | draft |

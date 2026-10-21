@@ -5,7 +5,7 @@ import {
   Trash2, Send, PlusCircle, Smile,
   Paperclip, FileText, Image as ImageIcon, X,
   ChevronDown, ChevronUp,
-  Terminal, FileCode2, ClipboardList, BarChart3, ArrowDown, Sparkles, Square, Menu,
+  Terminal, FileCode2, ClipboardList, BarChart3, Globe, ArrowDown, Sparkles, Square, Menu,
   Maximize2, Minimize2, FolderOpen, Telescope, CalendarDays
 } from 'lucide-react';
 import { useCrowdOSStore } from '@/stores/crowdOsStore';
@@ -938,7 +938,7 @@ export default function MainChatArea({ onOpenSearch, onOpenSidebar }: MainChatAr
           </button>
 
 
-          {/* Desktop Right Sidebar Selector — segmented: roster/repo/jobs/telemetry panel */}
+          {/* Desktop Right Sidebar Selector — segmented: roster/repo/jobs/telemetry/browser panel */}
           <div className="hidden xl:flex items-center bg-zinc-900 border border-zinc-800 rounded-xl p-1 ml-1 gap-1" role="tablist" aria-label="Right panel view">
             <button
               id="right-panel-tab-roster"
@@ -987,6 +987,18 @@ export default function MainChatArea({ onOpenSearch, onOpenSidebar }: MainChatAr
               title="Show telemetry panel"
             >
               <BarChart3 size={14} aria-hidden="true" />
+            </button>
+            <button
+              id="right-panel-tab-browser"
+              role="tab"
+              aria-selected={rightPanelView === 'browser'}
+              aria-controls="right-panel-browser"
+              onClick={() => setRightPanelView('browser')}
+              aria-label="Show browser panel"
+              className={`w-9 h-8 rounded-lg transition-colors cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500/30 flex items-center justify-center ${rightPanelView === 'browser' ? 'text-indigo-300 bg-indigo-500/15 border border-indigo-500/20' : 'text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800 border border-transparent active:bg-zinc-800'}`}
+              title="Show browser panel"
+            >
+              <Globe size={14} aria-hidden="true" />
             </button>
           </div>
         </div>

@@ -103,6 +103,21 @@ export async function localGetArtifact(
   return null;
 }
 
+/**
+ * ART-6: find a row of this workspace by its `dedupeKey` (stored in
+ * `metadata`), so a keyed retry is idempotent on the file tier too.
+ */
+export async function localFindArtifactByDedupeKey(
+  workspaceId: string,
+  dedupeKey: string,
+): Promise<ArtifactRow | null> {
+  const rows = await readJsonArray<LocalArtifactRow>(INDEX_FILE, workspaceId);
+  const found = rows.find(
+    (r) => (r.metadata as Record<string, unknown> | undefined)?.dedupeKey === dedupeKey,
+  );
+  return found ? revive(found) : null;
+}
+
 async function localScan(opts: {
   workspaceId?: string | null;
   runId?: string | null;

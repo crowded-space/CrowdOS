@@ -29,6 +29,15 @@ export function channelRoom(workspaceId: string, channelId: string): string {
   return ROOM_PREFIX + workspaceId + ":channel:" + channelId;
 }
 
+/**
+ * Live-view room: `browser:<workspaceId>`. Deliberately NOT under ROOM_PREFIX:
+ * `isWorkspaceRoom` treats any `ws:*` room without `:channel:` as a workspace
+ * room, so `ws:<id>:browser` would receive the global-event fan-out too.
+ */
+export function browserRoom(workspaceId: string): string {
+  return "browser:" + workspaceId;
+}
+
 /** True for the workspace-room shape (`ws:<id>`, no `:channel:` segment). */
 export function isWorkspaceRoom(room: string): boolean {
   return room.startsWith(ROOM_PREFIX) && !room.includes(":channel:");

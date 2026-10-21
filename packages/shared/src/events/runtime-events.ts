@@ -210,6 +210,21 @@ export interface EventEnvelope<TType extends BrokerEventType = BrokerEventType> 
 
 export type SocketServerToClientEvents = {
   [TType in BrokerEventType]: (payload: BrokerEventMap[TType] | EventEnvelope<TType>) => void;
+} & {
+  // B3 live view: socket-direct events, mirrored here so the client can type
+  // against this file (the server broker contract does not own them).
+  "browser:frame": (frame: {
+    workspaceId: string;
+    mimeType: "image/jpeg";
+    data: string;
+    ts: number;
+  }) => void;
+  "browser:state": (state: {
+    workspaceId: string;
+    open: boolean;
+    url: string | null;
+    title: string | null;
+  }) => void;
 };
 
 export interface SocketClientToServerEvents {
@@ -220,6 +235,8 @@ export interface SocketClientToServerEvents {
   "run:compensation:undo": (payload: { runId: string; compId: string }) => void;
   "approval:decide": (payload: { approvalId: string; decision: "approved" | "denied"; scope?: string | null }) => void;
   "approval:list": (payload: { runId: string }) => void;
+  "browser:subscribe": (payload: { workspaceId?: string }) => void;
+  "browser:unsubscribe": (payload: { workspaceId?: string }) => void;
 }
 
 export const RuntimeEvents = {

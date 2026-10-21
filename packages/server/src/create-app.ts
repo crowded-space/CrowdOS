@@ -30,6 +30,7 @@ import { runsGate } from "./runs/runs-gate.js";
 import { toolsGate } from "./tools/tools-gate.js";
 import { startApprovalSweeper } from "./approvals/approval-sweeper.js";
 import { queueGate } from "./queue/queue-gate.js";
+import { browserGate } from "./Browser/browser-gate.js";
 import { eventsGate } from "./events/events-gate.js";
 import { installProcessGuards } from "./shared/core/process-guards.js";
 
@@ -398,6 +399,18 @@ export async function buildServer(opts?: BuildServerOptions): Promise<BuiltServe
       }, 30_000);
       outboxTimer.unref?.();
     } catch {}
+    // A2: re-arm persisted schedules against the wall clock. The Queue domain
+    // owns timer recalibration; a failure is reported, never fatal to boot.
+    void queueGate.rearmSchedules().then(
+      (report) => {
+        if (report.skipped.length > 0) {
+          app.log.warn({ report }, "[Scheduler] boot re-arm skipped some rows");
+        } else {
+          app.log.info({ report }, "[Scheduler] boot re-arm complete");
+        }
+      },
+      (err) => app.log.error({ err }, "[Scheduler] boot re-arm failed"),
+    );
   } else if (isBullMqApi) {
     // Single owner = worker: API never runs local sweep timers in bullmq
     // mode; the maintenance worker owns orphan/maintenance sweeps via
@@ -461,6 +474,13 @@ export async function buildServer(opts?: BuildServerOptions): Promise<BuiltServe
   async function stop(): Promise<void> {
     if (stopped) return;
     stopped = true;
+    try {
+      queueGate.disarmAll();
+    } catch {}
+    // A headed browser window must never outlive the server process.
+    try {
+      await browserGate.closeAll();
+    } catch {}
     try {
       (io as unknown as { engine?: { close?: () => void } })?.engine?.close?.();
     } catch {}

@@ -1,9 +1,10 @@
 import { randomUUID } from "node:crypto";
 import { promises as fs } from "node:fs";
 import { join } from "node:path";
-import { eq, desc, lt, and, sql } from "drizzle-orm";
+import { eq, desc, lt, and, inArray, sql } from "drizzle-orm";
 import { getDb, isConnectionError, isDatabaseConfigured } from "../shared/config/database.js";
 import { artifacts } from "../db/schema.js";
+import type { BrokerEventMap } from "../event-broker/event-broker-gate.js";
 // Gate-only: the Workspace domain exposes the artifact-dir resolution ports, so
 // Artifacts never reaches past its facade (Domain Facade Standard §2).
 import {
@@ -14,6 +15,7 @@ import {
   toFolderRelative,
 } from "../workspace/workspace-gate.js";
 import {
+  localFindArtifactByDedupeKey,
   localGetArtifact,
   localListArtifactsByRun,
   localListArtifactsByWorkspace,
@@ -83,24 +85,75 @@ export async function writeArtifactFile(input: CreateArtifactInput, artifactId: 
     const dir = join(resolveArtifactsDir(folder, artifactDir), runSegment);
     await fs.mkdir(dir, { recursive: true });
     const file = join(dir, artifactId + "." + extensionFor(input.type, input.path));
-    await fs.writeFile(file, body, "utf8");
+    // A base64 data URI is a BINARY body (browser screenshots): decode before
+    // writing. Writing it as utf8 would store the base64 text, not the image.
+    const dataUri = /^data:[^;,]+;base64,(.*)$/s.exec(body);
+    if (dataUri) {
+      await fs.writeFile(file, Buffer.from(dataUri[1], "base64"));
+    } else {
+      await fs.writeFile(file, body, "utf8");
+    }
     return toFolderRelative(file, folder);
   } catch {
     return null;
   }
 }
 
+/**
+ * Row metadata for an artifact: the caller's own metadata plus the domain
+ * keys. `sourcePath` keeps the caller-supplied path (ART-8) so `path` is
+ * always the folder-relative pointer the writer produced; `dedupeKey` (ART-6)
+ * makes a keyed retry findable.
+ */
+function buildArtifactMetadata(input: CreateArtifactInput, written: string | null): Record<string, unknown> {
+  const metadata: Record<string, unknown> = { ...(input.metadata ?? {}) };
+  if (input.dedupeKey) metadata.dedupeKey = input.dedupeKey;
+  if (input.path) metadata.sourcePath = input.path;
+  if (written) metadata.artifactPath = written;
+  else delete metadata.artifactPath;
+  return metadata;
+}
+
+/**
+ * ART-6: find an existing artifact of this workspace by its `dedupeKey`.
+ * The key lives in `metadata` (no dedicated column), scoped per workspace.
+ */
+async function findArtifactByDedupeKey(workspaceId: string, dedupeKey: string): Promise<ArtifactRow | null> {
+  if (!isDatabaseConfigured()) return localFindArtifactByDedupeKey(workspaceId, dedupeKey);
+  try {
+    const db = getDb();
+    const [row] = await db
+      .select()
+      .from(artifacts)
+      .where(and(eq(artifacts.workspaceId, workspaceId), sql`${artifacts.metadata}->>'dedupeKey' = ${dedupeKey}`))
+      .limit(1);
+    return (row as unknown as ArtifactRow) ?? null;
+  } catch (err) {
+    if (isConnectionError(err)) return localFindArtifactByDedupeKey(workspaceId, dedupeKey);
+    throw err;
+  }
+}
+
 export async function createArtifact(input: CreateArtifactInput): Promise<ArtifactRow> {
+  // ART-6: a caller-supplied dedupeKey makes create idempotent per workspace:
+  // a retry returns the existing row and writes no second file.
+  if (input.dedupeKey) {
+    const existing = await findArtifactByDedupeKey(input.workspaceId, input.dedupeKey);
+    if (existing) return existing;
+  }
   const id = "art_" + randomUUID().slice(0, 8) + "_" + Date.now().toString(36);
   const now = new Date();
   // Local-first (§17): the file body + local index ARE the commit, so
   // create_artifact works with no DATABASE_URL. The DB row is a best-effort
-  // replica. Canon: generation defaults to the workspace artifactDir. An
-  // explicit input.path is respected as the stored reference, but the body
-  // still lands in the workspace own artifact folder (never in a user
-  // repository).
+  // replica. Canon: generation defaults to the workspace artifactDir — the
+  // body always lands in the workspace own artifact folder (never in a user
+  // repository). A caller-supplied input.path is NOT the stored pointer: it
+  // is kept in metadata.sourcePath (ART-8).
   const written = await writeArtifactFile(input, id);
-  const storedPath = written ?? input.path ?? null;
+  // ART-8: `path` is the path the writer actually produced (null when the
+  // write failed); the caller-supplied path is kept in metadata.sourcePath.
+  const storedPath = written ?? null;
+  const metadata = buildArtifactMetadata(input, written);
   const localRow: ArtifactRow = {
     id,
     workspaceId: input.workspaceId,
@@ -108,7 +161,7 @@ export async function createArtifact(input: CreateArtifactInput): Promise<Artifa
     artifactType: input.type,
     path: storedPath,
     semanticTags: input.semanticTags ?? [],
-    metadata: written ? { ...(input.metadata ?? {}), artifactPath: written } : (input.metadata ?? {}),
+    metadata,
     createdAt: now,
     runId: input.runId ?? null,
     beforeHash: input.beforeHash ?? null,
@@ -134,7 +187,7 @@ export async function createArtifact(input: CreateArtifactInput): Promise<Artifa
       artifactType: input.type as any,
       path: storedPath,
       semanticTags: input.semanticTags ?? [],
-      metadata: written ? { ...(input.metadata ?? {}), artifactPath: written } : (input.metadata ?? {}),
+      metadata,
       createdAt: now,
       runId: input.runId ?? null,
       beforeHash: input.beforeHash ?? null,
@@ -166,8 +219,15 @@ async function emitArtifactEvents(input: CreateArtifactInput, artifactId: string
     if (!broker) {
       console.warn("[artifacts] dropped artifact.created/updated: no shared broker registered");
     } else {
-      const payload = { runId: input.runId ?? null, artifactId, artifactType: input.type, workspaceId: input.workspaceId } as never;
-      const opts = { channelId: (input.metadata as Record<string, unknown> | undefined)?.channelId as string | undefined } as never;
+      const payload: BrokerEventMap["artifact.created"] = {
+        runId: input.runId ?? null,
+        artifactId,
+        artifactType: input.type,
+        workspaceId: input.workspaceId,
+      };
+      // ART-13: narrow at runtime — only a STRING channelId is forwarded.
+      const rawChannelId = (input.metadata as Record<string, unknown> | undefined)?.channelId;
+      const opts: { channelId?: string } = typeof rawChannelId === "string" ? { channelId: rawChannelId } : {};
       if (input.type === "diff") {
         broker.emit("diff.created", payload, opts);
       } else {
@@ -233,10 +293,24 @@ export async function listArtifactsByWorkspace(workspaceId: string, opts?: { lim
   }
 }
 
+/** ART-5: max ids per delete statement, so a big expired backlog never pins
+ *  locks on one unbounded DELETE. */
+const PURGE_BATCH_SIZE = 500;
+
 export async function purgeExpiredArtifacts(before: Date): Promise<number> {
   const db = getDb();
-  const purged = await db.delete(artifacts).where(lt(artifacts.createdAt, before)).returning({ id: artifacts.id });
-  return purged.length;
+  let purged = 0;
+  for (;;) {
+    const expired = await db
+      .select({ id: artifacts.id })
+      .from(artifacts)
+      .where(lt(artifacts.createdAt, before))
+      .limit(PURGE_BATCH_SIZE);
+    if (expired.length === 0) break;
+    await db.delete(artifacts).where(inArray(artifacts.id, expired.map((row) => row.id)));
+    purged += expired.length;
+  }
+  return purged;
 }
 
 const DAY_MS = 24 * 60 * 60 * 1000;

@@ -1,6 +1,7 @@
 ﻿import type { FastifyInstance } from "fastify";
 
 import { agentRoutes } from "./agents.js";
+import { browserRoutes } from "./browser.js";
 import { healthRoutes } from "./health.js";
 import { metricsRoutes } from "./metrics.js";
 import { moduleRoutes } from "./modules.js";
@@ -59,4 +60,9 @@ export async function registerRoutes(app: FastifyInstance) {
   // the grants list/revoke API 404s). Same class of defect the ChannelMounts
   // registration comment above documents.
   await app.register(safetyRoutes);
+  // Browser transport: live-view state/action/open/close for the operator panel.
+  // Without this registration every browser panel endpoint 404s while the B3
+  // unit tests (which wire their own app) still pass — same defect class as the
+  // ChannelMounts comment above.
+  await app.register(browserRoutes);
 }

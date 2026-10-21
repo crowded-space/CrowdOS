@@ -378,6 +378,13 @@ function assembleOnce() {
     workspaceId: "default",
     userInput: "run the hot path probe",
     runtimeType: "conversational" as never,
+    // The pipeline has no default model config any more: an agent whose
+    // model module cannot be resolved is a configuration error
+    // (MODEL_MODULE_NOT_CONFIGURED), not a fallback. Resolving the module is
+    // a cached lookup outside the hot path this file measures, so the
+    // resolved config is handed in explicitly and the query budget asserted
+    // below (messages, memory notes) stays exactly the one under test.
+    modelConfig: { provider: "custom", modelName: "perf-fake-model" },
   });
 }
 

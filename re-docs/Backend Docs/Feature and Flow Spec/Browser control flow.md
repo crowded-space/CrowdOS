@@ -1,0 +1,79 @@
+# Browser control flow
+> Type: Flow · Status: aligned · Updated: 2026-10-20
+
+## Intent
+An agent can open a public web page, operate it (click, type, read, wait), and capture what it shows, using a real browser that CrowdOS owns. The browser keeps a persistent, per-workspace profile (so signed-in state survives), runs headed so the operator can see it, and serializes every command per workspace so two tool calls never drive one page at once.
+
+## Architectural decision
+The Browser domain owns the process and the page; Tools owns only the verbs. `browser_navigate`/`browser_screenshot`/`browser_click`/`browser_type`/`browser_read`/`browser_wait`/`browser_state` are thin handlers that resolve the workspace, validate arguments, and call `browserGate` — the tool registry never touches Playwright or the session map `[Observed]` (`tools/browser-tools.ts`, `Browser/browser-gate.ts`). The session is a lazy singleton per workspace behind one promise chain: first command opens the persistent context, later commands queue behind it, and a rejected command releases the chain without poisoning it `[Observed]` (`Browser/browser-session.ts`). All page-driving verbs ride that one queue; the state probe uses `enqueueIfOpen`, which only observes an existing session and never creates or launches one `[Observed]` (`Browser/browser-session.ts`). URL policy is the existing shared guard rather than a browser-local allowlist `[Observed]` (`shared/core/url-guard.ts`). Screenshots become ordinary `file` artifacts: the PNG travels as a base64 data-URI `contentRef`, and the Artifacts writer decodes it to binary bytes, so no new artifact type or schema change is needed `[Observed]` (`Browser/browser-service.ts`, `artifacts/artifacts-repository.ts`). The live view follows the same ownership rule: the Browser domain owns a refcounted 1 fps JPEG loop, and the socket server injects one sink per workspace (`Browser/browser-stream.ts`, `shared/sockets/register-socket-server.ts`). Operator control is HTTP: `routes/browser.ts` adapts state/open/action/close onto gate ports, and the socket events stay socket-direct (not broker contract events) `[Observed]`.
+
+## How it works
+1. The runtime's tool loop dispatches one of the seven browser verbs through `ToolExecutor.execute`/`executeBatch`. Tools' normal authorization applies: every definition is `authLevelRequired: 1`; navigate/click/type are `side-effect` (click/type `moderate`, navigate `safe`), while screenshot/read/wait/state are `safe`/`read` (`tools/browser-tools.ts`).
+2. The handler resolves `workspaceId` from `ctx.workspaceId ?? "default"` and validates its arguments first: navigate needs a non-empty `url`, click a non-empty `selector`, type a non-empty `selector` and `text`, wait at least one of `selector`/`loadState`.
+3. `browserGate.navigate` runs `isSafeHttpUrl(url)`. Non-http(s), loopback, and private-range URLs — including trailing-dot `localhost.`, `::1`/`::`, and IPv4-mapped IPv6 — are rejected with a guard-naming error before the session map is touched (`Browser/browser-service.ts`).
+4. `enqueueCommand` registers (or reuses) the workspace session entry synchronously, captures it, and chains the task. When the chain reaches the task, that captured session lazily calls the launcher with `resolveBrowserProfileDir(workspaceId)` — `<workspaceFolder>/vfs/.crowdos/browser/profile` — if its handle is still null. Because the map is never re-read, a close that already removed the entry cannot make a queued command open a second browser.
+5. `createPlaywrightLauncher` dynamically imports `playwright`, calls `chromium.launchPersistentContext(profileDir, { headless: false })`, and returns the context's first page (or a new page) plus a `close()` that closes the context (`Browser/browser-launcher.ts`).
+6. Navigate: `page.goto(url, { waitUntil: "domcontentloaded", timeout: 30000 })`, then read `page.url()` and `page.title()` and return them to the handler.
+7. Screenshot: `page.screenshot({ type: "png" })` returns bytes; the service base64-encodes them and calls `artifactsGate.create` with `type: "file"`, an explicit `browser-screenshot-<ts>.png` path, the data-URI `contentRef`, and `{ url, title }` metadata.
+8. Artifacts writes the decoded PNG under `<workspaceFolder>/vfs/artifacts/<runId>/<artifactId>.png`, commits the local index row, and emits artifact events. The gate result is `{ artifactId, path, url, title }`; `path` is the folder-relative pointer (empty if the write failed).
+9. Click/type: `page.click(selector)`/`page.fill(selector, text)` on the queued page, then the page's `url()` + `title()` are returned.
+10. Read: `page.innerText("body")`; text longer than 20000 characters is sliced to exactly 20000 and flagged `truncated: true`.
+11. Wait: with a selector, `page.waitForSelector(selector, { state: "visible", timeout })`; otherwise `page.waitForLoadState(loadState ?? "load", { timeout })`. The timeout defaults to 30000 ms.
+12. State: `enqueueIfOpen` runs the probe only when the workspace session exists and its handle is live. A missing session — or one closed while the probe waited — returns `{ open: false, url: null, title: null }`; a live page returns `{ open: true, url, title }`. The launcher is never called.
+13. The handler returns a `ToolResult`: navigate/click/type/wait `{ success: true, output: JSON.stringify({ url, title }) }`; read adds `text`/`truncated`; state returns `{ open, url, title }`; screenshot the URL/title pair plus `artifacts: [{ type: "file", path, mimeType: "image/png" }]`. Any throw becomes `{ success: false, error }` in the neighbors' style.
+14. Operator open: `browserGate.open` queues a launch (or reuses the live session) and returns the page's current `{ url, title }` without navigating — `about:blank` until an operator or agent navigates.
+15. Live view subscribe: the socket handler `browser:subscribe` resolves the workspace (payload or identity), runs the same `canJoinWorkspaceRoom` admission as `workspace:join`, joins room `browser:<workspaceId>`, and refcounts the socket id per workspace. The first subscriber calls `browserGate.subscribeStream(workspaceId, sink)`; the sink emits `browser:frame` / `browser:state` once to the room.
+16. Live view tick: the domain loop fires immediately and then every 1000 ms. `enqueueIfOpen` captures `page.url()`, `page.title()`, and `page.screenshot({ type: "jpeg", quality: 60 })` only when a session exists; a missing session emits one `{ open: false, url: null, title: null }` with no frame and no launch. `{open,url,title}` is emitted only when it changes, and a tick already in flight makes the next interval skip.
+17. Live view stop: every `browser:unsubscribe` leaves room `browser:<workspaceId>`; the refcount only stops the loop at zero, where the workspace entry is removed and `browserGate.unsubscribeStream` clears the interval. A capture still in flight when the entry is deleted is discarded by the entry-identity check, so it cannot reach the room or a new subscriber's sink. The last subscriber's disconnect does the same teardown (streams are not runs). A resubscribe starts a fresh entry and re-emits state immediately.
+18. Operator control: `POST /api/browser/action` dispatches click/type/navigate onto the same gate ports (and therefore the same single actor); `POST /api/browser/close` closes the session best-effort and never 500s.
+19. On server stop, `create-app.ts` calls `browserGate.closeAll()` next to the scheduler disarm. Each workspace's queue is drained so in-flight commands finish before its context closes (bounded by page operation timeouts); per-session close failures are swallowed so shutdown continues.
+20. Operator takeover flow: the operator opens the Browser panel, presses Open (`POST /api/browser/open`, `about:blank`), logs into the site manually in the headed browser, then drives it from the live image: clicks are scaled from rendered pixels to viewport pixels client-side and posted as `clickAt`, and the text box posts `typeText` into the focused field. Both ride the same single actor as agent tools, so control hands off without interleaving.
+21. Login wall: when a page shows a login form, the agent must stop and post a message to the operator instead of entering credentials. The operator signs in through the panel, then the agent resumes with the selector-based verbs.
+
+## HTTP surface (B3+B4)
+| Method | Path | Body | Result |
+| ---- | ---- | ---- | ---- |
+| GET | `/api/browser/state` | query `{ workspaceId?: string }` | `200 { open, url, title }`; never launches |
+| POST | `/api/browser/open` | `{ workspaceId?: string; url?: string }` | with `url`: guard-checked navigate; without: open on the current page. `200 { ok: true, url, title }` or `400 { ok: false, error }` |
+| POST | `/api/browser/action` | `{ workspaceId?: string; action: "click" \| "type" \| "navigate" \| "clickAt" \| "typeText"; selector?: string; text?: string; url?: string; x?: number; y?: number }` | click needs `selector`; type needs `selector` + `text`; navigate needs `url`; clickAt needs finite `x`/`y` ≥ 0; typeText needs non-empty `text`. `200 { ok: true, url, title }` or `400 { ok: false, error }` |
+| POST | `/api/browser/close` | `{ workspaceId?: string }` | `200 { ok: true }` (best-effort; close never throws) |
+
+## Components involved
+| Domain spec | Role |
+| ---- | ---- |
+| <../Domain Spec/Browser.md> | Owns the persistent headed Chromium context, the per-workspace page, the single-actor queue, and the profile directory |
+| <../Domain Spec/Tools.md> | Owns the seven tool definitions, authorization level, schemas, handler error shape, and the effect/danger classification |
+| <../Domain Spec/Artifacts.md> | Owns the artifact row + PNG file, binary decode of the data-URI body, listing, and retention |
+| <../Domain Spec/Workspace.md> | Owns the workspace folder that contains the `vfs/.crowdos` state (via Shared path resolution) |
+| <../Domain Spec/Capabilities.md> | Declares `browse.web` in the `observation` domain, realized by the seven tool ids |
+
+## Current state
+Real: per-workspace persistent headed Chromium (lazy Playwright import), single-actor command queue with rejection isolation, guard-checked navigation with a 30s `domcontentloaded` wait, PNG screenshot to a binary artifact on disk + row, click/fill, capped body-text read, selector/load-state wait, a non-launching state probe, tool registration at L1, capability descriptor `browse.web`, and server-stop teardown. B3 adds an operator surface: open-without-navigation, the four HTTP routes, and a refcounted 1 fps JPEG live view over socket-direct `browser:frame` / `browser:state` in room `browser:<workspaceId>`; the loop stops on the last unsubscribe or disconnect. Tests use a fake launcher and fake timers only; no automated test launches a browser. The socket wiring is covered by types + `lint:gates` (event whitelist) and the stream/route unit tests, not by a live socket-client test. Operator checkpoint for B3: a socket client subscribed to a workspace sees ~1 fps frames while the browser is open, and `POST /api/browser/close` stops the frames with one closed state. B4 adds the client Browser panel (lazy sidebar view, socket-streamed frames, Open/Close, URL bar, image click, focused typing) and the two takeover action variants backed by `browserGate.clickAt`/`typeText`; the panel is unit-tested through the store slice and routes, but live image-click fidelity still depends on the manual headed checkpoint (real page + real coordinates).
+
+## Alignment notes
+`none found` — sampled claims verified: guard-before-launch and goto options (`browser-service.ts`), queue start/end order and rejection isolation (`browser-session.ts`), launcher lazy import and persistent headed context (`browser-launcher.ts`), base64 → binary write (`artifacts-repository.ts`), registration metadata (`browser-tools.ts`), teardown call site (`create-app.ts`). Tests cover each sampled path.
+
+## User Decision:
+
+## Target Contract
+> Status: Target. Flow-scoped view. Authority stays in linked domain specs.
+* A tool call must never drive a browser page concurrently with another call in the same workspace. 2026-10-20 (B1): satisfied by the single-actor queue.
+* Unsafe URL rejection happens before any browser work. 2026-10-20 (B1): satisfied; the guard runs before session lookup.
+* A failed command must not wedge the workspace's browser. 2026-10-20 (B1): satisfied; the chain continues after a rejection.
+* A browser window must not outlive the server process. 2026-10-20 (B1): satisfied for clean shutdown — `closeAll` drains each workspace queue before closing, and a command queued before close can no longer re-open a browser (verifier-found leak fixed 2026-10-20, regression-tested); hard-kill behavior remains a gap.
+* Screenshot output must be durable and retrievable through the existing artifact surface. 2026-10-20 (B1): satisfied; `file` artifact + binary body, no schema change.
+* Interaction verbs must run on the same single actor as navigation, so page state cannot interleave. 2026-10-20 (B2): satisfied; click/type/read/wait all go through `enqueueCommand`.
+* A state read must answer "closed" without opening a browser, including when the session closes mid-queue. 2026-10-20 (B2): satisfied by `enqueueIfOpen` (no create + entry-identity re-check).
+* Read output entering model context must be bounded without lying about it. 2026-10-20 (B2): satisfied; 20000-character cap with an explicit `truncated` flag.
+* The gate ports must be callable outside the tool loop (B4 operator control). 2026-10-20 (B2): satisfied; plain functions on `browserGate` with no tool-specific types.
+* The operator must be able to watch the page live without paying CPU when nobody watches. 2026-10-20 (B3): satisfied; the loop starts on the first subscriber, is refcounted per workspace, captures 1 fps only while the session is open, and stops on the last unsubscribe/disconnect.
+* State changes (url/title/open) must not arrive every frame. 2026-10-20 (B3): satisfied; `browser:state` is emitted on change only, and a closed browser emits one closed state instead of a frame per tick.
+* Live-view transport must not ride the broker or duplicate frames per viewer. 2026-10-20 (B3): satisfied; `browser:frame`/`browser:state` are socket-direct, one sink per workspace broadcasts once to `browser:<workspaceId>`.
+* Operator control must use the same single actor as agent tools. 2026-10-20 (B3): satisfied; `POST /api/browser/action` calls the same `browserGate.click/type/navigate` ports (and so `enqueueCommand`).
+
+## Open gaps
+- The control verbs are one-shot; there is no scripted multi-step sequence that holds the queue across steps.
+- One page per workspace; no tabs, no per-run isolation of page state.
+- A hard process kill can leave the headed Chromium child running; unverified.
+- Profile growth is unbounded (no retention for `browser/profile`).
+- The manual headed smoke (real navigation + screenshot + server stop) is an operator checkpoint, not automated.

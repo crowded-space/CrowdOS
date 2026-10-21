@@ -475,6 +475,69 @@ describe("SEC-2 · socket trust & room isolation", () => {
   });
 });
 
+describe("B3 · live-view room refcount", () => {
+  it("browser subscribe refcounts streams and unsubscribe leaves the room", { timeout: 20_000 }, async () => {
+    const harness = await setup();
+    // Spy after setup(): it resets modules, so the gate must come from the
+    // same fresh graph the socket server imported.
+    const browserModule = await import("../../Browser/browser-gate.js");
+    const subscribeSpy = vi
+      .spyOn(browserModule.browserGate, "subscribeStream")
+      .mockImplementation(() => {});
+    const unsubscribeSpy = vi
+      .spyOn(browserModule.browserGate, "unsubscribeStream")
+      .mockImplementation(() => {});
+    try {
+      const connect = connectOf(harness);
+      seedWorkspace(harness, "ws-b3");
+      const room = "browser:ws-b3";
+      const roomSize = () => harness.io.sockets.adapter.rooms.get(room)?.size ?? 0;
+
+      const a = await connect();
+      const b = await connect();
+      expect(a.error).toBeUndefined();
+      expect(b.error).toBeUndefined();
+
+      const eventsA: string[] = [];
+      const eventsB: string[] = [];
+      a.client.onAny((type) => eventsA.push(type));
+      b.client.onAny((type) => eventsB.push(type));
+
+      a.client.emit("browser:subscribe", { workspaceId: "ws-b3" });
+      await waitFor(() => roomSize() === 1 && subscribeSpy.mock.calls.length === 1);
+
+      b.client.emit("browser:subscribe", { workspaceId: "ws-b3" });
+      await waitFor(() => roomSize() === 2);
+      // Second viewer reuses the loop: still one subscribeStream call.
+      expect(subscribeSpy).toHaveBeenCalledTimes(1);
+
+      const beforeA = eventsA.length;
+      a.client.emit("browser:unsubscribe", { workspaceId: "ws-b3" });
+      await waitFor(() => roomSize() === 1);
+      // A non-last unsubscribe stops nothing.
+      expect(unsubscribeSpy).not.toHaveBeenCalled();
+
+      // A left the room: a room broadcast no longer reaches it, B still gets it.
+      harness.io.to(room).emit("browser:state", {
+        workspaceId: "ws-b3",
+        open: true,
+        url: "https://example.com/",
+        title: "Example",
+      });
+      await waitFor(() => eventsB.includes("browser:state"));
+      await sleep(150);
+      expect(eventsA.slice(beforeA).filter((t) => t === "browser:frame" || t === "browser:state")).toHaveLength(0);
+
+      b.client.emit("browser:unsubscribe", { workspaceId: "ws-b3" });
+      await waitFor(() => roomSize() === 0);
+      expect(unsubscribeSpy).toHaveBeenCalledTimes(1);
+    } finally {
+      subscribeSpy.mockRestore();
+      unsubscribeSpy.mockRestore();
+    }
+  });
+});
+
 describe("SEC-5 fold-in · socket message rate limiter", () => {
   it("defaults to capacity 15 / refill 5 per second", async () => {
     delete process.env.SOCKET_MSG_RATE_CAPACITY;

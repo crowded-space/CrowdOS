@@ -7,6 +7,7 @@ import { useShallow } from 'zustand/react/shallow';
 import { BarChart3, Database, Coins, Activity, Network } from 'lucide-react';
 import AgentRow from './AgentRow';
 const FileExplorer = lazy(() => import('./FileExplorer'));
+const BrowserPanel = lazy(() => import('./BrowserPanel'));
 import { JobsView } from './JobsView';
 import { OperationsInbox } from './OperationsInbox';
 import { isStoppableRunStatus } from './run-stoppability';
@@ -256,6 +257,15 @@ export default function RightSidebar() {
         </div>
       );
     }
+    if (rightPanelView === 'browser') {
+      return (
+        <div id="right-panel-browser" role="tabpanel" aria-labelledby="right-panel-tab-browser" className="w-[260px] bg-[#0c0c0e]/95 border-l border-zinc-900 flex flex-col h-full overflow-hidden select-none shrink-0">
+          <Suspense fallback={<div className="p-4 text-xs text-zinc-500 animate-pulse">Loading browser...</div>}>
+            <BrowserPanel />
+          </Suspense>
+        </div>
+      );
+    }
     return (
       <div id="right-panel-roster" role="tabpanel" aria-labelledby="right-panel-tab-roster" className="w-[260px] bg-[#0c0c0e]/95 border-l border-zinc-900 flex flex-col h-full overflow-hidden select-none shrink-0">
         {renderRoster()}
@@ -311,6 +321,22 @@ export default function RightSidebar() {
           className="w-[260px] bg-[#0c0c0e]/95 border-l border-zinc-900 flex flex-col h-full overflow-hidden select-none shrink-0"
         >
           {renderTelemetry()}
+        </motion.div>
+      ) : rightPanelView === 'browser' ? (
+        <motion.div
+          key="browser-panel"
+          initial={{ opacity: 0, x: 20 }}
+          animate={{ opacity: 1, x: 0 }}
+          exit={{ opacity: 0, x: -20 }}
+          transition={{ duration: 0.15 }}
+          id="right-panel-browser"
+          role="tabpanel"
+          aria-labelledby="right-panel-tab-browser"
+          className="w-[260px] bg-[#0c0c0e]/95 border-l border-zinc-900 flex flex-col h-full overflow-hidden select-none shrink-0"
+        >
+          <Suspense fallback={<div className="p-4 text-xs text-zinc-500 animate-pulse">Loading browser...</div>}>
+            <BrowserPanel />
+          </Suspense>
         </motion.div>
       ) : (
         <motion.div

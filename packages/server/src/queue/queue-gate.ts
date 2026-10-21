@@ -5,8 +5,22 @@ import { scheduleMaintenance as _scheduleMaintenance } from "./repeatables.js";
 import { stopRunWorker as _stopRunWorker } from "./run-worker.js";
 import { stopMaintenanceWorker as _stopMaintenanceWorker } from "./maintenance-worker.js";
 import { startSchedulerWorker as _startSchedulerWorker, stopSchedulerWorker as _stopSchedulerWorker } from "./scheduler-worker.js";
+import {
+  localSaveSchedule as _saveSchedule,
+  localListActiveSchedules as _listActiveSchedules,
+  localUpdateNextRun as _updateNextRun,
+  localDeactivateSchedule as _deactivateSchedule,
+} from "./scheduler-local-store.js";
+import type { scheduleInput, scheduleRow } from "./scheduler-local-store.js";
+import {
+  armSchedule as _armSchedule,
+  rearmSchedules as _rearmSchedules,
+  disarmAll as _disarmAll,
+} from "./scheduler-rearm.js";
+import type { rearmReport } from "./scheduler-rearm.js";
 
 export type { EnqueueRunInput };
+export type { scheduleInput, scheduleRow, rearmReport };
 
 async function healthCheck(): Promise<{ mode: string; connected: boolean; waiting: number; failed: number }> {
   const mode = _getQueueMode();
@@ -104,4 +118,16 @@ export const queueGate = {
   getFailedJobs: _getFailedJobs,
   getSchedulerQueue: _getSchedulerQueue,
   startSchedulerWorker: _startSchedulerWorker,
+  // A1 · scheduler durability (local file tier): a schedule is written here
+  // before it is armed, so an armed timer that dies with the process is
+  // still known to the next boot.
+  saveSchedule: _saveSchedule,
+  listActiveSchedules: _listActiveSchedules,
+  updateNextRun: _updateNextRun,
+  deactivateSchedule: _deactivateSchedule,
+  // A2 · in-memory timers live in the Queue domain: boot re-arm recalibrates
+  // persisted rows, and shutdown disarms every local timer.
+  armSchedule: _armSchedule,
+  rearmSchedules: _rearmSchedules,
+  disarmAll: _disarmAll,
 };

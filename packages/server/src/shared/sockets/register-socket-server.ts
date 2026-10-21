@@ -9,11 +9,13 @@ import { getSharedBroker, setSharedBroker } from "../../event-broker/event-broke
 import { MentionParser } from "../core/mention-parser.js";
 import { AgentRegistry } from "../../agents/agent-gate.js";
 import { channelGate } from "../../channels/channel-gate.js";
+import { browserGate } from "../../Browser/browser-gate.js";
 import { messageGate } from "../../messages/message-gate.js";
 import { isLoopbackPeer, resolveSocketIdentity } from "./socket-auth.js";
 import type { SocketIdentity } from "./socket-auth.js";
 import { createSocketRateLimiter } from "./rate-limiter.js";
 import {
+  browserRoom,
   channelRoom,
   workspaceRoom,
   isWorkspaceRoom,
@@ -35,6 +37,7 @@ import type {
 import type { AgentProfile } from "../../agents/agent-gate.js";
 import { logMetric, logWarn } from "../core/structured-log.js";
 import { queueGate } from "../../queue/queue-gate.js";
+import { activeRuns, beginRun, endRun, runKey, DuplicateRunError } from "../core/active-runs.js";
 
 const mentionParser = new MentionParser();
 const agentRegistry = new AgentRegistry();
@@ -87,51 +90,7 @@ export const _socketsInternals: {
     ),
 };
 
-interface ActiveRunEntry {
-  controller: AbortController;
-  startedAt: number;
-}
-
-/**
- * In-flight run cancellation registry (HM2). Keyed `${channelId}:${agentId}`.
- * Aborting is user-initiated only (user:cancel event) — never on socket
- * disconnect, so background work survives browser closes.
- *
- * CAN-1: the value is an ARRAY of runs, not a single controller — a second
- * trigger for the same key no longer overwrites (and strands) the first
- * controller. Entries are removed when their run settles.
- */
-const activeRuns = new Map<string, ActiveRunEntry[]>();
-
-function runKey(channelId: string, agentId: string): string {
-  return `${channelId}:${agentId}`;
-}
-
-/** Raised when a trigger arrives for a channel:agent pair that is already running. */
-export class DuplicateRunError extends Error {
-  readonly code = 'already_running' as const;
-
-  constructor(agentName: string) {
-    super(`@${agentName} is already running in this channel — previous request still in progress.`);
-    this.name = 'DuplicateRunError';
-  }
-}
-
-function beginRun(key: string, agentName: string): ActiveRunEntry {
-  const queue = activeRuns.get(key);
-  if (queue && queue.length > 0) throw new DuplicateRunError(agentName);
-  const entry: ActiveRunEntry = { controller: new AbortController(), startedAt: Date.now() };
-  activeRuns.set(key, [...(queue ?? []), entry]);
-  return entry;
-}
-
-function endRun(key: string, entry: ActiveRunEntry): void {
-  const queue = activeRuns.get(key);
-  if (!queue) return;
-  const next = queue.filter((e) => e !== entry);
-  if (next.length > 0) activeRuns.set(key, next);
-  else activeRuns.delete(key);
-}
+export { DuplicateRunError };
 
 // Agent execution is handled by RuntimeExecutor
 
@@ -394,6 +353,10 @@ export function registerSocketServer(httpServer: HttpServer, broker: EventBroker
   // SEC-2: per-socket token bucket for user-content events (see rateLimiter.ts).
   const messageLimiter = createSocketRateLimiter();
   _socketsInternals.limiter = messageLimiter;
+
+  // B3 live view: workspaceId -> socket ids currently subscribed. One capture
+  // loop per workspace (not per socket), otherwise N viewers emit N frames.
+  const browserStreamSubs = new Map<string, Set<string>>();
 
   // SEC-2 handshake trust boundary: identity is derived server-side from the
   // credential in socket.handshake.auth (or Authorization/x-api-key header).
@@ -720,6 +683,54 @@ export function registerSocketServer(httpServer: HttpServer, broker: EventBroker
       if (!wid || typeof wid !== "string") return;
       try { socket.leave(workspaceRoom(wid)); } catch {}
       if (socket.data.workspaceId === wid) socket.data.workspaceId = undefined;
+    });
+
+    // B3 live view. The room is `browser:<workspaceId>` — deliberately outside
+    // the `ws:` scheme so the global-event fan-out cannot reach it. The 1 fps
+    // loop is refcounted per workspace: the sink broadcasts once to the room,
+    // so a second viewer reuses the same capture instead of doubling frames.
+    socket.on("browser:subscribe", async (data: { workspaceId?: string }) => {
+      const epoch = ((socket.data as any).browserEpoch ?? 0) + 1;
+      (socket.data as any).browserEpoch = epoch;
+      const workspaceId =
+        typeof data?.workspaceId === "string" ? data.workspaceId : identity.workspaceId;
+      if (!(await canJoinWorkspaceRoom(workspaceId))) {
+        deny("workspace_not_found", `Unknown or inaccessible workspace ${workspaceId}`);
+        return;
+      }
+      // The await opens a window: disconnect cleanup cannot see a subscription
+      // that was not registered yet, so re-check the socket and the epoch.
+      if (!socket.connected || (socket.data as any).browserEpoch !== epoch) return;
+      socket.join(browserRoom(workspaceId));
+      let subscribers = browserStreamSubs.get(workspaceId);
+      if (!subscribers) {
+        subscribers = new Set();
+        browserStreamSubs.set(workspaceId, subscribers);
+      }
+      const firstSubscriber = subscribers.size === 0;
+      subscribers.add(socket.id);
+      if (firstSubscriber) {
+        browserGate.subscribeStream(workspaceId, {
+          onFrame: (frame) => io.to(browserRoom(frame.workspaceId)).emit("browser:frame", frame),
+          onState: (state) => io.to(browserRoom(state.workspaceId)).emit("browser:state", state),
+        });
+      }
+    });
+
+    socket.on("browser:unsubscribe", (data: { workspaceId?: string }) => {
+      const workspaceId =
+        typeof data?.workspaceId === "string" ? data.workspaceId : identity.workspaceId;
+      // Bump before the refcount work so a subscribe still waiting on the
+      // workspace-access await can no longer commit.
+      (socket.data as any).browserEpoch = ((socket.data as any).browserEpoch ?? 0) + 1;
+      // Every unsubscribe leaves the room; the refcount only controls the loop.
+      try { socket.leave(browserRoom(workspaceId)); } catch {}
+      const subscribers = browserStreamSubs.get(workspaceId);
+      if (!subscribers || !subscribers.delete(socket.id)) return;
+      if (subscribers.size === 0) {
+        browserStreamSubs.delete(workspaceId);
+        browserGate.unsubscribeStream(workspaceId);
+      }
     });
 
     // Immediately emit snapshot on connection (scoped to socket only)
@@ -1311,6 +1322,15 @@ export function registerSocketServer(httpServer: HttpServer, broker: EventBroker
     // the run completes or a user:cancel aborts it. Background runs survive
     // browser closes by design; there are no typing/presence maps in this file.
     socket.on("disconnect", () => {
+      // HM2 boundary: a live-view stream is not a run — in-flight runs survive
+      // a browser close, but a capture loop must stop with its last viewer.
+      for (const [workspaceId, subscribers] of browserStreamSubs) {
+        if (!subscribers.delete(socket.id)) continue;
+        if (subscribers.size === 0) {
+          browserStreamSubs.delete(workspaceId);
+          browserGate.unsubscribeStream(workspaceId);
+        }
+      }
       for (const room of socket.rooms) {
         if (room !== socket.id) socket.leave(room);
       }

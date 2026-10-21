@@ -188,10 +188,15 @@ describe("CTX-2 · precedence constraints > instructions > persona > history", (
     expect(i).toBeLessThan(p);
     expect(CONTEXT_PRECEDENCE_PRIORITIES.safety_constraints).toBeLessThan(CONTEXT_PRECEDENCE_PRIORITIES.instruction_stack);
     expect(CONTEXT_PRECEDENCE_PRIORITIES.instruction_stack).toBeLessThan(CONTEXT_PRECEDENCE_PRIORITIES.identity_authority);
-  });
+    // Cold import of the middleware tree costs seconds on a loaded machine;
+    // the default 5s budget turns that into a flake, not a failure.
+  }, 20_000);
 
   it("systemPrompt block order respects precedence (integration)", async () => {
-    // Use pipeline without DB (fallback) to check order of the three blocks that always appear
+    // The pipeline has no default model config any more: an agent without a
+    // bound model module is a configuration error (MODEL_MODULE_NOT_CONFIGURED),
+    // not a silent fallback. The model is irrelevant to the block ordering
+    // asserted here, so the resolved config is passed explicitly.
     const { ContextPipelineManager } = await import("./context-pipeline-manager.js");
     const pipeline = new ContextPipelineManager();
     const mockAgent: any = {
@@ -212,6 +217,7 @@ describe("CTX-2 · precedence constraints > instructions > persona > history", (
       workspaceId: "ws-prec",
       userInput: "hello",
       runtimeType: "agentic",
+      modelConfig: { provider: "custom", modelName: "prec-test-model" },
     });
     const idxConstraints = packet.systemPrompt.indexOf("[SAFETY INVARIANTS & CONSTRAINTS]");
     const idxInstructions = packet.systemPrompt.indexOf("[OPERATING INSTRUCTIONS]");
@@ -224,7 +230,7 @@ describe("CTX-2 · precedence constraints > instructions > persona > history", (
       expect(idxConstraints).toBeLessThan(idxInstructions);
       expect(idxInstructions).toBeLessThan(idxPersona);
     }
-  });
+  }, 20_000);
 });
 
 // ── InstructionStack determinism ──────────────────────────────────────────

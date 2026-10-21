@@ -9,6 +9,7 @@ export interface CreateArtifactInput {
   beforeHash?: string | null;
   afterHash?: string | null;
   patch?: string | null;
+  /** Body reference. A `data:<mime>;base64,...` URI is stored as binary bytes; anything else as utf8 text. */
   contentRef?: string | null;
   semanticTags?: string[];
   metadata?: Record<string, unknown>;
