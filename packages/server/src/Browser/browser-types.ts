@@ -41,4 +41,13 @@ export interface browserHandle {
   close(): Promise<void>;
 }
 
+/** Playwright launch options, kept in-domain so they can be asserted on. */
+export interface browserLaunchOptions {
+  headless: false;
+  /** Installed Chrome to drive; omitted when the machine has none. */
+  executablePath?: string;
+  chromiumSandbox: boolean;
+  ignoreDefaultArgs: string[];
+}
+
 export type browserLauncher = (profileDir: string) => Promise<browserHandle>;

@@ -7,10 +7,13 @@ import { env } from "../config/env.js";
 import { EventBroker } from "../../event-broker/event-broker-gate.js";
 import { getSharedBroker, setSharedBroker } from "../../event-broker/event-broker-gate.js";
 import { MentionParser } from "../core/mention-parser.js";
-import { AgentRegistry } from "../../agents/agent-gate.js";
 import { channelGate } from "../../channels/channel-gate.js";
 import { browserGate } from "../../Browser/browser-gate.js";
-import { messageGate } from "../../messages/message-gate.js";
+import {
+  appendSystemWarning,
+  dispatchChannelMessage,
+  executeRunScoped,
+} from "../core/message-dispatch.js";
 import { isLoopbackPeer, resolveSocketIdentity } from "./socket-auth.js";
 import type { SocketIdentity } from "./socket-auth.js";
 import { createSocketRateLimiter } from "./rate-limiter.js";
@@ -40,19 +43,8 @@ import { queueGate } from "../../queue/queue-gate.js";
 import { activeRuns, beginRun, endRun, runKey, DuplicateRunError } from "../core/active-runs.js";
 
 const mentionParser = new MentionParser();
-const agentRegistry = new AgentRegistry();
 // Agent execution is routed through runtimeGate
 export let globalBroker: EventBroker | null = null;
-
-/**
- * CrowdOS §8 + §14: Librarian/Owl is never the default conversational agent.
- * It is heartbeat-oriented (10-min reindex) and only answers explicit mentions.
- */
-function isLibrarianAgent(agent: { id: string; name: string }): boolean {
-  if (agent.id === "agent-librarian") return true;
-  const n = agent.name?.toLowerCase();
-  return n === "owl" || n === "librarian";
-}
 
 /**
  * CrowdOS §10: multi-mention executes serially — B sees A's output via the
@@ -95,18 +87,7 @@ export { DuplicateRunError };
 // Agent execution is handled by RuntimeExecutor
 
 async function triggerSystemWarning(broker: EventBroker, channelId: string, content: string): Promise<void> {
-  // Messages owns the table: sequence + insert + emit live in messageGate.append.
-  await messageGate.append(
-    {
-      channelId,
-      authorId: "system",
-      authorName: "System Warning",
-      authorLevel: "stakeholder",
-      authorType: "system",
-      content,
-    },
-    { broker }
-  );
+  await appendSystemWarning(channelId, content, broker);
 }
 
 async function emitRuntimeSnapshot(target: any): Promise<void> {
@@ -280,57 +261,6 @@ export function registerSocketServer(httpServer: HttpServer, broker: EventBroker
   setSharedBroker(broker);
 
   const executeRun: RunExecutor = deps.executeRun ?? ((req) => runtimeGate.execute(req));
-  // XD-016/ART-2: inline execution must run inside the message workspace's
-  // ALS handle, or run/artifact writes land on the ambient pool instead of
-  // the workspace DB (lost or cross-tenant rows in split-DB deployments).
-  const executeRunScoped: RunExecutor = async (req) => {
-    const ws = (req as unknown as Record<string, unknown>).workspaceId as string | undefined;
-    if (!ws || deps.executeRun) return executeRun(req);
-    // SH-005: the degrade below is fail-open by design (local-first), but it
-    // must not be silent — without a warn line a record-only workspace run is
-    // indistinguishable from a scoped one in the field (lost-artifact reports).
-    const warnDegraded = (reason: string): void => {
-      try {
-        logWarn({ stage: "socket.run.scope_degraded", workspaceId: ws, reason });
-      } catch {
-        // logging must never break the degrade path
-      }
-    };
-    try {
-      // dbForWorkspace lives in Shared/config (record-only tenant resolver);
-      // importing it from workspace-gate yielded undefined and the catch below
-      // silently degraded every inline run to the unscoped path (XD-016 gap).
-      const { runWithDb, dbForWorkspace } = await import("../config/database.js");
-      let degradeReason: string | null = null;
-      const db = await dbForWorkspace(ws).catch((err: unknown) => {
-        degradeReason = err instanceof Error ? err.message : String(err);
-        return null;
-      });
-      if (!db) {
-        warnDegraded(degradeReason ?? "resolver_null");
-        return executeRun(req);
-      }
-      return await runWithDb(db, () => executeRun(req));
-    } catch (err) {
-      warnDegraded(err instanceof Error ? err.message : String(err));
-      return executeRun(req);
-    }
-  };
-
-  /**
-   * Run a trigger with cancellation support (HM2/CAN-1). Registers the run's
-   * AbortController under `${channelId}:${agentId}` — duplicate triggers for a
-   * busy key throw DuplicateRunError instead of overwriting the live controller.
-   */
-  async function executeWithCancel(req: Parameters<RunExecutor>[0]): Promise<ReturnType<RunExecutor>> {
-    const key = runKey(req.channelId, req.agent.id);
-    const entry = beginRun(key, req.agent.name);
-    try {
-      return await executeRunScoped({ ...req, abortSignal: entry.controller.signal });
-    } finally {
-      endRun(key, entry);
-    }
-  }
 
   const allowedOrigins = env.CLIENT_ORIGIN.split(",").map((o) => o.trim()).filter(Boolean);
 
@@ -611,23 +541,6 @@ export function registerSocketServer(httpServer: HttpServer, broker: EventBroker
       }
     };
 
-    // CAN-1 duplicate-trigger policy: a second trigger for an already-running
-    // channel:agent pair is REJECTED with a system warning on the channel
-    // (existing event vocabulary — same pattern as paused/offline agents), and
-    // the in-flight run keeps its controller.
-    const runOrReportBusy = async (req: Parameters<typeof executeWithCancel>[0]) => {
-      try {
-        return await executeWithCancel(req);
-      } catch (err) {
-        if (err instanceof DuplicateRunError) {
-          console.log(`[Socket] Duplicate trigger rejected for @${req.agent.name} in #${req.channelId}`);
-          await triggerSystemWarning(broker, req.channelId, err.message);
-          return null;
-        }
-        throw err;
-      }
-    };
-
     // Explicit channel join handler for room-scoped broadcast.
     // §30: the room is `ws:<workspaceId>:channel:<channelId>` — the workspace
     // comes from the channel row, so the same channel id in two workspaces maps
@@ -771,20 +684,10 @@ export function registerSocketServer(httpServer: HttpServer, broker: EventBroker
       // §6: the pin is a RUNTIME (validated against the runtime set on write),
       // not a composer mode. It is resolved independently and handed to the
       // Router as a preference, so tier rules and rollback flags still apply.
-      let preferredRuntime: ReturnType<typeof runtimeTypeFromString> = undefined;
+      // The pin itself is resolved by the shared dispatch - one owner for the
+      // ladder a message and a cron wake both go through.
       if (explicitRuntime) {
         console.log(`[Router] Override->${explicitRuntime} (from mode="${rawMode}") in #${channelId}`);
-      } else {
-        // §6 pinned runtime: an unset/temporary mode falls back to the
-        // channel pin before Auto. A failed settings read means Auto.
-        const settings = channelId && typeof channelId === "string"
-          ? await channelGate.getSettings(channelId).catch(() => null)
-          : null;
-        const pinned = (settings as any)?.pinnedRuntime;
-        preferredRuntime = runtimeTypeFromString(typeof pinned === "string" ? pinned : null);
-        console.log(preferredRuntime
-          ? `[Router] Pinned->${preferredRuntime} (preference) in #${channelId}`
-          : `[Router] Auto mode selected for message in #${channelId}`);
       }
 
       // Owning channel row once per message: admission + workspace stamping +
@@ -829,233 +732,44 @@ export function registerSocketServer(httpServer: HttpServer, broker: EventBroker
           ? rawPref.trim().slice(0, 2000)
           : null;
 
-        const userMsg = await messageGate.append(
-          {
-            channelId,
-            authorId,
-            authorName,
-            authorLevel: "stakeholder",
-            authorType: "user",
-            content,
-            mentions: resolvedMentions,
-            metadata: { authorTag },
-          },
-          { broker }
-        );
-
         const operatorContext = userPreference
           ? { name: authorName, tag: authorTag, preference: userPreference }
           : null;
 
-        // 3. Process mentions and triggers
-        // AGT-003: scope the roster to this message's workspace. An
-        // unscoped list leaks foreign-workspace agents into mention and
-        // auto-trigger dispatch.
-        const allAgents = await agentRegistry.list({ isTemplate: false, workspaceId: msgWorkspaceId });
-
         console.log(`[Socket] user:message received in channel ${channelId}: "${content}" (resolved mentions: ${resolvedMentions.length})`);
 
-        // One shared per-agent dispatch body (§10 serial). Status gating, busy
-        // rejection (via runOrReportBusy), cancellation/failed handling and
-        // error isolation are identical for explicit mentions, role mentions
-        // and auto-triggered agents. Sequence numbers are allocated at persist
-        // time inside triggerSystemWarning / the runtime layer (DB-2).
-        const dispatchAgent = async (agent: AgentProfile, announce: string): Promise<void> => {
-          if (agent.status === "paused") {
-            await triggerSystemWarning(broker, channelId, `Agent @${agent.name} is currently paused.`);
-            return;
-          }
-          if (agent.status === "offline") {
-            await triggerSystemWarning(broker, channelId, `Agent @${agent.name} is currently offline.`);
-            return;
-          }
-          console.log(announce);
-          let res: Awaited<ReturnType<typeof runOrReportBusy>>;
-          try {
-            res = await runOrReportBusy({
-              agent,
-              channelId,
-              workspaceId: msgWorkspaceId,
-              userInput: content,
-              broker,
-              explicitRuntime,
-              preferredRuntime,
-              librarianAgentId: 'agent-librarian',
-              operatorContext,
-            });
-          } catch (err: any) {
-            console.error(`[Socket] Execution failed for agent @${agent.name}:`, err?.message || err);
-            await triggerSystemWarning(broker, channelId, `System error processing @${agent.name}: ${err?.message || err}`);
-            return;
-          }
-          if (!res) return;
-          if (res.status === 'cancelled') {
-            console.log(`[Socket] Run cancelled for agent @${agent.name}`);
-          } else if (res.status === 'failed') {
-            console.error(`[Socket] Execution failed for agent @${agent.name}:`, res.finalResponse);
-            await triggerSystemWarning(broker, channelId, res.finalResponse);
-          }
-        };
-
-        const isQueueModeBullMq = queueGate.mode() === "bullmq" && process.env.NODE_ENV !== "test";
-
-        // Default-agent resolution (§7 pinned mention, then §8 hierarchy,
-        // Librarian never default). C3 local-first: gates branch to files
-        // when no DATABASE_URL. Only live (non-paused/offline) agents serve.
-        const resolveDefaultTargets = async (): Promise<typeof allAgents> => {
-          const targetAgents: typeof allAgents = [];
-          const live = (id: string | null | undefined) => {
-            const agent = id ? allAgents.find(a => a.id === id) : undefined;
-            return agent && !isLibrarianAgent(agent) && agent.status !== "offline" && agent.status !== "paused" ? agent : undefined;
-          };
-          const settings = await channelGate.getSettings(channelId).catch(() => null);
-          const pinnedAgent = live((settings as any)?.activeAgentId);
-          if (pinnedAgent) {
-            targetAgents.push(pinnedAgent);
-            return targetAgents;
-          }
-          const channelDefault = live((settings as any)?.defaultAgentId);
-          if (channelDefault) {
-            targetAgents.push(channelDefault);
-            return targetAgents;
-          }
-          const channel = msgChannel;
-          if (channel?.categoryId) {
-            const category = await channelGate.getCategory(channel.categoryId).catch(() => null);
-            if (category?.ownedByAgentId) {
-              const ownerAgent = allAgents.find(a => a.id === category.ownedByAgentId);
-              if (ownerAgent && !isLibrarianAgent(ownerAgent) && ownerAgent.status !== "offline" && ownerAgent.status !== "paused") {
-                targetAgents.push(ownerAgent);
-              }
-            }
-          }
-          if (targetAgents.length === 0) {
-            const l0Agents = allAgents.filter(a => !isLibrarianAgent(a) && a.authorityLevel === 0 && a.status !== "offline" && a.status !== "paused");
-            if (l0Agents.length > 0) targetAgents.push(...l0Agents);
-          }
-          if (targetAgents.length === 0) {
-            const defaultAgent = allAgents.find(a => !isLibrarianAgent(a) && a.name === "default-assistant" && a.status !== "offline" && a.status !== "paused")
-              || allAgents.find(a => !isLibrarianAgent(a) && (a.status === "idle" || a.status === "working"));
-            if (defaultAgent) targetAgents.push(defaultAgent);
-          }
-          return targetAgents;
-        };
-
-        if (isQueueModeBullMq) {
-          const agentsToEnqueue: typeof allAgents = [];
-          if (resolvedMentions.length > 0) {
-            for (const mention of resolvedMentions) {
-              if (mention.type === "agent") {
-                const agent = allAgents.find(a => a.id === mention.targetId);
-                if (agent) agentsToEnqueue.push(agent);
-              } else if (mention.type === "role") {
-                const levelStr = mention.targetId.replace("role-l", "");
-                const levelNum = parseInt(levelStr, 10);
-                if (!isNaN(levelNum)) {
-                  const matchingAgents = allAgents.filter(a => a.authorityLevel === levelNum);
-                  for (const agent of matchingAgents) agentsToEnqueue.push(agent);
-                }
-              }
-            }
-          } else {
-            for (const agent of await resolveDefaultTargets()) agentsToEnqueue.push(agent);
-          }
-
-          // Pre-filter paused/offline, then serial enqueue per §10.
-          const enqueueTasks: Array<() => Promise<void>> = [];
-          for (const agent of agentsToEnqueue) {
-            if (agent.status === "paused") {
-              enqueueTasks.push(async () => { await triggerSystemWarning(broker, channelId, `Agent @${agent.name} is currently paused.`); });
-              continue;
-            }
-            if (agent.status === "offline") {
-              enqueueTasks.push(async () => { await triggerSystemWarning(broker, channelId, `Agent @${agent.name} is currently offline.`); });
-              continue;
-            }
-            enqueueTasks.push(async () => {
-              try {
-                // H4: persist first so the queued job + run.queued carry the real DB UUID.
-                // P06: never enqueue a provisional id — it can never match a DB row,
-                // so the executor would openRun() a phantom row per attempt (x3 retries).
-                // If persist fails (runs disabled / DB down), skip enqueue.
-                const { runsGate } = await import("../../runs/runs-gate.js");
-                // Honest label: this row is written BEFORE the Router decides,
-                // so it records what was REQUESTED. Claiming "agentic" here made
-                // every Auto run look like an explicit Agentic run.
-                const persisted = await runsGate.create({ agentId: agent.id, channelId, workspaceId: msgWorkspaceId, runtimeType: explicitRuntime ?? preferredRuntime ?? "auto" }).catch(() => null);
-                if (!persisted?.id) {
-                  await triggerSystemWarning(broker, channelId, `System error queueing @${agent.name}: could not persist run.`);
-                  return;
-                }
-                const runId = persisted.id;
-                await queueGate.enqueueRun({
-                  runId,
-                  channelId,
-                  agentId: agent.id,
-                  messageId: userMsg.id,
-                  userInput: content,
-                  workspaceId: msgWorkspaceId,
-                  explicitRuntime: explicitRuntime ?? null,
-                  preferredRuntime: preferredRuntime ?? null,
-                  operatorContext,
-                });
-                broker.emit("run.queued" as never, { runId, channelId, agentId: agent.id } as never, { channelId });
-                console.log(`[Socket][Queue] Enqueued run ${runId} for @${agent.name} in #${channelId} (msg ${userMsg.id})`);
-              } catch (err: unknown) {
-                const msg = err instanceof Error ? err.message : String(err);
-                console.error(`[Socket][Queue] Failed to enqueue agent @${agent.name}:`, msg);
-                await triggerSystemWarning(broker, channelId, `System error queueing @${agent.name}: ${msg}`);
-              }
-            });
-          }
-          await runBoundedBatch(enqueueTasks);
-        } else {
-          const batch: Array<() => Promise<void>> = [];
-
-          if (resolvedMentions.length > 0) {
-            for (const mention of resolvedMentions) {
-              if (mention.type === "agent") {
-                const agent = allAgents.find(a => a.id === mention.targetId);
-                if (agent) {
-                  batch.push(() =>
-                    dispatchAgent(agent, `[Socket] Triggering mentioned agent @${agent.name} (${agent.id})...`),
-                  );
-                }
-              } else if (mention.type === "role") {
-                const levelStr = mention.targetId.replace("role-l", "");
-                const levelNum = parseInt(levelStr, 10);
-                if (!isNaN(levelNum)) {
-                  const matchingAgents = allAgents.filter(a => a.authorityLevel === levelNum);
-                  for (const agent of matchingAgents) {
-                    batch.push(() =>
-                      dispatchAgent(agent, `[Socket] Triggering role agent @${agent.name} (L${agent.authorityLevel})...`),
-                    );
-                  }
-                }
-              }
-            }
-          } else {
-            for (const agent of await resolveDefaultTargets()) {
-              batch.push(() =>
-                dispatchAgent(
-                  agent,
-                  `[Socket] Auto-triggering agent @${agent.name} for unmentioned message in #${msgChannel?.name || channelId}...`,
-                ),
-              );
-            }
-          }
-
-          if (batch.length > 0) {
-            const batchStartedAt = Date.now();
-            await runBoundedBatch(batch);
-            logMetric({
-              stage: "mention.dispatch",
-              durationMs: Date.now() - batchStartedAt,
-              agents: batch.length,
-              parallel: 1,
-            });
-          }
-        }
+        // 3. Persist the message and run the dispatch ladder. ONE owner for
+        // "a message reaches agents" (shared/core/message-dispatch.ts): the
+        // scheduler posts a cron wake through the same path, so a wake
+        // resolves its target exactly like a typed message does.
+        const dispatchStartedAt = Date.now();
+        const result = await dispatchChannelMessage({
+          channelId,
+          workspaceId: msgWorkspaceId,
+          content,
+          author: {
+            id: authorId,
+            name: authorName,
+            level: "stakeholder",
+            type: "user",
+            tag: authorTag,
+          },
+          mentions: resolvedMentions as any,
+          explicitRuntime,
+          operatorContext,
+          broker,
+          mode:
+            queueGate.mode() === "bullmq" && process.env.NODE_ENV !== "test"
+              ? "queue"
+              : "inline",
+          executeRun: deps.executeRun,
+        });
+        logMetric({
+          stage: "mention.dispatch",
+          durationMs: Date.now() - dispatchStartedAt,
+          agents: result.dispatched.length,
+          parallel: 1,
+        });
       } catch (error: any) {
         console.error("Error in user:message handler:", error);
         await triggerSystemWarning(broker, channelId, `System error processing message: ${error?.message || error}`);
@@ -1144,7 +858,7 @@ export function registerSocketServer(httpServer: HttpServer, broker: EventBroker
           // live dispatch — a bare runtimeGate.execute here skipped runWithDb,
           // so resumed-run artifacts wrote to the ambient pool (lost or
           // cross-tenant) even after the dispatch path was scoped.
-          void (executeRunScoped as unknown as (req: unknown) => Promise<unknown>)({
+          void (executeRunScoped as unknown as (req: unknown, override?: unknown) => Promise<unknown>)({
             agent,
             channelId: run.channelId,
             workspaceId: run.workspaceId ?? "default",
@@ -1152,7 +866,7 @@ export function registerSocketServer(httpServer: HttpServer, broker: EventBroker
             broker,
             runId: run.id,
             resumeContext,
-          });
+          }, deps.executeRun);
         }
       } catch (err) {
         console.error("[Socket] run:resume failed:", err);

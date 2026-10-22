@@ -156,6 +156,11 @@ describe("A2 · boot re-arm", () => {
       name: "wake-agent",
       status: "idle",
     } as never);
+    // A wake is a MESSAGE: the target is reached through the standard ladder,
+    // so the agent comes from the workspace roster.
+    const list = vi.spyOn(agentGate, "list").mockResolvedValue([
+      { id: "agent-wake", name: "wake-agent", status: "idle", authorityLevel: 1 },
+    ] as never);
     const create = vi.spyOn(runsGate, "create").mockResolvedValue({ id: "run-wake" } as never);
     const execute = vi.spyOn(runtimeGate, "execute").mockResolvedValue({ status: "completed" } as never);
     vi.spyOn(channelGate, "getSettings").mockResolvedValue(null as never);
@@ -164,24 +169,22 @@ describe("A2 · boot re-arm", () => {
 
     expect(report).toMatchObject({ mode: "inline", firedCatchUp: 1, armed: 0 });
     expect(getById).toHaveBeenCalledWith("agent-wake", undefined, WS);
-    expect(create).toHaveBeenCalledTimes(1);
-    expect(create).toHaveBeenCalledWith(
-      expect.objectContaining({ agentId: "agent-wake", channelId: "ch-rearm", workspaceId: WS }),
-    );
+    expect(list).toHaveBeenCalled();
     expect(execute).toHaveBeenCalledTimes(1);
     expect(execute).toHaveBeenCalledWith(
       expect.objectContaining({
         agent: expect.objectContaining({ id: "agent-wake" }),
         userInput: "message-wake-row",
-        runId: "run-wake",
+        // A wake always runs on the Agentic runtime.
+        explicitRuntime: "agentic",
       }),
     );
     expect(await queueGate.listActiveSchedules(WS)).toHaveLength(0);
 
     // A second boot must not start a second run.
-    create.mockClear();
+    execute.mockClear();
     await queueGate.rearmSchedules(new Date(T0.getTime() + 60 * 60_000));
-    expect(create).not.toHaveBeenCalled();
+    expect(execute).not.toHaveBeenCalled();
   });
 
   it("recomputes the next cron boundary instead of replaying missed ticks", async () => {

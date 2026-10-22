@@ -159,7 +159,8 @@ Treat these as public contracts, even though CrowdOS is one app. Changing one ne
 - Update only the docs your change actually affects, and list them in the report.
 - Reference code by symbol name in docs, don't paste code. Pasted code is what drifts.
 - Prefer generated over hand-written. Ports tables, schemas, and indexes that can be derived from code should come from a script and be verified in CI, not maintained by hand. If you catch yourself syncing the same fact in two places by hand, say so in the report.
-- Do not add new doc types or folders beyond the Domain Spec / Feature and Flow Spec set.
+- Do not add new doc types or folders beyond the Domain Spec / Feature and Flow Spec set. The single exception is the `RE/` root, which holds comparative analysis (reverse-engineering findings, as-built understanding, and an implementation spec) — it is analysis, never as-built truth.
+- `RE/` never replaces `re-docs/`. A claim about current CrowdOS behaviour is proven by `file:line` in product code, not by a `RE/` doc. When a `RE/` spec item is implemented, the owning `re-docs/` doc is updated in the same task (the rule above already applies).
 - **[checked once `check:docs` exists]** Backend doc `Ports` must equal gate exports.
 - Domain doc templates: Backend/Desktop use the v2 gate template. Frontend (no gates) uses the UI-adapted template with Props & Store instead of Ports. Alignment docs live in `Feature and Flow Spec/`. `_index.md` and `_flow-index.md` are maps only, no duplication.
 

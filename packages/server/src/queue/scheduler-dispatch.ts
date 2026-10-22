@@ -1,9 +1,16 @@
-// 2026-10-20 (A3): a scheduled fire with a target agent starts a real inline
-// run; execution is started, not awaited, so boot re-arm never blocks on it.
+// 2026-10-20 (A3): a scheduled fire wakes an agent.
+// 2026-10-22: a wake is an automated MESSAGE, not a private side channel.
+//
+// The wake posts the prompt into the channel and lets the standard ladder
+// decide who answers - an explicit target if the schedule names one, else the
+// channel's PINNED agent (the same default an operator's message resolves).
+// The only difference from a message the operator typed is the runtime: a
+// wake always routes AGENTIC, whatever the channel's runtime pin says.
+//
+// The dispatch itself lives in shared/core/message-dispatch.ts so an operator
+// message and a cron wake cannot drift apart.
 
 import type { EventBroker } from "../event-broker/event-broker-gate.js";
-import { beginRun, endRun, runKey, DuplicateRunError } from "../shared/core/active-runs.js";
-import { runtimeTypeFromString } from "../runtime/types.js";
 import type { scheduleRow } from "./scheduler-local-store.js";
 
 async function postNotice(row: scheduleRow, broker: EventBroker, content: string): Promise<void> {
@@ -29,72 +36,51 @@ export async function dispatchScheduledRun(
   userInput: string,
   broker: EventBroker,
 ): Promise<void> {
-  if (!row.targetAgentId) return;
-
+  // The shared dispatch pulls the agents/channels/messages/runtime gates in.
+  // It is loaded lazily so the Queue gate's own import graph stays light.
+  const { dispatchChannelMessage } = await import("../shared/core/message-dispatch.js");
   const { agentGate } = await import("../agents/agent-gate.js");
-  const agent = await agentGate.getById(row.targetAgentId, undefined, row.workspaceId);
-  if (!agent) {
-    await postNotice(row, broker, `Scheduled task ${row.id}: target agent ${row.targetAgentId} not found.`);
-    return;
-  }
-  if (agent.status === "paused") {
-    await postNotice(row, broker, `Agent @${agent.name} is currently paused.`);
-    return;
-  }
-  if (agent.status === "offline") {
-    await postNotice(row, broker, `Agent @${agent.name} is currently offline.`);
-    return;
-  }
 
-  const key = runKey(row.channelId, agent.id);
-  let entry;
-  try {
-    entry = beginRun(key, agent.name);
-  } catch (err) {
-    if (err instanceof DuplicateRunError) {
-      await postNotice(row, broker, err.message);
+  // An explicit target is expressed as a MENTION - the same shape as an
+  // operator typing "@Name ..." - so the shared ladder treats it identically.
+  if (row.targetAgentId) {
+    const agent = await agentGate.getById(row.targetAgentId, undefined, row.workspaceId).catch(() => null);
+    if (!agent) {
+      await postNotice(row, broker, `Scheduled task ${row.id}: target agent ${row.targetAgentId} not found.`);
       return;
     }
-    throw err;
   }
 
-  try {
-    const { channelGate } = await import("../channels/channel-gate.js");
-    const settings = await channelGate.getSettings(row.channelId, undefined, row.workspaceId).catch(() => null);
-    const preferredRuntime = runtimeTypeFromString((settings as any)?.pinnedRuntime ?? null);
+  // WHO wrote the wake message decides how it is delivered. An agent that
+  // scheduled its own next wake gets its own words back, under its own sender
+  // id - the message is the agent's, not the scheduler's. A task the operator
+  // created (the watchdog) is a system message.
+  const author = row.authorAgentId
+    ? await agentGate.getById(row.authorAgentId, undefined, row.workspaceId).catch(() => null)
+    : null;
+  const messageAuthor = author
+    ? {
+        id: author.id,
+        name: author.name,
+        level: String(author.authorityLevel ?? "agent"),
+        type: "agent" as const,
+      }
+    : {
+        id: "system-scheduler",
+        name: "Scheduler",
+        level: "system",
+        type: "system" as const,
+      };
 
-    const { runsGate } = await import("../runs/runs-gate.js");
-    const created = await runsGate
-      .create({
-        agentId: agent.id,
-        channelId: row.channelId,
-        workspaceId: row.workspaceId,
-        runtimeType: preferredRuntime ?? "auto",
-      })
-      .catch(() => null);
-
-    const { runtimeGate } = await import("../runtime/runtime-gate.js");
-    const execution = runtimeGate.execute({
-      agent,
-      channelId: row.channelId,
-      workspaceId: row.workspaceId,
-      userInput,
-      broker,
-      preferredRuntime,
-      runId: created?.id ?? null,
-      librarianAgentId: "agent-librarian",
-      abortSignal: entry.controller.signal,
-    });
-    void execution
-      .catch(async (err) => {
-        const msg = err instanceof Error ? err.message : String(err);
-        console.error(`[scheduler] run failed for @${agent.name}: ${msg}`);
-        await postNotice(row, broker, `System error processing @${agent.name}: ${msg}`);
-      })
-      .finally(() => endRun(key, entry));
-  } catch (err) {
-    endRun(key, entry);
-    const msg = err instanceof Error ? err.message : String(err);
-    await postNotice(row, broker, `System error processing @${agent.name}: ${msg}`);
-  }
+  await dispatchChannelMessage({
+    channelId: row.channelId || "general",
+    workspaceId: row.workspaceId,
+    content: userInput,
+    author: messageAuthor,
+    mentions: row.targetAgentId ? [{ type: "agent", targetId: row.targetAgentId }] : [],
+    // A wake always runs on the Agentic runtime: it is a task, not a chat.
+    explicitRuntime: "agentic",
+    broker: broker as never,
+    mode: "inline",
+  });
 }

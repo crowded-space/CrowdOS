@@ -1,22 +1,19 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-// The dispatcher is Queue-owned; every cross-domain dependency is faked at its
-// gate (AGENTS: fake the boundary, not the logic under test). The real
-// active-run registry is used so the busy semantics are exercised, not mocked.
+// A scheduled wake is an automated MESSAGE: it posts the wake prompt and lets
+// the standard ladder decide who answers (the channel's pinned mention by
+// default). The cross-domain boundary is faked at the shared dispatch; the
+// ladder and the busy semantics live there and are covered by the socket
+// suite.
 const gates = vi.hoisted(() => ({
   getById: vi.fn(),
-  getSettings: vi.fn(),
-  create: vi.fn(),
-  execute: vi.fn(),
   append: vi.fn(),
+  dispatch: vi.fn(),
 }));
 vi.mock("../agents/agent-gate.js", () => ({ agentGate: { getById: gates.getById } }));
-vi.mock("../channels/channel-gate.js", () => ({ channelGate: { getSettings: gates.getSettings } }));
-vi.mock("../runs/runs-gate.js", () => ({ runsGate: { create: gates.create } }));
-vi.mock("../runtime/runtime-gate.js", () => ({ runtimeGate: { execute: gates.execute } }));
 vi.mock("../messages/message-gate.js", () => ({ messageGate: { append: gates.append } }));
+vi.mock("../shared/core/message-dispatch.js", () => ({ dispatchChannelMessage: gates.dispatch }));
 
-import { activeRuns, beginRun, endRun } from "../shared/core/active-runs.js";
 import { EventBroker } from "../event-broker/event-broker-gate.js";
 import { dispatchScheduledRun } from "./scheduler-dispatch.js";
 import type { scheduleRow } from "./scheduler-local-store.js";
@@ -27,7 +24,8 @@ const ROW: scheduleRow = {
   workspaceId: "ws-1",
   task: "wake",
   message: "wake up",
-  targetAgentId: "agent-1",
+  targetAgentId: null,
+  authorAgentId: null,
   cron: null,
   nextRun: null,
   createdAt: "2026-10-20T10:00:00.000Z",
@@ -42,163 +40,67 @@ function row(overrides: Partial<scheduleRow> = {}): scheduleRow {
 }
 
 beforeEach(() => {
-  activeRuns.clear();
   gates.getById.mockReset().mockResolvedValue(AGENT);
-  gates.getSettings.mockReset().mockResolvedValue(null);
-  gates.create.mockReset().mockResolvedValue({ id: "run-1" });
-  gates.execute.mockReset().mockResolvedValue({ status: "completed" });
-  gates.append.mockReset().mockResolvedValue(ROW);
+  gates.append.mockReset().mockResolvedValue({ id: "msg-1" });
+  gates.dispatch.mockReset().mockResolvedValue({ messageId: "msg-1", workspaceId: "ws-1", dispatched: [], skipped: [] });
 });
 
 afterEach(() => {
-  activeRuns.clear();
   vi.restoreAllMocks();
 });
 
-describe("A3 · scheduled fire starts a run for the target agent", () => {
-  it("creates the run, then hands its id and the scheduled message to the runtime", async () => {
-    let settle!: (value: unknown) => void;
-    gates.execute.mockReturnValue(new Promise((resolve) => { settle = resolve; }));
-
+describe("A3 · a scheduled wake is an automated message", () => {
+  it("posts the wake with no mention, so the channel's pinned agent answers", async () => {
     await dispatchScheduledRun(row(), "wake up", broker);
 
-    expect(gates.getById).toHaveBeenCalledWith("agent-1", undefined, "ws-1");
-    expect(gates.create).toHaveBeenCalledWith({
-      agentId: "agent-1",
-      channelId: "ch-1",
-      workspaceId: "ws-1",
-      runtimeType: "auto",
-    });
-    expect(gates.execute).toHaveBeenCalledWith(
-      expect.objectContaining({
-        agent: expect.objectContaining({ id: "agent-1" }),
-        channelId: "ch-1",
-        workspaceId: "ws-1",
-        userInput: "wake up",
-        runId: "run-1",
-        librarianAgentId: "agent-librarian",
-      }),
-    );
-
-    const signal = gates.execute.mock.calls[0][0].abortSignal;
-    expect(signal).toBe(activeRuns.get("ch-1:agent-1")![0].controller.signal);
-    expect(signal.aborted).toBe(false);
-    activeRuns.get("ch-1:agent-1")![0].controller.abort();
-    expect(signal.aborted).toBe(true);
-
-    settle({ status: "completed" });
-    await vi.waitFor(() => expect(activeRuns.has("ch-1:agent-1")).toBe(false));
+    expect(gates.dispatch).toHaveBeenCalledTimes(1);
+    const input = gates.dispatch.mock.calls[0][0];
+    expect(input.channelId).toBe("ch-1");
+    expect(input.workspaceId).toBe("ws-1");
+    expect(input.content).toBe("wake up");
+    expect(input.mentions).toEqual([]);
   });
 
-  it("uses the channel pin as both the requested and the preferred runtime", async () => {
-    gates.getSettings.mockResolvedValue({ pinnedRuntime: "research" });
+  it("delivers an agent's own wake in the agent's own voice", async () => {
+    gates.getById.mockResolvedValue({ id: "agent-1", name: "raven", authorityLevel: 1 });
 
-    await dispatchScheduledRun(row(), "wake up", broker);
+    await dispatchScheduledRun(row({ authorAgentId: "agent-1" }), "energy should be back", broker);
 
-    expect(gates.getSettings).toHaveBeenCalledWith("ch-1", undefined, "ws-1");
-    expect(gates.create).toHaveBeenCalledWith(expect.objectContaining({ runtimeType: "research" }));
-    expect(gates.execute).toHaveBeenCalledWith(expect.objectContaining({ preferredRuntime: "research" }));
+    const input = gates.dispatch.mock.calls[0][0];
+    expect(input.content).toBe("energy should be back");
+    expect(input.author).toMatchObject({ id: "agent-1", name: "raven", type: "agent" });
   });
 
-  it.each([
-    {
-      name: "missing agent",
-      agent: null,
-      text: "Scheduled task sched-1: target agent agent-1 not found.",
-    },
-    {
-      name: "paused agent",
-      agent: { ...AGENT, status: "paused" },
-      text: "Agent @raven is currently paused.",
-    },
-    {
-      name: "offline agent",
-      agent: { ...AGENT, status: "offline" },
-      text: "Agent @raven is currently offline.",
-    },
-  ])("skips a $name and posts the exact notice", async ({ agent, text }) => {
-    gates.getById.mockResolvedValue(agent);
+  it("delivers an operator-created task as a system message", async () => {
+    await dispatchScheduledRun(row(), "review TASKS.json and continue", broker);
 
-    await dispatchScheduledRun(row(), "wake up", broker);
-
-    expect(gates.create).not.toHaveBeenCalled();
-    expect(gates.execute).not.toHaveBeenCalled();
-    expect(gates.append).toHaveBeenCalledWith(
-      expect.objectContaining({
-        channelId: "ch-1",
-        workspaceId: "ws-1",
-        authorId: "system",
-        authorName: "System Warning",
-        authorLevel: "stakeholder",
-        authorType: "system",
-        content: text,
-      }),
-      expect.anything(),
-    );
+    const input = gates.dispatch.mock.calls[0][0];
+    expect(input.author).toMatchObject({ id: "system-scheduler", type: "system" });
   });
 
-  it("rejects a busy channel:agent pair without touching the live run, then works once released", async () => {
-    const held = beginRun("ch-1:agent-1", "raven");
-
+  it("always routes agentic, whatever the channel's runtime pin says", async () => {
     await dispatchScheduledRun(row(), "wake up", broker);
 
-    expect(gates.create).not.toHaveBeenCalled();
-    expect(gates.execute).not.toHaveBeenCalled();
-    expect(gates.append).toHaveBeenCalledWith(
-      expect.objectContaining({ content: expect.stringContaining("already running") }),
-      expect.anything(),
-    );
-
-    endRun("ch-1:agent-1", held);
-    await dispatchScheduledRun(row(), "wake up", broker);
-    expect(gates.create).toHaveBeenCalledTimes(1);
-    expect(gates.execute).toHaveBeenCalledTimes(1);
+    const input = gates.dispatch.mock.calls[0][0];
+    expect(input.explicitRuntime).toBe("agentic");
+    // The pin is a preference and is resolved by the shared dispatch, not here.
+    expect(input.preferredRuntime).toBeUndefined();
   });
 
-  it("does nothing at all when the schedule has no target agent", async () => {
-    await dispatchScheduledRun(row({ targetAgentId: null }), "wake up", broker);
+  it("turns an explicit target into a mention, exactly like a typed @Name", async () => {
+    await dispatchScheduledRun(row({ targetAgentId: "agent-1" }), "wake up", broker);
 
-    expect(gates.getById).not.toHaveBeenCalled();
-    expect(gates.getSettings).not.toHaveBeenCalled();
-    expect(gates.create).not.toHaveBeenCalled();
-    expect(gates.execute).not.toHaveBeenCalled();
-    expect(gates.append).not.toHaveBeenCalled();
+    const input = gates.dispatch.mock.calls[0][0];
+    expect(input.mentions).toEqual([{ type: "agent", targetId: "agent-1" }]);
   });
 
-  it("releases the busy key when execution rejects, so the next fire can run", async () => {
-    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-    gates.execute.mockRejectedValue(new Error("model down"));
+  it("notices an unknown target and wakes nobody", async () => {
+    gates.getById.mockResolvedValue(null);
 
-    await dispatchScheduledRun(row(), "wake up", broker);
+    await dispatchScheduledRun(row({ targetAgentId: "ghost" }), "wake up", broker);
 
-    await vi.waitFor(() => expect(activeRuns.has("ch-1:agent-1")).toBe(false));
-    expect(errorSpy).toHaveBeenCalled();
-    await vi.waitFor(() =>
-      expect(gates.append).toHaveBeenCalledWith(
-        expect.objectContaining({ content: expect.stringContaining("System error processing @raven") }),
-        expect.anything(),
-      ),
-    );
-
-    gates.create.mockClear();
-    gates.execute.mockResolvedValue({ status: "completed" });
-    await dispatchScheduledRun(row(), "wake up", broker);
-    expect(gates.create).toHaveBeenCalledTimes(1);
-  });
-
-  it("returns while execution is still pending (boot must not block on a model call)", async () => {
-    let settle!: (value: unknown) => void;
-    gates.execute.mockReturnValue(new Promise((resolve) => { settle = resolve; }));
-
-    const outcome = await Promise.race([
-      dispatchScheduledRun(row(), "wake up", broker).then(() => "returned"),
-      new Promise((resolve) => setTimeout(() => resolve("blocked"), 100)),
-    ]);
-
-    expect(outcome).toBe("returned");
-    expect(activeRuns.has("ch-1:agent-1")).toBe(true);
-
-    settle({ status: "completed" });
-    await vi.waitFor(() => expect(activeRuns.has("ch-1:agent-1")).toBe(false));
+    expect(gates.dispatch).not.toHaveBeenCalled();
+    expect(gates.append).toHaveBeenCalledTimes(1);
+    expect(gates.append.mock.calls[0][0].content).toContain("target agent ghost not found");
   });
 });

@@ -18,9 +18,10 @@ Eleven middlewares run in priority order — not registration order — with con
 | <../Domain Spec/Tools.md> | Supplies tool schemas embedded by `ToolSchemaMiddleware` |
 | <../Domain Spec/Skills.md> | Supplies skill prompts embedded by `SkillContextMiddleware` |
 | <../Domain Spec/Memories.md> | Supplies recall embedded by `MemoryRetrievalMiddleware` (call-out only, backend owned there) |
+| <../Domain Spec/Agents.md> | Owns the agent's instruction stack and the file tier of the runtime overrides the instruction stage applies |
 
 ## Current state
-Real: 11 middlewares with priority ordering, parallel lane + serial tail, per-middleware error isolation, model resolve/decrypt/cache, assembler policy derivation and correlation stamping, assembly-time cap clamp plus per-iteration re-check. Flag-gated: parallel lane (`PIPELINE_PARALLEL=false` restores serial). Stub: none.
+Real: 11 middlewares with priority ordering, parallel lane + serial tail, per-middleware error isolation, model resolve/decrypt/cache, assembler policy derivation and correlation stamping, assembly-time cap clamp plus per-iteration re-check. Runtime overrides (live patches of an agent's operating instructions) are applied inside the instruction stage, per tier and with the same rules on both: the PG branch reads the `runtime_overrides` table, the local branch reads the workspace's `runtime-overrides.json` — a scoped replace swaps one module's slice, a replace without a target is refused, a replace for a module outside the stack is a no-op, appends land after the rebuilt stack in override-id order, and an expired override is never applied and is swept afterwards. Flag-gated: parallel lane (`PIPELINE_PARALLEL=false` restores serial). Stub: none.
 
 ## Alignment notes
 - 2026-09-16 D2 (§26): `RuntimePacket` is now a type alias of `ContextPacket` (both names compile; gate re-exports both). Future §26 fields (`interpreter_output`, `visible_capabilities`, `state_updates`, `artifacts`) land with their features, not as cosmetic renames.

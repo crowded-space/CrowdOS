@@ -31,6 +31,14 @@ export type scheduleRow = {
   task: string;
   message: string | null;
   targetAgentId: string | null;
+  /**
+   * Who wrote the wake message. An agent that schedules its own next wake
+   * records itself here, so the wake is delivered in ITS words and carries its
+   * sender id - the message is the agent's, not the scheduler's. Null for a
+   * task created by the operator (the watchdog): the wake is then a system
+   * message.
+   */
+  authorAgentId: string | null;
   cron: string | null;
   nextRun: string | null;
   createdAt: string;
@@ -45,6 +53,8 @@ export type scheduleInput = {
   task: string;
   message?: string | null;
   targetAgentId?: string | null;
+  /** The agent whose words the wake message is, when it scheduled itself. */
+  authorAgentId?: string | null;
   /** Cron expression. Only the every-N-minutes form is tracked locally. */
   cron?: string | null;
   /** One-shot delay in seconds (ignored when `cron` is set). */
@@ -54,16 +64,35 @@ export type scheduleInput = {
 /** setTimeout overflows past 2^31-1 ms (~24.8d) and fires in 1ms. */
 const MAX_TIMER_MS = 2_147_483_647;
 
-/**
- * Next occurrence of an every-N-minutes cron, strictly after `from`.
- *
- * Only that form is understood: it is the one the inline scheduler accepts,
- * and the one this tier can re-arm after a restart. Any other expression
- * returns null — that schedule is not tracked locally (BullMQ owns it in
- * bullmq mode, and the inline path rejects it outright).
- */
+// Next occurrence of a cron, strictly after `from`.
+//
+// Two forms are understood, and they are the two the inline scheduler
+// accepts: an every-N-minutes expression (N 1..60) and an every-N-hours
+// expression - minute M, hour step H, H 1..24 - written "M step-H * * *".
+// Any other expression returns null: that schedule is not tracked locally
+// (BullMQ owns it in bullmq mode, and the inline path rejects it outright).
 export function nextCronOccurrence(cron: string, from: Date): string | null {
-  const m = /^\*\/(\d+)\s+\*\s+\*\s+\*\s+\*$/.exec(cron.trim());
+  const trimmed = cron.trim();
+
+  // Hourly form: "M */H * * *" (minute M, every H hours) - the 2-4h
+  // watchdog cadence. "*/N * * * *" with N > 60 cannot express this: the
+  // minute field only reaches 59, so N=120 would silently fire hourly.
+  const hourly = /^(\d{1,2})\s+\*\/(\d{1,2})\s+\*\s+\*\s+\*$/.exec(trimmed);
+  if (hourly) {
+    const minute = Number(hourly[1]);
+    const hours = Number(hourly[2]);
+    if (!Number.isInteger(minute) || minute < 0 || minute > 59) return null;
+    if (!Number.isInteger(hours) || hours < 1 || hours > 24) return null;
+    const d = new Date(from.getTime());
+    d.setSeconds(0, 0);
+    d.setMinutes(minute);
+    if (d.getTime() <= from.getTime()) d.setHours(d.getHours() + 1);
+    // Cron hours are the multiples of H (0, H, 2H…) within the day.
+    while (d.getHours() % hours !== 0) d.setHours(d.getHours() + 1);
+    return d.toISOString();
+  }
+
+  const m = /^\*\/(\d+)\s+\*\s+\*\s+\*\s+\*$/.exec(trimmed);
   if (!m) return null;
   const step = Number(m[1]);
   if (!Number.isInteger(step) || step < 1 || step > 60) return null;
@@ -116,6 +145,7 @@ export async function localSaveSchedule(
     task: input.task,
     message: input.message ?? null,
     targetAgentId: input.targetAgentId ?? null,
+    authorAgentId: input.authorAgentId ?? null,
     cron: input.cron?.trim() || null,
     nextRun: nextRunFor(input, now),
     createdAt: now.toISOString(),

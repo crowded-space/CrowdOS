@@ -16,6 +16,8 @@ Map only. Truth lives in area docs. UI-adapted v2 template (Props & Store / Rela
 
 Rule: component area added/renamed → same task updates this table.
 
+Comparative analysis (not canonical): `../../RE/` — Discord reverse-engineering findings, CrowdOS as-built understanding, and an implementation spec. Truth for current behaviour stays in this root; `RE/` cites `file:line` and never replaces an area doc.
+
 ## Target Contract
 > Status: Target. This index is a map only. Truth lives in area docs. Every area doc carries an Architectural Standard (Target) section; this table tracks doc completeness (draft), never target conformance.
 * Component area added or renamed → same task updates this table plus the area doc standard if the shape changes.

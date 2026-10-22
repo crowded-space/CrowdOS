@@ -6,6 +6,7 @@ import { execHardened } from "./safety/hardened-exec.js";
 import { globalBroker } from "../shared/sockets/register-socket-server.js";
 import { getDb } from "../shared/config/database.js";
 import { registerBrowserTools } from "./browser-tools.js";
+import { registerInstructionTools } from "./instruction-tools.js";
 import type { ToolDefinition, ToolResult, ToolExecutionContext } from "./tool-types.js";
 
 // TOOL-1 · Honest tools — flag-gated rollback: when disabled the tools are
@@ -76,21 +77,10 @@ function hasMultipleStatements(sql: string): boolean {
   return stripped.includes(";");
 }
 
-// Channel-mount-aware root: channel → category → workspace → workspace dir.
-// Delegates to the ChannelMounts resolver so the agent file tools and the Repo
-// panel can never disagree about which directory is the root.
-// Dynamic import keeps the Tools → ChannelMounts gate edge lazy (no module cycle).
-export async function resolveToolRoot(ctx?: { channelId?: string; workspaceId?: string }): Promise<string> {
-  try {
-    const { channelMountGate } = await import("../channel-mounts/channel-mount-gate.js");
-    const root = await channelMountGate.effectiveRoot({
-      channelId: ctx?.channelId,
-      workspaceId: ctx?.workspaceId,
-    });
-    if (root?.path) return root.path;
-  } catch {}
-  return Guard.getWorkspaceDir(ctx?.workspaceId);
-}
+// Channel-mount-aware root lives in tool-root.ts (see that file for why).
+// Re-exported here so existing importers keep their single entry point.
+import { resolveToolRoot } from "./tool-root.js";
+export { resolveToolRoot };
 
 /**
  * TOLS-02: FS mutation handlers must refuse once the executor's combined
@@ -593,10 +583,10 @@ export class ToolRegistry {
           type: "object",
           properties: {
             delaySeconds: { type: "number", description: "Seconds to delay before firing (one-shot). Ignored when cron is provided; fractional seconds allowed." },
-            taskDescription: { type: "string", description: "Short description of the scheduled task" },
+            taskDescription: { type: "string", description: "Short description of the scheduled task - also the wake text when no message is given" },
             channelId: { type: "string", description: "Target channel ID (defaults to invocation channel or 'general')" },
             cron: { type: "string", description: "Optional cron expression for repeatable schedule (e.g. '*/5 * * * *'). When provided, creates a repeatable BullMQ job instead of a one-shot delay." },
-            message: { type: "string", description: "Optional custom message content posted when triggered (defaults to taskDescription)" },
+            message: { type: "string", description: "The message that will wake you up, in your own words - what you want to find out or do when it fires. Defaults to taskDescription. It is delivered under your own sender id." },
             targetAgentId: { type: "string", description: "Optional target agent to wake. When set, the schedule starts a run for this agent with the scheduled message as input." },
             workspaceId: { type: "string", description: "Workspace ID override (defaults to invocation workspace or 'default')" },
           },
@@ -634,14 +624,28 @@ export class ToolRegistry {
             }
             const { queueGate } = await import("../queue/queue-gate.js");
             const isBullMq = queueGate.mode() === "bullmq";
-            // Inline cron only understands "*/N * * * *" (N 1..60). Reject it
-            // BEFORE the row is written: a persisted row that can never be
-            // armed is a silent-loss schedule. BullMQ accepts what BullMQ accepts.
+            // Inline cron understands "*/N * * * *" (N 1..60) and "M */H * * *"
+            // (minute M, every H hours, H 1..24). Reject it BEFORE the row is
+            // written: a persisted row that can never be armed is a silent-loss
+            // schedule. BullMQ accepts what BullMQ accepts.
             const INLINE_CRON_RE = /^\*\/(\d+)\s+\*\s+\*\s+\*\s+\*$/;
+            const INLINE_HOURLY_RE = /^(\d{1,2})\s+\*\/(\d{1,2})\s+\*\s+\*\s+\*$/;
             const inlineCron = cronRaw.match(INLINE_CRON_RE);
+            const inlineHourly = cronRaw.match(INLINE_HOURLY_RE);
             const inlineStep = inlineCron ? Number(inlineCron[1]) : 0;
-            if (cronRaw && !isBullMq && (!inlineCron || inlineStep < 1 || inlineStep > 60)) {
-              throw new Error(`Unsupported cron for inline mode (use "*/N * * * *" with N 1-60, or bullmq mode): "${cronRaw}".`);
+            const inlineMinute = inlineHourly ? Number(inlineHourly[1]) : -1;
+            const inlineHours = inlineHourly ? Number(inlineHourly[2]) : 0;
+            const inlineHourlyOk =
+              inlineMinute >= 0 && inlineMinute <= 59 && inlineHours >= 1 && inlineHours <= 24;
+            if (
+              cronRaw &&
+              !isBullMq &&
+              (!inlineCron || inlineStep < 1 || inlineStep > 60) &&
+              !inlineHourlyOk
+            ) {
+              throw new Error(
+                `Unsupported cron for inline mode (use "*/N * * * *" with N 1-60, or "M */H * * *" with H 1-24, or bullmq mode): "${cronRaw}".`,
+              );
             }
 
             const row = await queueGate.saveSchedule({
@@ -651,6 +655,10 @@ export class ToolRegistry {
               task,
               message: message ?? null,
               targetAgentId: args?.targetAgentId ? String(args.targetAgentId) : null,
+              // The wake message is the caller's own words: an agent that
+              // schedules its next wake is the author of the message it will
+              // receive back.
+              authorAgentId: ctx?.agentId ? String(ctx.agentId) : null,
               cron: cronRaw || null,
               delaySeconds: cronRaw ? null : delaySeconds,
             });
@@ -708,7 +716,10 @@ export class ToolRegistry {
                 await compensateUnarmedSchedule();
                 throw err;
               }
-              return { success: true, output: `Scheduled repeatable task "${task}" with cron "${cronRaw}" (inline, every ${inlineStep} min) on channel ${channelId}. ID: ${id}` };
+              const cadence = inlineCron
+                ? `every ${inlineStep} min`
+                : `every ${inlineHours} h at minute ${inlineMinute}`;
+              return { success: true, output: `Scheduled repeatable task "${task}" with cron "${cronRaw}" (inline, ${cadence}) on channel ${channelId}. ID: ${id}` };
             }
 
             // One-shot delayed path (delaySeconds validated above)
@@ -1484,6 +1495,11 @@ export class ToolRegistry {
     // and the page belong to the Browser domain; these handlers only map tool
     // args/ctx onto its gate.
     registerBrowserTools(this);
+
+    // 21. Instructions: mount_instructions / discard_instructions — L0+L1+L2.
+    // An agent mounts a markdown file as its OWN operating instructions; the
+    // instruction modules and the agent's stack belong to Modules/Agents.
+    registerInstructionTools(this);
   }
 }
 

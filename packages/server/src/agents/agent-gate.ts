@@ -5,6 +5,20 @@ import { invalidateRosterCache } from "./agent-roster-cache.js";
 import { EscalationChain } from "./agent-errors.js";
 import { localListAgentRows, localListAgents, localSeedDefaultAgent } from "./agent-local-store.js";
 import type { LocalAgentRow } from "./agent-local-store.js";
+// Runtime overrides (live instruction patches) belong to this domain: they
+// patch the agent's instruction stack. The PG table is read by the Runtime
+// kernel; the local tier is owned here and reached through the gate.
+import {
+  localDeleteRuntimeOverride,
+  localListRuntimeOverrides,
+  localSweepExpiredRuntimeOverrides,
+  localUpsertRuntimeOverride,
+} from "./agent-runtime-override-local-store.js";
+import type {
+  LocalRuntimeOverride,
+  LocalRuntimeOverrideInput,
+  RuntimeOverrideType,
+} from "./agent-runtime-override-local-store.js";
 import type {
   AgentProfile,
   AuthorityLevel,
@@ -44,6 +58,9 @@ export type {
   UpdateAgentProfileInput,
   AgentRegistryFilters,
   LocalAgentRow,
+  LocalRuntimeOverride,
+  LocalRuntimeOverrideInput,
+  RuntimeOverrideType,
 };
 export {
   createAgentSchema,
@@ -78,5 +95,12 @@ export const agentGate = {
   listLocalAgents: (filters?: AgentRegistryFilters) => localListAgents(filters),
   listLocalAgentRows: (workspaceId?: string | null) => localListAgentRows(workspaceId),
   seedDefaultAgent: (workspaceId?: string | null) => localSeedDefaultAgent(workspaceId),
+  // Runtime-override file tier: list (active rows only), upsert, delete by id,
+  // and the expiry sweep the instruction-stack middleware runs after applying
+  // the patches.
+  listLocalRuntimeOverrides: localListRuntimeOverrides,
+  upsertLocalRuntimeOverride: localUpsertRuntimeOverride,
+  deleteLocalRuntimeOverride: localDeleteRuntimeOverride,
+  sweepExpiredLocalRuntimeOverrides: localSweepExpiredRuntimeOverrides,
   invalidateRosterCache: () => invalidateRosterCache(),
 };

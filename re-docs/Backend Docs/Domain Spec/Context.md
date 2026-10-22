@@ -20,6 +20,8 @@ Non-goals (other domains):
 ## Expect
 - [Observed] Middleware failures never abort assembly: each `process` is individually try/caught, logged, and skipped (`context-pipeline-manager.ts:168`).
 - [Observed] Prompt-block order is precedence, not registration order: blocks sort by `priority` ascending, with `safety_constraints(10) > instruction_stack(15) > identity_authority(20)` asserted by integrity tests (`context-pipeline-manager.ts:192-193`, `context-assembler.ts:12`).
+- [Observed] The instruction stack resolves per tier. With a `DATABASE_URL` it comes from `agentInstructionStacks` + `instructionModules`, ordered by `priorityOrder`, with runtime overrides applied. WITHOUT one (local-first) it is read through the local tier instead: `agentGate.getInstructionStack(agentId, undefined, workspaceId)` (the agent's `instruction-stacks.json` links) and, only when the agent has no stack links, `moduleGate.instruction.get(agent.instructionModuleId, workspaceId)`. The local path pushes the same `instruction_stack` block at priority 15, so a local workspace's agent no longer runs with no operating instructions at all (`instruction-stack-middleware.ts`; regression test `middlewares/instruction-stack-middleware.local.test.ts`).
+- [Observed] 2026-10-22: the local branch applies the workspace's runtime overrides with the PG semantics, byte-for-byte the same rules. `agentGate.listLocalRuntimeOverrides(agentId, workspaceId)` returns the agent's ACTIVE rows in ascending id (the local mirror of the PG `orderBy(id)` read); a scoped `replace` (by `targetModuleId` or the legacy `replaceTarget`) swaps ONLY that module's slice of the rebuilt content; a `replace` for a module outside the stack is a no-op and a `replace` without a target is refused — neither can wipe the whole stack; `append` lines land after the rebuilt stack in override-id order; an override without an `instructionPatch` contributes nothing. Expired rows are never applied (the store hides them) and are swept afterwards through `agentGate.sweepExpiredLocalRuntimeOverrides` (the local mirror of the PG delete-by-id pass). The PG branch is untouched (`instruction-stack-middleware.ts`; regression test `middlewares/instruction-stack-middleware.local-overrides.test.ts`).
 - [Observed] Model resolution precedence: explicit `ctx.modelConfig` wins; else the agent's `modelModuleId` row resolved workspace-scoped via `moduleGate.model.get(id, ctx.workspaceId)` (cached 30s/200-keys under a DB+module+workspace key); else assembly rejects with `MODEL_MODULE_NOT_CONFIGURED` — no provider, model, or key default is assumed (`context-pipeline-manager.ts`).
 - [Observed] Env-key fallback covers only google/anthropic/openai rows; other providers depend entirely on the stored (decrypted) key (`context-pipeline-manager.ts:101`).
 - [Observed] `ContextAssembler` always mints a fresh `randomUUID` requestId — the pipeline's `ctx_${Date.now()}` id never survives assembly (`context-assembler.ts:67`, `context-pipeline-manager.ts:194`).
@@ -69,6 +71,7 @@ Middleware order (priority → packet contribution): `ConstraintSafetyMiddleware
 ## Relations
 Gates this domain calls:
 - `module-gate.ts` — `moduleGate.model.get(id, ctx.workspaceId)` for workspace-scoped model-module resolve (dynamic import, cycle-safe); decrypt via `shared/core/secret-box.ts` stays local (`context-pipeline-manager.ts`).
+- `agent-gate.ts` — `agentGate.getInstructionStack` (the agent's stack links) plus the local runtime-override tier `agentGate.listLocalRuntimeOverrides` / `agentGate.sweepExpiredLocalRuntimeOverrides` (dynamic import, cycle-safe).
 - Shared helpers (exempt): `shared/core/ttl-cache.ts`, `shared/core/perf-metrics.ts` (`timeAsync`), `shared/core/model-routing.ts` (log-only), `shared/core/agent-lock-store.ts` (the §12 lock store — Shared is exempt, so the middlewares import it directly without a cross-gate edge), `shared/core/local-file.ts` (its file backend), `observability-gate.ts` (assembler spans only, via gate).
 - `channel-gate.ts` — the lock store resolves a channel's owning workspace through `channelGate.get(channelId).workspaceId` (dynamic import inside Shared, cycle-safe) to pick the lock file scope.
 Verified outside callers:
@@ -85,7 +88,7 @@ Tables shared with other domains (all read-only from here, via Modules gate):
 - None. Assembly emits no broker events (thinking/stream/status emits belong to Runtime execution, not this child).
 
 ## Owns
-- Nothing. No table or queue is written on any assembly path (cache-only mutation).
+- Nothing. No table or queue is written on any assembly path (cache-only mutation) — with one exception: the LOCAL runtime-override expiry sweep deletes the expired override rows from the workspace file store (the local mirror of the PG tier's delete-by-id pass). A failing sweep is logged and the prompt still completes.
 
 ## Flags
 - `GEMINI_API_KEY` / `GOOGLE_API_KEY` — default-model key and google-row fallback (`context-pipeline-manager.ts:81`).
@@ -114,6 +117,7 @@ Compression triggers and the enableCompression flag have documented thresholds a
 Token estimation states its tokenizer, error bounds, and the 1000-token floor safety rule. Silent heuristic enforcement is not acceptable.
 ## Failure + Resume
 - Any middleware throw is caught, `console.error`d with the stage name, and skipped — the packet completes without that stage's blocks (`context-pipeline-manager.ts:168`).
+- The local runtime-override expiry sweep is caught and logged the same way: a sweep failure never fails the assembly, it only leaves an expired row on disk for the next pass to remove (`instruction-stack-middleware.ts`).
 - Model-module miss (no row, or agent has no `modelModuleId` and no explicit `ctx.modelConfig`) rejects with `MODEL_MODULE_NOT_CONFIGURED`; decrypt/DB errors propagate only if the row lookup itself throws — callers (`ContextAssembler`, studio route) surface those (`context-pipeline-manager.ts`, `context-assembler.ts:92`).
 - Routing-decision failures log and continue with the pinned module (`context-pipeline-manager.ts:137`).
 - `ContextAssembler` span errors are recorded on the span and rethrown — assembly has no fallback packet (`context-assembler.ts:92`).

@@ -66,6 +66,9 @@ describe("A1 · system_scheduler persists the schedule before arming it", () => 
       task: "wake-me",
       cron: null,
       isActive: true,
+      // The wake message is the caller's own words, so the caller is recorded
+      // as its author.
+      authorAgentId: "agent-probe",
     });
     expect(rows[0].nextRun).toBeTruthy();
 
@@ -91,8 +94,39 @@ describe("A1 · system_scheduler persists the schedule before arming it", () => 
     expect(nextRun.getMinutes() % 5).toBe(0);
   });
 
+  it("stores an every-N-hours cron and a next boundary for a repeatable schedule", async () => {
+    const res = await ToolExecutor.execute(
+      "agent-probe",
+      "system_scheduler",
+      { cron: "0 */2 * * *", taskDescription: "watchdog", channelId: "ch-sched" },
+      ctx(),
+    );
+    expect(res.success).toBe(true);
+
+    const rows = await queueGate.listActiveSchedules(WORKSPACE);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].cron).toBe("0 */2 * * *");
+    const nextRun = new Date(rows[0].nextRun as string);
+    expect(nextRun.getTime()).toBeGreaterThan(Date.now());
+    expect(nextRun.getMinutes()).toBe(0);
+    expect(nextRun.getHours() % 2).toBe(0);
+  });
+
+  it("rejects a minute-field step it cannot track instead of arming it hourly", async () => {
+    // */120 in the minute field cannot fire every 2 hours: the minute field
+    // stops at 59, so the row would silently behave like an hourly one.
+    const res = await ToolExecutor.execute(
+      "agent-probe",
+      "system_scheduler",
+      { cron: "*/120 * * * *", taskDescription: "too-long-step", channelId: "ch-sched" },
+      ctx(),
+    );
+    expect(res.success).toBe(false);
+    expect(res.error).toContain("Unsupported cron");
+    expect(await queueGate.listActiveSchedules(WORKSPACE)).toHaveLength(0);
+  });
+
   it("does not arm a schedule it could not persist", async () => {
-    // Point the store at a path that cannot become a directory.
     const blocker = join(dir, "not-a-directory");
     writeFileSync(blocker, "x");
     setLocalStoreDirForTests(blocker);

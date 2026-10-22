@@ -20,7 +20,10 @@ describe("TOOL-1 · flags — rollback unregister", () => {
     const mod = await import("./tool-registry.js");
     expect(mod.toolRegistry.has("query_database")).toBe(false);
     expect(mod.toolRegistry.has("system_scheduler")).toBe(true);
-  });
+    // 30s: the assertion is about registration flags, but the import itself
+    // reloads the whole registry graph (vi.resetModules above), which costs
+    // seconds on a loaded machine and tripped the 5s default.
+  }, 30_000);
 
   it("SYSTEM_SCHEDULER_ENABLED=false unregisters system_scheduler", async () => {
     process.env.QUERY_DATABASE_ENABLED = "true";

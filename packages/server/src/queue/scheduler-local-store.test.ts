@@ -147,3 +147,47 @@ describe("nextCronOccurrence — the */N boundary", () => {
     expect(nextCronOccurrence("*/99 * * * *", at("2026-10-20T10:05:00.000Z"))).toBeNull();
   });
 });
+
+describe("nextCronOccurrence — the every-N-hours boundary", () => {
+  // Hour boundaries are local-time boundaries (like a real crontab), so the
+  // expectations are computed in local time and hold in any timezone.
+  const localAt = (y: number, mo: number, d: number, h: number, min: number) =>
+    new Date(y, mo, d, h, min, 0, 0);
+
+  it("moves to the next matching hour", () => {
+    const from = localAt(2026, 9, 20, 10, 30);
+    const next = nextCronOccurrence("0 */2 * * *", from);
+    expect(next).not.toBeNull();
+    const at = new Date(next as string);
+    expect(at.getHours() % 2).toBe(0);
+    expect(at.getMinutes()).toBe(0);
+    expect(at.getTime()).toBeGreaterThan(from.getTime());
+  });
+
+  it("lands exactly two hours later when the start hour already matches", () => {
+    const from = localAt(2026, 9, 20, 10, 30);
+    const next = new Date(nextCronOccurrence("0 */2 * * *", from) as string);
+    expect(Math.round((next.getTime() - from.getTime()) / 3_600_000)).toBe(2);
+  });
+
+  it("honours the minute field", () => {
+    const from = localAt(2026, 9, 20, 10, 0);
+    const next = new Date(nextCronOccurrence("30 */4 * * *", from) as string);
+    expect(next.getMinutes()).toBe(30);
+    expect(next.getHours() % 4).toBe(0);
+  });
+
+  it("returns null for an unusable hour step or minute", () => {
+    const from = localAt(2026, 9, 20, 10, 0);
+    expect(nextCronOccurrence("0 */0 * * *", from)).toBeNull();
+    expect(nextCronOccurrence("0 */25 * * *", from)).toBeNull();
+    expect(nextCronOccurrence("60 */2 * * *", from)).toBeNull();
+  });
+
+  it("does NOT read */120 as every 2 hours (it is not a minute field)", () => {
+    // */120 in the minute field cannot fire hourly-silently: the inline tier
+    // rejects it, and the local tier must not track it either.
+    const from = localAt(2026, 9, 20, 10, 0);
+    expect(nextCronOccurrence("*/120 * * * *", from)).toBeNull();
+  });
+});

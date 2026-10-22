@@ -1,5 +1,6 @@
 ﻿import type { FastifyInstance } from "fastify";
-import { resolveTier } from "../shared/config/database.js";
+import { z } from "zod";
+import { isDatabaseConfigured, resolveTier } from "../shared/config/database.js";
 import { localModeDegraded } from "../shared/core/local-mode-guard.js";
 import { tierContextFor } from "../workspace/workspace-gate.js";
 import { skillsGate } from "../skills/skills-gate.js";
@@ -13,6 +14,71 @@ import { redactSecrets, redactApiKeyFields } from "../shared/core/redact.js";
 function workspaceIdFrom(request: any): string | null {
   const workspaceId = request.workspaceId;
   return typeof workspaceId === "string" && workspaceId.trim() ? workspaceId.trim() : null;
+}
+
+/**
+ * Runtime-override write body. `id` replaces an existing override of the same
+ * agent; without it the route mints a new one. The body fully describes the
+ * row (PUT semantics): an omitted field clears it.
+ */
+const runtimeOverrideBodySchema = z.object({
+  id: z.string().min(1).optional(),
+  overrideType: z.enum(["runtime_patch", "temp_permission", "context_inject"]).optional(),
+  instructionPatch: z
+    .object({
+      append: z.array(z.string()).optional(),
+      replace: z.array(z.string()).optional(),
+      targetModuleId: z.string().optional(),
+      replaceTarget: z.string().optional(),
+    })
+    .optional(),
+  permissionPatch: z
+    .object({
+      grantTools: z.array(z.string()).optional(),
+      revokeTools: z.array(z.string()).optional(),
+    })
+    .optional(),
+  createdBy: z.string().min(1).optional(),
+  expiresAt: z
+    .string()
+    .refine((v) => !Number.isNaN(Date.parse(v)), { message: "expiresAt must be a parseable date" })
+    .nullable()
+    .optional(),
+});
+
+type RuntimeOverrideBody = z.infer<typeof runtimeOverrideBodySchema>;
+
+/**
+ * Resolve the agent and the workspace scope for the runtime-override routes.
+ * The scope comes from the request (tenant header) first and from the agent
+ * row as the fallback — the same precedence the manifest routes use.
+ */
+async function resolveOverrideScope(request: any): Promise<
+  | { ok: true; agentId: string; workspaceId: string }
+  | { ok: false; status: number; body: Record<string, unknown> }
+> {
+  const requestedWorkspaceId = workspaceIdFrom(request);
+  const agent = await agentGate.getById(request.params.id, request.db, requestedWorkspaceId);
+  if (!agent) {
+    return {
+      ok: false,
+      status: 404,
+      body: { statusCode: 404, error: "Not Found", message: "Agent not found" },
+    };
+  }
+  const workspaceId = requestedWorkspaceId ?? agent.workspaceId ?? null;
+  if (!workspaceId) {
+    return {
+      ok: false,
+      status: 400,
+      body: {
+        statusCode: 400,
+        error: "Bad Request",
+        message: "Workspace context is required for runtime overrides",
+      },
+    };
+  }
+  return { ok: true, agentId: agent.id, workspaceId };
 }
 
 export async function studioRoutes(app: FastifyInstance) {
@@ -167,6 +233,90 @@ export async function studioRoutes(app: FastifyInstance) {
       globalBroker?.emit("workspace:sync", {});
       return { success: true, message: "Agent manifest updated successfully." };
     }
+  );
+
+  // ── Runtime overrides (live instruction patches) ──────────────────────
+  // The rows live in the Agents domain's file tier (`runtime-overrides.json`).
+  // The instruction-stack middleware applies them on its LOCAL branch — the
+  // branch that runs when the process has no database. With a database
+  // configured the middleware takes its PG branch, and the PG tier still has
+  // no writer, so the write is refused instead of storing a row nothing
+  // would apply.
+
+  // GET /api/studio/agents/:id/runtime-overrides
+  app.get<{ Params: { id: string } }>(
+    "/api/studio/agents/:id/runtime-overrides",
+    async (request, reply) => {
+      const resolved = await resolveOverrideScope(request);
+      if (!resolved.ok) return reply.status(resolved.status).send(resolved.body);
+
+      const overrides = await agentGate.listLocalRuntimeOverrides(
+        resolved.agentId,
+        resolved.workspaceId,
+      );
+      return { overrides };
+    },
+  );
+
+  // PUT /api/studio/agents/:id/runtime-overrides
+  app.put<{ Params: { id: string }; Body: RuntimeOverrideBody }>(
+    "/api/studio/agents/:id/runtime-overrides",
+    {
+      schema: { body: runtimeOverrideBodySchema },
+    },
+    async (request, reply) => {
+      const resolved = await resolveOverrideScope(request);
+      if (!resolved.ok) return reply.status(resolved.status).send(resolved.body);
+
+      if (isDatabaseConfigured()) {
+        return reply.status(409).send({
+          statusCode: 409,
+          error: "Conflict",
+          message:
+            "Runtime overrides are written to the local tier; this deployment applies overrides from Postgres, which has no writer yet.",
+        });
+      }
+
+      const body = request.body ?? ({} as RuntimeOverrideBody);
+      const row = await agentGate.upsertLocalRuntimeOverride(
+        {
+          id: body.id,
+          targetAgentId: resolved.agentId,
+          overrideType: body.overrideType ?? "runtime_patch",
+          instructionPatch: body.instructionPatch ?? null,
+          permissionPatch: body.permissionPatch ?? null,
+          createdBy: body.createdBy ?? "studio",
+          expiresAt: body.expiresAt ?? null,
+        },
+        resolved.workspaceId,
+      );
+      globalBroker?.emit("workspace:sync", {});
+      return reply.status(200).send(row);
+    },
+  );
+
+  // DELETE /api/studio/agents/:id/runtime-overrides/:overrideId
+  app.delete<{ Params: { id: string; overrideId: string } }>(
+    "/api/studio/agents/:id/runtime-overrides/:overrideId",
+    async (request, reply) => {
+      const resolved = await resolveOverrideScope(request);
+      if (!resolved.ok) return reply.status(resolved.status).send(resolved.body);
+
+      const deleted = await agentGate.deleteLocalRuntimeOverride(
+        resolved.agentId,
+        request.params.overrideId,
+        resolved.workspaceId,
+      );
+      if (!deleted) {
+        return reply.status(404).send({
+          statusCode: 404,
+          error: "Not Found",
+          message: "Runtime override not found",
+        });
+      }
+      globalBroker?.emit("workspace:sync", {});
+      return reply.status(204).send();
+    },
   );
 
   // POST /api/studio/inspect-prompt

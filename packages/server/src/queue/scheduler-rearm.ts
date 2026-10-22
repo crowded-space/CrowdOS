@@ -51,7 +51,10 @@ export function disarmAll(): void {
 
 async function fireSchedule(row: scheduleRow): Promise<void> {
   const channelId = row.channelId || "general";
-  const content = row.message || `⏰ Scheduled task: ${row.task}`;
+  // The wake carries the scheduler's OWN words: the message the agent wrote for
+  // its future self, or the description it gave when it booked the schedule.
+  // The scheduler never speaks in its own voice.
+  const content = row.message?.trim() || row.task?.trim() || `⏰ Scheduled task: ${row.id}`;
   try {
     const { getSharedBroker } = await import("../event-broker/event-broker-gate.js");
     const { globalBroker } = await import("../shared/sockets/register-socket-server.js");
@@ -62,38 +65,8 @@ async function fireSchedule(row: scheduleRow): Promise<void> {
       console.warn("[scheduler] dropped scheduled emit: no shared broker registered");
       return;
     }
-    try {
-      const { messageGate } = await import("../messages/message-gate.js");
-      await messageGate.append(
-        {
-          channelId,
-          authorId: "system-scheduler",
-          authorName: "Scheduler",
-          authorLevel: "system",
-          authorType: "system",
-          content,
-          workspaceId: row.workspaceId ?? null,
-        },
-        { broker: broker as never },
-      );
-    } catch {
-      const ephemeral = {
-        id: `sched-msg-${Date.now()}`,
-        channelId,
-        authorId: "system-scheduler",
-        authorName: "Scheduler",
-        authorLevel: "system",
-        authorType: "system",
-        content,
-        mentions: [],
-        isInternalMonologue: false,
-        sequenceNumber: 0,
-        timestamp: new Date(),
-      };
-      try {
-        broker.emit("message:new", ephemeral as never, { channelId });
-      } catch {}
-    }
+    // The wake IS the message: the shared dispatch persists it and lets the
+    // standard ladder pick the agent (the channel's pinned mention by default).
     await dispatchScheduledRun(row, content, broker as never);
     try {
       broker.emit(
