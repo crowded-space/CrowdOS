@@ -15,7 +15,7 @@ afterAll(() => {
   (env as any).DATABASE_URL = prevDatabaseUrl;
 });
 
-import { moduleGate } from "./module-gate.js";
+import { listAllModules, moduleGate } from "./module-gate.js";
 import { localUpsertModelModule } from "./module-local-store.js";
 import { localUpsertAgent } from "../agents/agent-local-store.js";
 
@@ -150,6 +150,35 @@ describe("module delete guard in Local mode (no DATABASE_URL)", () => {
     await expect(
       localUpsertInstructionModule({ id: "m1", label: "L", createdAt: now, updatedAt: now } as any, undefined),
     ).resolves.toBeUndefined();
+  });
+
+  it("seeds the default toolkit on a fresh local workspace so the whitelist has a target", async () => {
+    // Regression: local tier seeded only `instr-default`, so the toolkit
+    // catalog (and the settings whitelist) rendered empty for a workspace
+    // that never ran the agent-create seed.
+    const all = await listAllModules({ workspaceId: "ws-fresh" });
+    expect(all.toolkitModules).toHaveLength(1);
+    expect(all.toolkitModules[0]).toMatchObject({
+      id: "toolkit-default",
+      label: "Default Toolkit",
+      tools: [],
+    });
+    expect(all.instructionModules).toHaveLength(1);
+  });
+
+  it("toolkit grants round-trip through the local store", async () => {
+    await moduleGate.ensureDefaults("ws-grant");
+    const updated = await moduleGate.toolkit.update(
+      "toolkit-default",
+      { tools: ["web_search", "read_workspace_local"] },
+      "ws-grant",
+    );
+    expect(updated).toMatchObject({
+      id: "toolkit-default",
+      tools: ["web_search", "read_workspace_local"],
+    });
+    const [listed] = await moduleGate.toolkit.list({ workspaceId: "ws-grant" });
+    expect(listed.tools).toEqual(["web_search", "read_workspace_local"]);
   });
 
   it("ensureDefaults is a no-op without a workspace scope (no confusing module-guard error)", async () => {

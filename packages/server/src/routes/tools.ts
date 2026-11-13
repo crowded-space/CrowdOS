@@ -1,5 +1,5 @@
 ﻿import type { FastifyInstance } from "fastify";
-import { toolsGate } from "../tools/tools-gate.js";
+import { toolsGate, UNIVERSAL_TOOL_IDS } from "../tools/tools-gate.js";
 import { authGate } from "../shared/auth/auth-gate.js";
 import { maybeSend304 } from "../shared/core/http-cache.js";
 
@@ -26,6 +26,9 @@ export async function toolRoutes(app: FastifyInstance) {
         sourceType: t.sourceType,
         dangerLevel: t.dangerLevel,
         authLevelRequired: t.authLevelRequired ?? 3,
+        // Universal tools are injected for every agent; toolkit grants add
+        // nothing for them. The whitelist UI reads this to lock their row.
+        universal: UNIVERSAL_TOOL_IDS.includes(t.id),
       }));
       if (maybeSend304(request, reply, body)) return;
       return body;
@@ -49,6 +52,7 @@ export async function toolRoutes(app: FastifyInstance) {
         sourceType: tool.sourceType,
         dangerLevel: tool.dangerLevel,
         authLevelRequired: tool.authLevelRequired ?? 3,
+        universal: UNIVERSAL_TOOL_IDS.includes(tool.id),
         parameters: tool.parameters,
       };
       if (maybeSend304(request, reply, body)) return;

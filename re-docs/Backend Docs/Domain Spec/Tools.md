@@ -92,7 +92,7 @@ Gates this domain calls:
 - `event-broker-gate.ts` — single shared instance via `getSharedBroker()`/`globalBroker` (no orphan `new EventBroker()` fallbacks).
 Known outside callers of `toolsGate` (+ class-level users):
 - Runtime: `agentic-runtime.ts` (`executeBatch`), `pi-tool-bridge.ts` (execute/list), `tool-schema-middleware.ts` (`get`).
-- Routes: `routes/tools.ts` (list/get/admin execute-test), `routes/mcp.ts` (server CRUD + connect/disconnect), `routes/studio.ts` (resolves tool cards from ids).
+- Routes: `routes/tools.ts` (list/get/admin execute-test), `routes/mcp.ts` (server CRUD + connect/disconnect), `routes/studio.ts` (resolves tool cards from ids). `GET /api/tools` lists registry entries with `parameters` omitted (limit 1-200, optional category/authLevel) and since 2026-10-22 includes `universal: true` for ids in `UNIVERSAL_TOOL_IDS`; `GET /api/tools/:name` returns the full schema plus the same flag. The client Security Tool Whitelist reads this list instead of the old demo tool slice.
 - Tests swap definitions freely via `toolRegistry`/`ToolExecutor` (`approval-flow.integration.test.ts`, `tool-executor.batch.test.ts`, `executor.timeout.test.ts`, `tool-registry.*.test.ts`).
 - Boot: `create-app.ts` fires `toolsGate.restoreMcpServers()` at startup — best-effort restore of persisted MCP configs; no DB ⇒ no-op (dual-boot preserved, TOLS-05).
 Tables touched:

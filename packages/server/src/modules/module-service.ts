@@ -417,20 +417,22 @@ function clearListAllCache(): void {
 // is a list landing mid-mutation, and the 10s TTL backstops that). A failed
 // mutation only costs one wasted re-fetch.
 
-// Well-known id for the local-tier default instruction module, seeded by
-// Agents on first create when a fresh local workspace has no catalog (see
-// ensureDefaultModules). No default model module is seeded: a fresh workspace
-// starts with zero model providers by contract.
+// Well-known ids for the local-tier default modules, seeded by Agents on
+// first create and by the module list reads when a fresh local workspace has
+// no catalog (see ensureDefaultModules). No default model module is seeded: a
+// fresh workspace starts with zero model providers by contract.
 export const DEFAULT_INSTRUCTION_MODULE_ID = "instr-default";
+export const DEFAULT_TOOLKIT_MODULE_ID = "toolkit-default";
 
 /**
  * Local-tier canon default (C3): a fresh local workspace has no catalog, so
  * "Launch Assembly" would reference an instruction row that never exists.
- * Seed the default InstructionModule per workspace, idempotent by well-known
- * id, straight through the local store — the REST create path mints its own
- * UUID (the Zod validator strips a client-supplied id), so gate create cannot
- * express "insert with this id". Local tier only; PG keeps strict validation.
- * Model modules are intentionally never seeded here: zero default provider.
+ * Seed the default InstructionModule and ToolkitModule per workspace,
+ * idempotent by well-known id, straight through the local store - the REST
+ * create path mints its own UUID (the Zod validator strips a client-supplied
+ * id), so gate create cannot express "insert with this id". Local tier only;
+ * PG keeps strict validation. Model modules are intentionally never seeded
+ * here: zero default provider.
  */
 export async function ensureDefaultModules(workspaceId?: string | null): Promise<void> {
   const scope = workspaceId?.trim() || null;
@@ -456,6 +458,34 @@ export async function ensureDefaultModules(workspaceId?: string | null): Promise
       } as any,
       scope,
     );
+  }
+  // An empty toolkit is the canon default: agents start with only universal
+  // tools until an operator grants registry tools via the whitelist UI. The
+  // row still must exist so the settings surface can select and edit it.
+  if (!(await localGetToolkitModule(DEFAULT_TOOLKIT_MODULE_ID, scope))) {
+    const now = new Date().toISOString();
+    await localUpsertToolkitModule(
+      {
+        id: DEFAULT_TOOLKIT_MODULE_ID,
+        label: "Default Toolkit",
+        tools: [],
+        createdAt: now,
+        updatedAt: now,
+      } as any,
+      scope,
+    );
+  }
+}
+
+/**
+ * Seed defaults from a read path without letting a broken store turn a
+ * tolerant list into a 500: reads still serve whatever rows they can.
+ */
+async function seedDefaultsForRead(workspaceId?: string | null): Promise<void> {
+  try {
+    await ensureDefaultModules(workspaceId);
+  } catch (err) {
+    console.warn(`[modules] default module seed skipped: ${err instanceof Error ? err.message : String(err)}`);
   }
 }
 
@@ -500,6 +530,9 @@ export async function listAllModules(opts?: ListModulesOpts & { workspaceId?: st
   const { limit, offset } = clampListOpts(opts);
   const { tier } = await moduleTier(opts?.workspaceId);
   if (tier === "local") {
+    // Existing local workspaces never ran the agent-create seed: make the
+    // settings catalog self-healing so the toolkit whitelist has a row.
+    await seedDefaultsForRead(opts?.workspaceId);
     const [modelModules, instructionModules, toolkitModules, constraintsModules, capabilitiesModules] =
       await Promise.all([
         localListModelModules(opts?.workspaceId),
@@ -711,6 +744,7 @@ export async function listToolkitModules(opts?: ListModulesOpts & { workspaceId?
   const { limit, offset } = clampListOpts(opts);
   const { tier } = await moduleTier(opts?.workspaceId);
   if (tier === "local") {
+    await seedDefaultsForRead(opts?.workspaceId);
     const rows = await localListToolkitModules(opts?.workspaceId);
     return rows.slice(offset, offset + limit);
   }

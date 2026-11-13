@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
   X, Laptop, Users, Shield, ShieldAlert, Cpu, Hammer, Hash, FolderOpen, BarChart3,
-  Trash2, Plus, ArrowRight, UserCheck, Play, ToggleLeft, ToggleRight, Radio,
+  Trash2, Plus, ArrowRight, UserCheck, Play, Radio,
   Layers, Brain, Wrench, Edit, Save, RotateCcw, FileCode, GripVertical, Check,
   Copy, Download, Upload, Coins, Lock, ScrollText, HardDrive
 } from 'lucide-react';
@@ -21,6 +21,7 @@ import MountsInspector from '../MountsInspector';
 import DiagnosticsTab from '../settings/DiagnosticsTab';
 import AuditTab from '../settings/AuditTab';
 import StorageTab from '../settings/StorageTab';
+import ToolWhitelistTab from '../settings/ToolWhitelistTab';
 
 const ROLE_PERMISSIONS = [
   { id: 'administrator', label: 'Administrator', description: 'Grants all permissions and bypasses channel restrictions.' },
@@ -296,8 +297,6 @@ export default function WorkspaceSettingsModal() {
     roles,
     addRole,
     deleteRole,
-    tools,
-    toggleToolEnabled,
     instructionModules,
     modelModules,
     toolkitModules,
@@ -1857,44 +1856,7 @@ export default function WorkspaceSettingsModal() {
 
             {/* TAB: TOOLS */}
             {workspaceSettingsTab === 'tools' && (
-              <div className="space-y-4 text-xs font-sans">
-                <div>
-                    <h3 className="font-semibold text-zinc-200">Agent Capabilities & Toolkit Module <span className="text-[10px] font-mono text-zinc-500">· local only</span></h3>
-                    <p className="text-zinc-500">Display toggles on this device — they flip the local tool list only and enforce nothing server-side. Real tool grants come from each agent's toolkit module.</p>
-                </div>
-
-                <div className="space-y-2.5 select-none">
-                  {tools.map(t => (
-                    <div 
-                      key={t.id} 
-                      className="bg-zinc-900/35 border border-zinc-900 p-3.5 rounded-lg flex items-center justify-between gap-4 font-sans leading-relaxed"
-                    >
-                      <div className="space-y-1 min-w-0">
-                        <div className="flex items-baseline gap-2">
-                          <span className="font-semibold text-zinc-200 font-mono tracking-tight">{t.name}</span>
-                          <span className="text-[9px] font-mono text-zinc-550 bg-zinc-950 border border-zinc-900 rounded px-1 inline-block">
-                            {t.category}
-                          </span>
-                        </div>
-                        <p className="text-zinc-450 mt-1 truncate max-w-md text-[11px] leading-normal">{t.description}</p>
-                      </div>
-
-                      <div className="flex items-center gap-4 shrink-0 font-mono">
-                        <button
-                          onClick={() => toggleToolEnabled(t.id)}
-                          className={`p-1 rounded cursor-pointer transition focus:outline-none ${
-                            t.enabled 
-                              ? 'text-teal-400 font-medium' 
-                              : 'text-zinc-600'
-                          }`}
-                        >
-                          {t.enabled ? <ToggleRight size={28} /> : <ToggleLeft size={28} />}
-                        </button>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
+              <ToolWhitelistTab />
             )}
 
             {/* TAB: MODEL CARDS */}
@@ -2542,7 +2504,7 @@ export default function WorkspaceSettingsModal() {
                             setIsCreatingToolModule(true);
                             setToolFormName('');
                             setToolFormDesc('');
-                            setToolFormCapabilities(['sandbox.exec', 'web.search']);
+                            setToolFormCapabilities([]);
                             setToolFormSchema(JSON.stringify({
                               "read_sandbox_file": {
                                 "description": "Fetch code contents from current sandbox session directory",
@@ -2612,31 +2574,27 @@ export default function WorkspaceSettingsModal() {
                             />
                           </div>
 
-                          {/* Capabilities whitelist checkbox stack */}
+                          {/* Grants are edited against the live registry in the
+                              Security Tools Whitelist tab. The old checkbox stack
+                              here hardcoded ids that exist in no registry. */}
                           <div>
-                            <label className="text-[11px] font-medium text-zinc-400 block mb-1">Allowed capabilities</label>
-                            <div className="grid grid-cols-2 gap-1.5 bg-zinc-950 p-2.5 border border-zinc-850 rounded text-[10.5px] select-none text-zinc-400 leading-normal">
-                              {['sandbox.exec', 'web.search', 'github.read', 'db.query', 'agent.orchestrate'].map(capId => {
-                                const checked = toolFormCapabilities.includes(capId);
-                                return (
-                                  <label key={capId} className="flex items-center gap-1.5 cursor-pointer hover:text-zinc-200">
-                                    <input 
-                                      type="checkbox"
-                                      checked={checked}
-                                      onChange={() => {
-                                        setToolFormCapabilities(prev => 
-                                          checked 
-                                            ? prev.filter(c => c !== capId) 
-                                            : [...prev, capId]
-                                        );
-                                      }}
-                                      className="accent-teal-500 cursor-pointer w-3.5 h-3.5 border-zinc-800 bg-zinc-950 text-teal-600 rounded"
-                                    />
-                                    <span className="font-mono text-[9px] uppercase">{capId}</span>
-                                  </label>
-                                );
-                              })}
+                            <label className="text-[11px] font-medium text-zinc-400 block mb-1">Granted tools</label>
+                            <div className="bg-zinc-950 p-2.5 border border-zinc-850 rounded text-[10.5px] leading-normal">
+                              {toolFormCapabilities.length === 0 ? (
+                                <span className="text-zinc-500">No tools granted.</span>
+                              ) : (
+                                <div className="flex flex-wrap gap-1">
+                                  {toolFormCapabilities.map(toolId => (
+                                    <span key={toolId} className="text-[8.5px] font-mono text-zinc-450 bg-zinc-900 px-1.5 py-0.5 border border-zinc-850 rounded">
+                                      {toolId}
+                                    </span>
+                                  ))}
+                                </div>
+                              )}
                             </div>
+                            <p className="text-[10px] text-zinc-500 mt-1">
+                              Save the module, then grant its tools in Security Tools Whitelist.
+                            </p>
                           </div>
 
                           {/* Function call schema object definition */}

@@ -640,7 +640,7 @@ A 140KB administration console organized into 8 tabs:
 1. **Overview Tab (`overview`)**: Displays workspace identity cards, active filesystem sectors, registered agent counts, and general metrics. Contains the "Delete Workspace" trigger.
 2. **Agents Tab (`agents`)**: Fully manages agents. Implements **Mind Preset templates** (CEO Owl, Coder Sparrow, QA Pigeon, Writer Raven) to instantly pre-fill forms. Supports **Import/Export Mind** as `.json` files, agent duplication, and modular cognitive assembly mapping.
 3. **Permissions & Roles Tab (`roles`)**: Renders custom roles with drag-and-drop ordering. Allows selecting a role to edit its name, pick one of 32 colors, and toggle any of the 10 role permissions.
-4. **Tools Tab (`tools`)**: Toggles whitelisted sandbox tool status and displays total usage statistics.
+4. **Tools Tab (`tools`)**: Server-persisted toolkit whitelist editor. Select a toolkit module, then list every real tool from `GET /api/tools` (grouped by category with danger level and admitted authority range) and toggle grants into that module. Universal tools stay locked on; ids no longer in the registry are surfaced for removal.
 5. **Model Modules Tab (`model_cards`)**: Renders model modules.
 6. **Skills Manager Tab (`skills_manager`)**: Dual-pane cognitive modules editor:
   - **Skills Catalog**: Manage instruction modules, system prompts, filesystem target paths, and associated model profiles.
