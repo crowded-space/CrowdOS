@@ -130,14 +130,14 @@ Source of truth: `CrowdOS.md` §34. Summary:
 
 ## Stack
 
-From the codebase (`package.json`, `docker-compose.yml`):
+From the codebase (`package.json`):
 
 - **Client** — React 19 + Vite + TailwindCSS v4 + Zustand + `socket.io-client` (`packages/client`, dev port `22077`)
 - **Server** — Node.js + Fastify 5 + TypeScript + Drizzle ORM + Socket.io + BullMQ 6 (`packages/server`, default port `12077`)
 - **Coding engine** — `@crowdspace/pi-core` (in-repo fork backing the Coding Runtime)
 - **Shared contracts** — `@crowdspace/shared`
 - **Desktop** — Electron shell, Windows-first (`packages/desktop`)
-- **Infra** — PostgreSQL 16 (primary) + Redis 7 (opt-in). Default queue mode is `inline` — `docker compose up` runs `api` + `postgres`. BullMQ delivery needs the queue profile: `docker compose --profile queue up` (adds `redis` + `worker`).
+- **Infra** — none required. The local filesystem is the source of truth: the server boots with no Postgres and no Redis, and `QUEUE_MODE=inline` (the default) runs jobs in-process. PostgreSQL is optional (global `DATABASE_URL`, or a per-workspace `databaseUrl` in `workspaces.json`); Redis is optional and read only when `QUEUE_MODE=bullmq`.
 
 ---
 
@@ -145,11 +145,12 @@ From the codebase (`package.json`, `docker-compose.yml`):
 
 ```bash
 npm install
-npm run db:bootstrap   # push schema + seed (needs Postgres)
 npm run dev            # api + worker + client
 ```
 
-Defaults: API `http://localhost:12077`, client `http://localhost:22077` (both configurable via `PORT` / `CLIENT_ORIGIN`). Copy `.env.example` for the full option set — `QUEUE_MODE=inline` needs no Redis; set `QUEUE_MODE=bullmq` + `REDIS_URL` for durable queue delivery.
+No database and no broker are required — the local filesystem is the source of truth and `QUEUE_MODE=inline` (the default) runs jobs in-process. Postgres is optional: set `DATABASE_URL` (or a per-workspace `databaseUrl` in `workspaces.json`), then run `npm run db:bootstrap` to push the schema and seed it.
+
+Defaults: API `http://localhost:12077`, client `http://localhost:22077` (both configurable via `PORT` / `CLIENT_ORIGIN`). Copy `.env.example` for the full option set — `QUEUE_MODE=bullmq` + `REDIS_URL` is the only path that needs Redis.
 
 ---
 

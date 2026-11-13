@@ -27,11 +27,11 @@
     "db:seed": "npm run db:seed --workspace @crowdspace/server",
     "db:check": "npm run db:check --workspace @crowdspace/server",
     "db:bootstrap": "npm run db:push && npm run db:seed",
-    "load:concurrent-sends": "k6 run load/k6/concurrent-sends.js",
-    "load:concurrent-swarms": "k6 run load/k6/concurrent-swarms.js",
-    "load:soak": "k6 run load/k6/soak.js",
-    "load:soak:nightly": "k6 run -e SOAK_DURATION=8h load/k6/soak.js",
-    "load:harness": "node load/harness.mjs"
+    "load:concurrent-sends": "k6 run tests/load/k6/concurrent-sends.js",
+    "load:concurrent-swarms": "k6 run tests/load/k6/concurrent-swarms.js",
+    "load:soak": "k6 run tests/load/k6/soak.js",
+    "load:soak:nightly": "k6 run -e SOAK_DURATION=8h tests/load/k6/soak.js",
+    "load:harness": "node tests/load/harness.mjs"
   },
   "keywords": [
     "ai",

@@ -59,7 +59,7 @@ jobs:
       - name: Full suite
         run: npm test --workspace @crowdspace/server
       - name: Load smoke (SCL-1 — 100 sends / 10 swarms)
-        run: node load/harness.mjs --vus 20 --duration 10
+        run: node tests/load/harness.mjs --vus 20 --duration 10
         env:
           BASE_URL: http://localhost:3001
       # 8h soak is staged: smoke runs on nightly, full 8h is manual via workflow_dispatch with SOAK_DURATION=8h

@@ -29,6 +29,7 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
+vitest-*.log
 
 # Misc & IDEs
 *.tsbuildinfo
@@ -41,14 +42,14 @@ Thumbs.db
 .vscode/
 .idea/
 
-# Specified project & metadata ignores
-.acad/
-.agents/
-.editorconfig
-.gitattributes
-.user idea/
-GEMINI.md
-dont readme.md
+# Dot-files and dot-directories are local-only tooling — never commit.
+# Exceptions: .git itself, .gitignore, .env.example, .gitkeep, and .github/ (CI = repo contract).
+.*
+!.git/
+!.gitignore
+!.env.example
+!.gitkeep
+!.github/
 
 # Archived / dead code
 _archive/
@@ -58,10 +59,27 @@ _archive/
 e2e-screenshots/
 
 # Documentation workspace (not codebase, never commit)
+# The one-time domain audit, the RE analysis corpus, the UX deep-dive report
+# and the UX guideline are on-disk only.
+audit/
+RE/
+UX_REPORT.md
+UX_GUIDELINE.md
 
+# Agent contract — on disk, untracked
+AGENTS.md
 
+# Local scratch (never commit)
+audit_tmp_*
+.probe_toolcheck.md
+TEST_FILE.md
+test-file.md
+playwright.config.yaml
+UI-AUDIT.md
+qa-electron-driver.mjs
 
 # CrowdOS runtime data (registries, file stores, outboxes)
 sandbox/
 packages/server/sandbox/
+packages/server/data/*.json
 **/localstore/

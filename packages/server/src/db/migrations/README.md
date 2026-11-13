@@ -17,5 +17,6 @@ Rules:
 - Consistency is enforced in CI by `src/db/db-migrations-consistency.test.ts`
   (journal tags <-> sql files <-> snapshots). Run it via `npx vitest run src/db`.
 
-Rationale and history: audit/domains/db/bug-ledger.csv (DB-005); drizzle-kit
+Rationale and history: the archived domain audit's DB-005 bug ledger
+(`audit/domains/db/bug-ledger.csv`, on-disk only — not tracked); drizzle-kit
 generate output must stay empty-diff because these files are hand-managed.

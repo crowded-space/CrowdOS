@@ -29,9 +29,9 @@ Electron desktop shell for CrowdOS (Windows-first, zero-auth, loopback-only).
 
 ## Release runbook (Windows x64, NSIS, unsigned OSS v1)
 
-Prereqs: Postgres 16 on `127.0.0.1:5432` (`community_agent`, postgres/postgres
-per docker-compose, or set `DATABASE_URL`), `npm install` (pulls the Electron
-binary + electron-builder), client+server built (`npm run build`).
+Prereqs: `npm install` (pulls the Electron binary + electron-builder) and
+client+server built (`npm run build`). Postgres is optional — the app boots
+without it and DB-backed routes degrade; set `DATABASE_URL` to enable them.
 
 - Dev/debug shell (one command): `npm run dev:electron` from the repo root
   (or `npm run dev --workspace @crowdspace/desktop`). It compiles

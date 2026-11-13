@@ -124,7 +124,7 @@ Tables shared with other domains:
 
 ## Decisions
 - [Observed] Inline mode preserves synchronous behavior with zero Redis dependency — dev/tests never connect (`queues.ts:111-112`, `worker.ts:36-40`).
-- [Observed] Compose default is api+postgres inline; redis+worker are opt-in behind `--profile queue` (`docker-compose.yml`). BullMQ stays for Murder-scale fan-out only — schema and topology freeze: no new queues/tables for §34-pending features.
+- [Observed] Queue delivery default is `inline` — jobs run in-process with no broker; `QUEUE_MODE=bullmq` is opt-in and reads `REDIS_URL`. BullMQ stays for Murder-scale fan-out only — schema and topology freeze: no new queues/tables for §34-pending features.
 - [Observed] Deterministic `channel:agent:message` jobId makes retries and double-delivery idempotent at the queue layer (`queues.ts:119`).
 - [Observed] Attempts 3 with 60s exponential backoff and 15min lock: run jobs may block up to 5min on approval waits, so a shorter lock would false-stall busy jobs (`queues.ts:30-35`, `run-worker.ts:141-147`).
 - [Observed] Single-owner sweeps: bullmq API suppresses local timers; the worker owns all repeatables via the maintenance queue (`create-app.ts:391-396`, `repeatables.ts:21`).
