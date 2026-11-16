@@ -22,7 +22,7 @@
     "test:e2e": "playwright test",
     "lint": "npm run lint --workspaces --if-present",
     "lint:gates": "npm run lint:gates --workspace @crowdspace/server",
-    "typecheck": "npm run typecheck --workspaces --if-present",
+    "typecheck": "npm run build --workspace @crowdspace/shared && npm run typecheck --workspaces --if-present",
     "db:push": "npm run db:push --workspace @crowdspace/server",
     "db:seed": "npm run db:seed --workspace @crowdspace/server",
     "db:check": "npm run db:check --workspace @crowdspace/server",
