@@ -246,6 +246,12 @@ export default function WorkspacePortal() {
     const configured = Boolean(ws.database?.configured);
     return (
       <div key={ws.id} className="relative group">
+        {/* Audit §3 (minor #23): the row used to nest a span[role=button]
+            (the "..." options control) INSIDE the option <button> — invalid
+            interactive-nesting that screen readers can drop and that made
+            click handling fragile. The row is now a real option button with
+            the options control as a real sibling button overlaid on the
+            right; keyboard focus and Enter/Space come free. */}
         <button
           type="button"
           role="option"
@@ -267,9 +273,15 @@ export default function WorkspacePortal() {
             </span>
           </span>
           {opening ? <Loader2 size={14} className="animate-spin text-zinc-400 shrink-0" aria-label="Opening" /> : <span className="text-[12px] text-zinc-500 opacity-0 group-hover:opacity-100 shrink-0">Open</span>}
-          <span role="button" tabIndex={0} aria-label={'Options for ' + ws.name} onClick={(e) => { e.stopPropagation(); setMenuFor(menuFor === ws.id ? null : ws.id); }} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); setMenuFor(menuFor === ws.id ? null : ws.id); } }} className={'p-1.5 rounded-md text-zinc-500 hover:text-zinc-200 hover:bg-zinc-800 ' + FOCUS_RING}>
-            <MoreHorizontal size={15} />
-          </span>
+        </button>
+        <button
+          type="button"
+          aria-label={'Options for ' + ws.name}
+          aria-expanded={menuFor === ws.id}
+          onClick={(e) => { e.stopPropagation(); setMenuFor(menuFor === ws.id ? null : ws.id); }}
+          className={'absolute right-1.5 top-1/2 -translate-y-1/2 p-1.5 rounded-md text-zinc-500 hover:text-zinc-200 hover:bg-zinc-800 ' + FOCUS_RING}
+        >
+          <MoreHorizontal size={15} aria-hidden="true" />
         </button>
         {menuFor === ws.id && (
           <div role="menu" aria-label={'Options for ' + ws.name} className="absolute right-2 top-full mt-1 z-20 w-52 rounded-md border border-zinc-800 bg-zinc-900 p-1">
@@ -388,7 +400,9 @@ export default function WorkspacePortal() {
                 {(isLaunching || isCreatingWorkspace) && <Loader2 size={14} className="animate-spin" aria-hidden="true" />}
                 {(isLaunching || isCreatingWorkspace) ? 'Creating workspace' : 'Create workspace'}
               </button>
-              <p className="mt-3 text-[11px] text-zinc-600">Workspaces are stored locally. Memory is optional.</p>
+              {/* Audit §1: the same "stored locally" copy also sat at the card
+                  top-right — one statement per screen. The footer strip below
+                  keeps the local-first framing for the whole card. */}
             </section>
           </div>
           <div className="px-5 sm:px-7 py-3 border-t border-zinc-900 flex items-center justify-between gap-3">

@@ -40,6 +40,19 @@ function formatTime(iso: string | null): string {
   return d.toLocaleString();
 }
 
+// Live store slices (approvalRequests, drafts, model registry) are hydrated
+// from socket/REST payloads typed as `any` on the wire, so a field the row
+// type calls `string | null` can be any shape at runtime. Rendering a
+// non-string child crashes React (audit §2.1: one empty object killed the
+// whole shell), so every rendered field is coerced here: strings pass,
+// numbers stringify, everything else is an honest dash (null) — never an
+// invented value.
+function asText(value: unknown): string | null {
+  if (typeof value === 'string') return value;
+  if (typeof value === 'number' || typeof value === 'bigint') return String(value);
+  return null;
+}
+
 function kindLabel(kind: auditKind): string {
   if (kind === 'approval') return 'Approval';
   if (kind === 'mount') return 'Mount';
@@ -63,9 +76,13 @@ export default function AuditTab(): React.JSX.Element {
   const channelNames = React.useMemo(() => {
     const map = new Map<string, string>();
     for (const ws of workspaces) {
-      for (const ch of ws.channels ?? []) map.set(ch.id, ch.name);
+      for (const ch of ws.channels ?? []) {
+        if (asText(ch.id)) map.set(asText(ch.id)!, asText(ch.name) ?? asText(ch.id) ?? '');
+      }
       for (const cat of ws.categories ?? []) {
-        for (const ch of cat.channels ?? []) map.set(ch.id, ch.name);
+        for (const ch of cat.channels ?? []) {
+          if (asText(ch.id)) map.set(asText(ch.id)!, asText(ch.name) ?? asText(ch.id) ?? '');
+        }
       }
     }
     return map;
@@ -74,27 +91,30 @@ export default function AuditTab(): React.JSX.Element {
   const rows: auditRow[] = React.useMemo(() => {
     const out: auditRow[] = [];
     for (const req of approvalRequests) {
-      const argKeys =
+      const argsKeys =
         req.argsPreview && typeof req.argsPreview === 'object'
           ? Object.keys(req.argsPreview)
           : [];
+      const scopeText = asText(req.scope);
+      const toolText = asText(req.tool) ?? 'unknown';
+      const riskText = asText(req.riskClass) ?? 'general';
       out.push({
-        key: 'approval:' + req.id,
+        key: 'approval:' + (asText(req.id) ?? 'unknown'),
         kind: 'approval',
-        summary: req.tool + ' (' + req.riskClass + ')',
+        summary: toolText + ' (' + riskText + ')',
         detail:
-          'Run ' + req.runId +
-          (req.scope ? ' \u00b7 scope ' + req.scope : '') +
-          (argKeys.length > 0 ? ' \u00b7 args: ' + argKeys.join(', ') : '') +
-          (req.expiresAt ? ' \u00b7 expires ' + formatTime(req.expiresAt) : ''),
-        actor: req.requestedBy ?? null,
+          'Run ' + (asText(req.runId) ?? 'unknown') +
+          (scopeText ? ' \u00b7 scope ' + scopeText : '') +
+          (argsKeys.length > 0 ? ' \u00b7 args: ' + argsKeys.join(', ') : '') +
+          (req.expiresAt ? ' \u00b7 expires ' + formatTime(asText(req.expiresAt)) : ''),
+        actor: asText(req.requestedBy),
         // ApprovalRequest carries no recorded-at timestamp: honest dash.
         time: null,
-        scope: req.channelId ?? req.runId,
+        scope: scopeText,
         scopeLabel: req.channelId
-          ? (channelNames.get(req.channelId) ?? req.channelId)
-          : req.runId,
-        status: req.status,
+          ? (channelNames.get(asText(req.channelId) ?? '') ?? asText(req.channelId))
+          : asText(req.runId),
+        status: asText(req.status),
       });
     }
     for (const [channelId, draft] of Object.entries(draftByChannel)) {
@@ -108,7 +128,7 @@ export default function AuditTab(): React.JSX.Element {
           'Composer-observed effective mount' +
           (snap.source ? ' (source ' + snap.source + ')' : ''),
         actor: 'local-operator',
-        time: draft.updatedAt ?? null,
+        time: asText(draft.updatedAt),
         scope: channelId,
         scopeLabel: channelNames.get(channelId) ?? channelId,
         status: null,
@@ -116,27 +136,27 @@ export default function AuditTab(): React.JSX.Element {
     }
     for (const profile of modelProfiles) {
       out.push({
-        key: 'model:profile:' + profile.id,
+        key: 'model:profile:' + (asText(profile.id) ?? 'unknown'),
         kind: 'model',
-        summary: 'Profile ' + profile.label + ' (' + profile.provider + '/' + profile.modelName + ')',
+        summary: 'Profile ' + (asText(profile.label) ?? 'unknown') + ' (' + (asText(profile.provider) ?? '?') + '/' + (asText(profile.modelName) ?? '?') + ')',
         detail: profile.apiKeyConfigured ? 'Key configured' : 'No key configured',
         actor: null,
-        time: profile.updatedAt ?? profile.createdAt ?? null,
-        scope: profile.id,
-        scopeLabel: profile.label,
+        time: asText(profile.updatedAt) ?? asText(profile.createdAt) ?? null,
+        scope: asText(profile.id),
+        scopeLabel: asText(profile.label),
         status: null,
       });
     }
     for (const mod of modelModules) {
       out.push({
-        key: 'model:module:' + mod.id,
+        key: 'model:module:' + (asText(mod.id) ?? 'unknown'),
         kind: 'model',
-        summary: 'Module ' + mod.name,
-        detail: mod.description ?? null,
+        summary: 'Module ' + (asText(mod.name) ?? 'unknown'),
+        detail: asText(mod.description),
         actor: null,
-        time: mod.createdAt ?? null,
-        scope: mod.id,
-        scopeLabel: mod.name,
+        time: asText(mod.createdAt),
+        scope: asText(mod.id),
+        scopeLabel: asText(mod.name),
         status: null,
       });
     }
@@ -150,7 +170,7 @@ export default function AuditTab(): React.JSX.Element {
             ? audit.files.length + ' file' + (audit.files.length === 1 ? '' : 's') + ': ' + audit.files.join(', ')
             : 'No files listed',
         actor: 'local-operator',
-        time: audit.restoredAt ?? null,
+        time: asText(audit.restoredAt),
         scope: runId,
         scopeLabel: runId,
         status: 'restored',

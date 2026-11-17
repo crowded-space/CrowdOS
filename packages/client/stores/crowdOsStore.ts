@@ -405,11 +405,17 @@ async function fetchNoContentOrThrow(url: string, init: RequestInit, fallback: s
   }
 }
 
-function mapBackendChannel(channel: any, description: string): Channel {
+function mapBackendChannel(channel: any): Channel {
+  // The server owns the description (migration 0030 / audit §2.14). Legacy
+  // rows without one render honestly empty — the shared "Operations sector"
+  // placeholder made every description meaningless.
   return {
     id: channel.id,
     name: channel.name,
-    description,
+    description:
+      typeof channel.description === 'string' && channel.description.trim()
+        ? channel.description
+        : '',
     unreadCount: 0,
     hasMention: false,
     categoryId: channel.categoryId ?? null,
@@ -572,6 +578,12 @@ interface CrowdOSState {
 
   // Async indicators
   isFetchingWorkspaces: boolean;
+  /** True once the first workspace-registry probe completed. App.tsx gates the
+   * shell on this: the store synchronously restores activeWorkspaceId from
+   * localStorage, and a deleted/renamed workspace would otherwise mount the
+   * shell for one paint with a phantom id — every panel firing 503s before
+   * fetchWorkspaces clears it (UI audit §1, 4× console 503s on load). */
+  workspacesBootstrapped: boolean;
   isCreatingWorkspace: boolean;
   isUpdatingWorkspace: boolean;
   isDatabaseOffline: boolean;
@@ -613,6 +625,13 @@ interface CrowdOSState {
   channelCursors: Record<string, PageCursor | null>;
   isLoadingOlder: boolean;
   loadOlderMessages: () => Promise<void>;
+
+  // UI audit §2.15/#22: jump-to-message. Search results open the channel AND
+  // walk older pages (bounded) until the target row is loaded; the chat area
+  // scrolls to it and flashes. Null clears the pending target.
+  messageLocateTarget: { channelId: string; messageId: string } | null;
+  openMessageAt: (target: { channelId: string; messageId: string }) => Promise<void>;
+  clearMessageLocate: () => void;
 
   // Agent actions
   addAgent: (agent: Omit<Agent, 'id' | 'createdAt' | 'lastActive'>) => Promise<void>;
@@ -1934,6 +1953,9 @@ const initialSelectedMode: ComposerMode = (() => {
     channelCursors: {},
     isLoadingOlder: false,
 
+    // UI audit §2.15/#22: pending jump-to-message target (search results)
+    messageLocateTarget: null,
+
     // UX-5 + UX-1
     channelSeq: seqCursors,
     reconnectDigest: null,
@@ -2133,6 +2155,7 @@ const initialSelectedMode: ComposerMode = (() => {
 
     // Async state flags
     isFetchingWorkspaces: false,
+    workspacesBootstrapped: false,
     isCreatingWorkspace: false,
     isUpdatingWorkspace: false,
     isDatabaseOffline: false,
@@ -2153,8 +2176,11 @@ const initialSelectedMode: ComposerMode = (() => {
           rawWsList = await apiClient.getWorkspaces();
         } catch (wsErr: any) {
           if (isScreenlockError(wsErr?.message)) {
+            // Record the failure BEFORE locking: the unlock gate reads
+            // workspaceError to decide whether the presented PIN was accepted
+            // (audit §2.6 — a swallowed error here let any PIN unlock).
+            set({ isFetchingWorkspaces: false, workspaceError: wsErr.message });
             useScreenLockStore.getState().lock();
-            set({ isFetchingWorkspaces: false });
             return;
           }
           console.warn('Failed to load workspaces list:', wsErr);
@@ -2209,6 +2235,13 @@ const initialSelectedMode: ComposerMode = (() => {
             if (typeof localStorage !== 'undefined') {
               localStorage.removeItem('crowdos_active_workspace');
             }
+            // Audit §1: a hash naming a workspace that no longer exists
+            // (#crowdos/ch-admin-general after the default workspace was
+            // removed) dead-ended at the picker forever. Drop it so the
+            // picker is the real address, not a stale leftover.
+            if (typeof window !== 'undefined' && window.location.hash) {
+              try { history.replaceState(null, '', window.location.pathname + window.location.search); } catch {}
+            }
             return;
           }
 
@@ -2239,10 +2272,15 @@ const initialSelectedMode: ComposerMode = (() => {
           if (res && res.status === 401) {
             const body = await res.clone().json().catch(() => ({}));
             if (isScreenlockError(body?.message)) {
-              useScreenLockStore.getState().lock();
-              // ponytail: veil shows, but stale rows must not linger behind it.
+              // Same contract as the roster probe above: record the verdict
+              // before locking, so unlockWithPin can tell wrong PIN from stale.
+              // Veil shows, but stale rows must not linger behind it.
               get().clearTenantSlices();
-              set({ isFetchingWorkspaces: false });
+              set({
+                isFetchingWorkspaces: false,
+                workspaceError: body?.message || 'Screenlock is enabled.',
+              });
+              useScreenLockStore.getState().lock();
               return;
             }
           }
@@ -2289,11 +2327,11 @@ const initialSelectedMode: ComposerMode = (() => {
           // Separate top-level channels (where categoryId is null)
           const topLevelChannels = (dbChannels || [])
             .filter((ch: any) => ch.categoryId === null && ch.type !== 'archived')
-            .map((ch: any) => mapBackendChannel(ch, 'Default operational sector'));
+            .map((ch: any) => mapBackendChannel(ch));
 
           dbArchivedChannels = (dbChannels || [])
             .filter((ch: any) => ch.type === 'archived')
-            .map((ch: any) => mapBackendChannel(ch, 'Archived operational sector'));
+            .map((ch: any) => mapBackendChannel(ch));
 
           dbWorkspaces = get().workspaces.map(ws => {
             if (ws.id === get().activeWorkspaceId) {
@@ -2307,7 +2345,7 @@ const initialSelectedMode: ComposerMode = (() => {
                   position: c.position,
                   channels: (c.channels || [])
                     .filter((ch: any) => ch.type !== 'archived')
-                    .map((ch: any) => mapBackendChannel(ch, 'Operations sector'))
+                    .map((ch: any) => mapBackendChannel(ch))
                 }))
               };
             }
@@ -2478,6 +2516,11 @@ const initialSelectedMode: ComposerMode = (() => {
           set({ isFetchingWorkspaces: false });
         }
       } finally {
+        // The registry probe has completed once — valid or not — so the shell
+        // may mount and surface real state (audit §1: without this gate the
+        // first paint mounted the shell with a stale restored workspace id
+        // and every panel 503'd against the phantom id).
+        set({ workspacesBootstrapped: true });
         try {
           performance.mark(`${markName}:end`);
           performance.measure('fetchWorkspaces', `${markName}:start`, `${markName}:end`);
@@ -2817,7 +2860,13 @@ const initialSelectedMode: ComposerMode = (() => {
 
       set({
         activeWorkspaceId: id,
-        activeChannelId: chId
+        activeChannelId: chId,
+        // Audit §3 (major #9): a stale error carried from the previous surface
+        // (portal create attempt, prior workspace's failed mutation) must not
+        // render inside the newly entered workspace. fetchWorkspaces() below
+        // sets a FRESH error if its probes fail, including the screenlock
+        // verdict; clearing here only removes what the last surface left.
+        workspaceError: null
       });
 
       await get().fetchWorkspaces();
@@ -2847,7 +2896,12 @@ const initialSelectedMode: ComposerMode = (() => {
         activeChannelId: null,
         selectedAgentId: null,
         settingsModalOpen: false,
-        agentProfileModalOpen: false
+        agentProfileModalOpen: false,
+        // Audit §3 (major #9): workspace-scoped errors (agent/module mutation
+        // failures, settings probes) belong to the workspace surface. Leaving
+        // to the portal must not render them inside the pristine
+        // NEW WORKSPACE form.
+        workspaceError: null
       });
     },
 
@@ -2964,6 +3018,39 @@ const initialSelectedMode: ComposerMode = (() => {
       } catch {
         set({ isLoadingOlder: false });
       }
+    },
+
+    // UI audit §2.15/#22: a search-result click must land on the message, not
+    // just the channel. The channel opens at its latest page (setActiveChannel),
+    // then older pages are walked (bounded) until the target row is in memory;
+    // MainChatArea consumes messageLocateTarget to scroll + flash. A target
+    // deeper than the cap still opens the channel — bounded work, never a
+    // unbounded walk against a slow backend.
+    openMessageAt: async (target) => {
+      set({ messageLocateTarget: { channelId: target.channelId, messageId: target.messageId } });
+      await get().setActiveChannel(target.channelId);
+      const LOCATE_MAX_PAGES = 12;
+      let found = false;
+      for (let i = 0; i < LOCATE_MAX_PAGES; i++) {
+        if (get().messageLocateTarget?.messageId !== target.messageId) return; // superseded
+        if (get().messages.some(m => m.id === target.messageId)) { found = true; break; }
+        const before = get().messages.length;
+        const beforeCursor = get().channelCursors[target.channelId];
+        await get().loadOlderMessages();
+        // Zero growth (no cursor) or an unchanged cursor (the same page again,
+        // everything deduped) means history is exhausted for this walk.
+        if (get().messages.length === before) break;
+        if (JSON.stringify(get().channelCursors[target.channelId]) === JSON.stringify(beforeCursor)) break;
+      }
+      // Deeper than the cap or exhausted: give up quietly — the channel is
+      // open, and a stale pending target must not fire on a later visit.
+      if (!found && get().messageLocateTarget?.messageId === target.messageId) {
+        set({ messageLocateTarget: null });
+      }
+    },
+
+    clearMessageLocate: () => {
+      set({ messageLocateTarget: null });
     },
 
     addMessage: (msg) => {
@@ -3548,17 +3635,28 @@ const initialSelectedMode: ComposerMode = (() => {
           position = activeWS?.channels?.length || 0;
         }
 
-        await fetchJsonOrThrow<Channel>(`${BACKEND_URL}/api/channels`, {
+        const created = await fetchJsonOrThrow<Channel>(`${BACKEND_URL}/api/channels`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             categoryId,
             name,
+            // Topic description (audit §2.14): the parameter existed but was
+            // never sent, so every channel created with a topic showed the
+            // client-side placeholder instead.
+            ...(description ? { description } : {}),
             createdBy: 'user',
             position
           })
         }, 'Failed to create channel.');
         await get().fetchWorkspaces();
+        // Audit §2.14 (minor #17): creating a channel left the operator on
+        // the previous channel with no indication the new one existed.
+        // Switching to the created channel confirms the result and starts
+        // the first message where the user just aimed.
+        if (created?.id) {
+          await get().setActiveChannel(created.id);
+        }
       } catch (err) {
         const message = err instanceof Error ? err.message : 'Failed to create channel.';
         console.error("Failed to create channel.", err);

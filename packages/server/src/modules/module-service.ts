@@ -159,7 +159,8 @@ async function assertNoPgBlockers(moduleType: ModuleType, id: string): Promise<v
 
 export interface ModuleReferenceIds {
   modelModuleId?: string | null;
-  instructionModuleId: string;
+  /** Null = nothing to validate ("No instructions" never reaches PG writes — Agents normalizes it to the canon default first, audit §2.7). */
+  instructionModuleId?: string | null;
   toolkitModuleId?: string | null;
   constraintsModuleId?: string | null;
   capabilitiesModuleId?: string | null;
@@ -179,13 +180,13 @@ export async function validateModuleReferences(ids: ModuleReferenceIds, dbOverri
     if (tier === "local") {
       const [m, i, t, c, cap] = await Promise.all([
         ids.modelModuleId != null ? localGetModelModule(ids.modelModuleId, workspaceId) : Promise.resolve(null),
-        localGetInstructionModule(ids.instructionModuleId, workspaceId),
+        ids.instructionModuleId != null ? localGetInstructionModule(ids.instructionModuleId, workspaceId) : Promise.resolve(null),
         ids.toolkitModuleId != null ? localGetToolkitModule(ids.toolkitModuleId, workspaceId) : Promise.resolve(null),
         ids.constraintsModuleId != null ? localGetConstraintsModule(ids.constraintsModuleId, workspaceId) : Promise.resolve(null),
         ids.capabilitiesModuleId != null ? localGetCapabilitiesModule(ids.capabilitiesModuleId, workspaceId) : Promise.resolve(null),
       ]);
       if (ids.modelModuleId != null && !m) throw new Error(`ModelModule not found: ${ids.modelModuleId}`);
-      if (!i) throw new Error(`InstructionModule not found: ${ids.instructionModuleId}`);
+      if (ids.instructionModuleId != null && !i) throw new Error(`InstructionModule not found: ${ids.instructionModuleId}`);
       if (ids.toolkitModuleId != null && !t) throw new Error(`ToolkitModule not found: ${ids.toolkitModuleId}`);
       if (ids.constraintsModuleId != null && !c) throw new Error(`ConstraintsModule not found: ${ids.constraintsModuleId}`);
       if (ids.capabilitiesModuleId != null && !cap) throw new Error(`CapabilitiesModule not found: ${ids.capabilitiesModuleId}`);
@@ -198,7 +199,9 @@ export async function validateModuleReferences(ids: ModuleReferenceIds, dbOverri
       ids.modelModuleId != null
         ? db.query.modelModules.findFirst({ where: eq(modelModules.id, ids.modelModuleId) })
         : Promise.resolve(null),
-      db.query.instructionModules.findFirst({ where: eq(instructionModules.id, ids.instructionModuleId) }),
+      ids.instructionModuleId != null
+        ? db.query.instructionModules.findFirst({ where: eq(instructionModules.id, ids.instructionModuleId) })
+        : Promise.resolve(null),
       ids.toolkitModuleId != null
         ? db.query.toolkitModules.findFirst({ where: eq(toolkitModules.id, ids.toolkitModuleId) })
         : Promise.resolve(null),
@@ -210,7 +213,7 @@ export async function validateModuleReferences(ids: ModuleReferenceIds, dbOverri
         : Promise.resolve(null),
     ]);
   if (ids.modelModuleId != null && !modelModule) throw new Error(`ModelModule not found: ${ids.modelModuleId}`);
-  if (!instructionModule) throw new Error(`InstructionModule not found: ${ids.instructionModuleId}`);
+  if (ids.instructionModuleId != null && !instructionModule) throw new Error(`InstructionModule not found: ${ids.instructionModuleId}`);
   if (ids.toolkitModuleId != null && !toolkitModule) throw new Error(`ToolkitModule not found: ${ids.toolkitModuleId}`);
   if (ids.constraintsModuleId != null && !constraintsModule) throw new Error(`ConstraintsModule not found: ${ids.constraintsModuleId}`);
   if (ids.capabilitiesModuleId != null && !capabilitiesModule) throw new Error(`CapabilitiesModule not found: ${ids.capabilitiesModuleId}`);

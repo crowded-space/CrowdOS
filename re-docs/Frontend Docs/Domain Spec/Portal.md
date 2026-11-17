@@ -11,11 +11,11 @@ Non-goals: in-workspace chrome and chat (see Workspace Shell / Chat Area), setti
 
 ## Expect
 
-- `[Observed]` Portal renders only when no workspace is active (`App.tsx:124-135`); otherwise the shell replaces it.
+- `[Observed]` Portal renders only when no workspace is active (`App.tsx`, "Onboarding Portal Gate"); otherwise the shell replaces it.
 - `[Observed]` Step 2 (name/icon/launch) stays hidden until the DB connection test succeeds.
 - `[Observed]` Editing the DB URL after a test resets status to idle and clears the log.
 - `[Observed]` Launch requires a non-empty name plus verified connection; provisioning progress disables the button.
-- `[Observed]` Existing sessions list shows count and re-enters on click.
+- `[Observed]` Existing sessions list shows count and re-enters on click. Each row is a real option `<button>` with the `…` options control as a real sibling `<button>` overlaid right (`aria-expanded`) — audit §3 minor #23: the control used to be a `span[role=button]` nested inside the option button, invalid interactive nesting. The create card states local-first once in its footer strip ("Local-first. No database required."); the duplicate "Workspaces are stored locally. Memory is optional." line inside the create form was removed (audit §1, one statement per screen).
 - `[Observed]` Shared DB field validates `postgresql://` shape, masks the URL with show/hide, and separates Test from Provision-schema steps.
 - `[Observed]` Shared form modal validates name length/duplicate and DB shape before enabling submit.
 - `[Observed]` Delete wizard enforces 3 ordered steps: acknowledge checkbox → exact-name match → type `DELETE`; buttons arm only when each gate passes.
@@ -23,7 +23,7 @@ Non-goals: in-workspace chrome and chat (see Workspace Shell / Chat Area), setti
 
 ## Flow
 
-1. Gate: `App.tsx:124-135` shows portal when `!activeWorkspaceId`; portal fetches registry on mount (`WorkspacePortal.tsx:39-41`).
+1. Gate: `App.tsx` shows portal when `!activeWorkspaceId`; portal fetches registry on mount (`WorkspacePortal.tsx:39-41`). 2026-10-22 audit §1: before either branch, a bootstrap skeleton (`role=status`, "Loading workspaces…") holds the first paint until `workspacesBootstrapped` flips — the store restores the active id synchronously from localStorage, so the shell must not mount on a possibly-deleted id (phantom-id 503s).
 2. Enter URL: `WorkspacePortal.tsx:144-157` input; any edit resets `testStatus` to idle (`WorkspacePortal.tsx:149`).
 3. Test: submit `WorkspacePortal.tsx:55-85` pushes staged log lines with 400ms beats, calls `apiClient.testWorkspaceDatabase` (`WorkspacePortal.tsx:12-19`), sets success/failed with inline icon (`WorkspacePortal.tsx:158-167`).
 4. Name/icon: Step 2 block, always visible (`WorkspacePortal.tsx:226-265`); 8-icon grid (`WorkspacePortal.tsx:21-30,249-264`); `canCreateDb` = name + verified test, `canCreateLocal` = name only (`WorkspacePortal.tsx:101-103`).
@@ -46,7 +46,7 @@ Non-goals: in-workspace chrome and chat (see Workspace Shell / Chat Area), setti
 
 ## Props & Store
 
-- `WorkspacePortal` — no props; store: `createWorkspace, workspaces, enterWorkspace, fetchWorkspaces, isCreatingWorkspace`; local `workspaceName, selectedIcon, dbUrl, testStatus, logs, isLaunching`.
+- `WorkspacePortal` — no props; store: `createWorkspace, workspaces, enterWorkspace, fetchWorkspaces, isCreatingWorkspace, workspaceError, updateWorkspace`; local `workspaceName, selectedIcon, dbUrl, testStatus, logs, isLaunching`. The create form renders `workspaceError` (role=alert) for its own attempts — `createWorkspace` clears it at start and sets it on failure; stale errors from other surfaces no longer appear because `leaveWorkspace`/`enterWorkspace` clear it on the surface transition (2026-10-22 audit §3).
 - `WorkspaceIconPicker { value; onChange }`; `WorkspaceDatabaseField { initial: WorkspaceDatabaseInfo|null|undefined; state: WorkspaceDatabaseState; onChange }` with `{ mode: keep|set|clear; url; provisioned }`.
 - `WorkspaceFormModal { open; mode: create|edit; initialName; initialIcon; initialDatabase?; isSaving; error; existingNames; onCancel; onSubmit(name, icon, databaseUrl?, schemaReady?) }`.
 - `DeleteWorkspaceWizard { open; workspace: { id, name, icon, categoryCount, channelCount }|null; isDeleting; error; onCancel; onConfirm }`.

@@ -119,11 +119,21 @@ export default function BrowserPanel() {
           </button>
         </div>
 
-        <p aria-live="polite" className="text-[10px] font-mono text-zinc-500 truncate">
-          {state
-            ? `${state.open ? 'open' : 'closed'}${state.title ? ' · ' + state.title : ''}${state.url ? ' · ' + state.url : ''}`
-            : 'closed'}
-        </p>
+        {/* Audit §2.11 (minor #13): the status used to render as raw mono
+            "closed" / "open · title · url" — debug output, not a status chip.
+            Now a dot-chip states open/closed and the page title/url sits
+            beside it with a tooltip for the full url. */}
+        <div aria-live="polite" className="flex items-center gap-1.5 min-w-0">
+          <span className={`shrink-0 inline-flex items-center gap-1 px-1.5 py-0.5 rounded border text-[10px] font-mono font-medium ${isOpen ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-300' : 'bg-zinc-900 border-zinc-800 text-zinc-400'}`}>
+            <span className={`w-1.5 h-1.5 rounded-full ${isOpen ? 'bg-emerald-400' : 'bg-zinc-600'}`} aria-hidden="true" />
+            {isOpen ? 'Open' : 'Closed'}
+          </span>
+          {isOpen && (state?.title || state?.url) && (
+            <span className="text-[10px] font-mono text-zinc-500 truncate" title={state?.url || state?.title}>
+              {state?.title || state?.url}
+            </span>
+          )}
+        </div>
 
         {!isOpen ? (
           <div className="text-center py-10 px-3">

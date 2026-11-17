@@ -64,6 +64,8 @@ export interface LocalChannelRow {
   workspaceId: string | null;
   folderPath: string | null;
   name: string;
+  /** Optional topic line (UI audit §2.14); absent on rows created before it. */
+  description?: string | null;
   type: string;
   createdBy: string;
   position: number;
@@ -316,6 +318,7 @@ export async function localCategoryExists(categoryId: string, workspaceId?: stri
 export async function localCreateChannel(input: {
   id?: string;
   name: string;
+  description?: string | null;
   type: string;
   createdBy: string;
   categoryId?: string | null;
@@ -355,6 +358,7 @@ export async function localCreateChannel(input: {
     workspaceId,
     folderPath: null,
     name: input.name,
+    description: input.description ?? null,
     type: input.type,
     createdBy: input.createdBy,
     position: input.position ?? 0,
@@ -374,6 +378,7 @@ export async function localUpdateChannel(
   patch: {
     categoryId?: string | null;
     name?: string;
+    description?: string | null;
     position?: number;
     type?: string;
     folderPath?: string | null;
@@ -396,6 +401,7 @@ export async function localUpdateChannel(
     if (patch.categoryId !== undefined) next.categoryId = patch.categoryId;
     if (patch.folderPath !== undefined) next.folderPath = patch.folderPath;
     if (patch.name !== undefined) next.name = patch.name;
+    if (patch.description !== undefined) next.description = patch.description;
     if (patch.position !== undefined) next.position = patch.position;
     if (patch.fsMounts !== undefined) next.fsMounts = patch.fsMounts;
     if (patch.type !== undefined) {

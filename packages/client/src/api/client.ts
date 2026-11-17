@@ -98,8 +98,27 @@ function buildHeaders(initHeaders?: HeadersInit, hasBody = false): Headers {
 
 async function readApiError(response: Response, fallback: string): Promise<Error> {
   try {
-    const body = (await response.json()) as { message?: string; error?: string };
-    const error = new Error(body.message || body.error || fallback) as Error & { status: number };
+    const body = (await response.json()) as {
+      message?: string;
+      error?: string;
+      details?: Array<{ path?: string; message?: string } | Record<string, unknown>>;
+    };
+    // Per-issue validation details (server errors.ts sends details[] for
+    // Zod failures). Dropping them left toasts saying only "Validation
+    // failed" with no field feedback (audit §2.7).
+    let detailText = '';
+    if (Array.isArray(body.details) && body.details.length > 0) {
+      const issues = body.details
+        .slice(0, 8)
+        .map((d) => {
+          const path = typeof (d as { path?: unknown }).path === 'string' ? (d as { path: string }).path : '';
+          const message = typeof (d as { message?: unknown }).message === 'string' ? (d as { message: string }).message : '';
+          return path ? `${path}: ${message}` : message;
+        })
+        .filter(Boolean);
+      if (issues.length > 0) detailText = ` (${issues.join('; ')})`;
+    }
+    const error = new Error((body.message || body.error || fallback) + detailText) as Error & { status: number };
     // Carry the status so callers can tell not-found from not-allowed without
     // string-matching the message; the repository panel branches on it.
     error.status = response.status;

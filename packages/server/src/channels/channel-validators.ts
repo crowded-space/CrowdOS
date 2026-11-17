@@ -31,6 +31,8 @@ export type FsMountsBody = z.infer<typeof fsMountsSchema>;
 export const createChannelSchema = z.object({
   categoryId: z.string().nullable().optional(),
   name: z.string().min(1),
+  /** Optional topic line (UI audit §2.14); absent = no description. */
+  description: z.string().max(500).optional(),
   type: channelTypeSchema.default("standard"),
   createdBy: z.string().min(1),
   position: z.number().int().default(0),
@@ -41,6 +43,8 @@ export const createChannelSchema = z.object({
 export const updateChannelSchema = z.object({
   categoryId: z.string().nullable().optional(),
   name: z.string().optional(),
+  /** Optional topic line; null clears it. */
+  description: z.string().max(500).nullable().optional(),
   type: channelTypeSchema.optional(),
   position: z.number().int().optional(),
   /** Canon virtual mounts: an override list, or inherit/empty to follow the parent. */

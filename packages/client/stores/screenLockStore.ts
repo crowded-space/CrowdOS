@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { clearPin, setPin } from '../src/config/pin';
+import { clearPin, getPin, setPin } from '../src/config/pin';
 import { refreshSocketPin, socket } from '../src/config/socket';
 import { useCrowdOSStore } from './crowdOsStore';
 
@@ -60,13 +60,28 @@ export const useScreenLockStore = create<ScreenLockState>()((set, get) => ({
   unlockWithPin: async (pin: string) => {
     const clean = pin.trim();
     if (!clean) return false;
+    // Remember the credential currently held so a rejected attempt can roll
+    // back (audit §2.6: the entered PIN was persisted even when the backend
+    // rejected it, leaving the wrong PIN active after a failed unlock).
+    const previousPin = getPin();
     setPin(clean);
     try {
       refreshSocketPin();
       socket.disconnect().connect();
     } catch {}
+    // Probe with a clean verdict: a workspaceError left over from an earlier
+    // attempt (or unrelated failure) must not decide THIS attempt.
+    useCrowdOSStore.setState({ workspaceError: null });
     await useCrowdOSStore.getState().fetchWorkspaces();
-    if (isScreenlockError(useCrowdOSStore.getState().workspaceError)) return false;
+    if (isScreenlockError(useCrowdOSStore.getState().workspaceError)) {
+      // Rejected: restore the previous credential and the locked posture
+      // (the probe reconnected the socket with the wrong PIN attached).
+      setPin(previousPin);
+      try {
+        socket.disconnect();
+      } catch {}
+      return false;
+    }
     set({ locked: false, lastActivity: Date.now() });
     return true;
   },

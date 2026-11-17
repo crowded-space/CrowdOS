@@ -24,7 +24,8 @@ export default function OmniSearchModal({ open, onClose }: OmniSearchModalProps)
     tools, 
     messages, 
     setActiveChannel, 
-    openAgentProfileModal 
+    openAgentProfileModal,
+    openMessageAt
   } = useCrowdOSStore();
 
   const [query, setQuery] = useState('');
@@ -172,15 +173,16 @@ export default function OmniSearchModal({ open, onClose }: OmniSearchModalProps)
     const seen = new Set<string>();
     const merged: Array<{ id: string; channelId: string; authorName: string; content: string }> = [];
 
-    // Server messages first (persisted historical data)
-    if (serverResults?.messages) {
-      serverResults.messages.forEach(sm => {
-        if (!seen.has(sm.id)) {
-          seen.add(sm.id);
-          merged.push(sm);
-        }
-      });
-    }
+    // Server messages first (persisted historical data). UI audit #22: agent
+    // reasoning rows (isInternalMonologue) are thinking scratch, not channel
+    // history — they must not surface as search hits. The in-memory feed
+    // never contains them (the store buffers monologues), but the filter is
+    // kept here too so the rule is about the message, not its source.
+    serverResults?.messages.forEach(sm => {
+      if (seen.has(sm.id) || (sm as any).isInternalMonologue === true) return;
+      seen.add(sm.id);
+      merged.push(sm);
+    });
 
     // In-memory messages (recent streaming or local state)
     messages.forEach(m => {
@@ -408,7 +410,10 @@ export default function OmniSearchModal({ open, onClose }: OmniSearchModalProps)
                     <button
                       key={m.id}
                       onClick={() => {
-                        setActiveChannel(m.channelId);
+                        // UI audit §2.15: open the channel AND walk to the
+                        // message (scroll + highlight), not just the channel
+                        // at its latest page.
+                        void openMessageAt({ channelId: m.channelId, messageId: m.id });
                         onClose();
                       }}
                       className="w-full flex items-start gap-2 px-2.5 py-2 hover:bg-zinc-900 rounded-lg text-xs font-sans text-left transition"
@@ -426,6 +431,9 @@ export default function OmniSearchModal({ open, onClose }: OmniSearchModalProps)
               {query.trim() && filteredChannels.length === 0 && filteredAgents.length === 0 && filteredTools.length === 0 && filteredMessages.length === 0 && (
                 <div className="text-center py-8 text-zinc-500 text-xs font-sans">
                   No matching entities or logs found for &quot;{query}&quot;.
+                  <span className="mt-2 block text-zinc-600">
+                    Search covers channels, agents, tools, and message history in this workspace.
+                  </span>
                 </div>
               )}
               </div>

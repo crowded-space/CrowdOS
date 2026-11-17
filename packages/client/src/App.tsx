@@ -38,6 +38,7 @@ function SpinnerFallback() {
 export default function App() {
   const {
     activeWorkspaceId,
+    workspacesBootstrapped,
     dbDegraded,
     fetchWorkspaces,
     setSettingsModalOpen,
@@ -45,6 +46,7 @@ export default function App() {
     queuedOutboxCount
   } = useCrowdOSStore(useShallow(s => ({
     activeWorkspaceId: s.activeWorkspaceId,
+    workspacesBootstrapped: s.workspacesBootstrapped,
     dbDegraded: (s.workspaces.find(w => w.id === s.activeWorkspaceId)?.database?.configured) === false,
     fetchWorkspaces: s.fetchWorkspaces,
     setSettingsModalOpen: s.setSettingsModalOpen,
@@ -161,7 +163,22 @@ export default function App() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [sidebarOpen]);
 
-  // Onboarding Portal Gate — with skeleton fallback while bootstrapping
+  // Onboarding Portal Gate — with skeleton fallback while bootstrapping.
+  // Audit §1: the store restores activeWorkspaceId synchronously from
+  // localStorage, so without this gate the shell could mount for one paint
+  // with a deleted workspace id — every panel firing 503s against the
+  // phantom workspace before fetchWorkspaces validated the registry. The
+  // bootstrap skeleton holds the first paint until that probe completes.
+  if (!workspacesBootstrapped) {
+    return (
+      <div className="w-full h-dvh bg-[#060608] flex items-center justify-center" role="status" aria-label="Loading CrowdOS">
+        <div className="flex flex-col items-center gap-3">
+          <div className="w-8 h-8 rounded-lg bg-zinc-900 border border-zinc-800 animate-pulse" aria-hidden="true" />
+          <span className="text-[11px] font-mono text-zinc-500">Loading workspaces…</span>
+        </div>
+      </div>
+    );
+  }
   if (!activeWorkspaceId) {
     return (
       <ToastProvider>
@@ -184,7 +201,11 @@ export default function App() {
           Skip to chat
         </a>
         <div className="grain-overlay" aria-hidden />
-        <OfflineBanner dbDegraded={dbDegraded} onOpenDatabaseSettings={openDatabaseSettings} queuedCount={queuedOutboxCount} />
+        {/* Audit §2.6 (minor #25): lock() deliberately disconnects the socket,
+            so while the veil is up the "Connection lost" banner behind it
+            reads like an app failure. The lock screen IS the status surface
+            while locked — hide the banner until the operator unlocks. */}
+        {!locked && <OfflineBanner dbDegraded={dbDegraded} onOpenDatabaseSettings={openDatabaseSettings} queuedCount={queuedOutboxCount} />}
 
         {/* 3-Panel Content Area */}
         <div className="flex-1 flex overflow-hidden w-full relative isolate">
@@ -192,7 +213,10 @@ export default function App() {
           {sidebarOpen && (
             <button
               type="button"
-              aria-label="Close workspace menu"
+              // Audit §2.16 (minor #21): closes the off-canvas sidebar drawer
+              // (the sibling of the "Open sidebar" ☰ button), not the
+              // workspace dropdown menu.
+              aria-label="Close sidebar"
               onPointerDown={() => setSidebarOpen(false)}
               onClick={() => setSidebarOpen(false)}
               className="absolute inset-y-0 right-0 left-[min(86vw,300px)] z-30 bg-black/55 xl:hidden cursor-pointer"
@@ -248,13 +272,18 @@ export default function App() {
 
         </div>
 
-        {/* Globally tracked status dialog modals */}
-        <Suspense fallback={<SpinnerFallback />}>
-          <AgentProfileModal />
-          <WorkspaceSettingsModal />
-          <OmniSearchModal open={searchOpen} onClose={() => setSearchOpen(false)} />
-          <QuickAsk open={quickAskOpen} onClose={() => setQuickAskOpen(false)} />
-        </Suspense>
+        {/* Globally tracked status dialog modals. Wrapped so one broken
+            modal render (audit §2.1: AuditTab unmounted the whole shell)
+            degrades to a bounded fallback with Retry instead of killing
+            chat, drafts and panels. */}
+        <ErrorBoundary fallback={<div className="p-6 text-sm text-zinc-400">Dialog failed to load</div>}>
+          <Suspense fallback={<SpinnerFallback />}>
+            <AgentProfileModal />
+            <WorkspaceSettingsModal />
+            <OmniSearchModal open={searchOpen} onClose={() => setSearchOpen(false)} />
+            <QuickAsk open={quickAskOpen} onClose={() => setQuickAskOpen(false)} />
+          </Suspense>
+        </ErrorBoundary>
         {locked && <LockScreen />}
 
       </div>

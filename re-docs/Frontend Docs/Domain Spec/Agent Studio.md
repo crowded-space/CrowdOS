@@ -16,7 +16,7 @@ Non-goals (other areas): agent CRUD (Agent Profile modal + `crowdOsStore` agent 
 - `[Observed]` Rack tab shows four slot cards: model select, instruction stack add/remove, skill toggle cards, and a read-only resolved-tools list.
 - `[Observed]` Skill cards toggle attach/detach locally; nothing persists until Save.
 - `[Observed]` Save PUTs the manifest, shows a success toast, and closes the modal on success (`AgentStudioModal.tsx:142-144`).
-- `[Observed]` X-Ray tab compiles context on first visit and renders token estimate, provider, tool count, history count, and the full system prompt text.
+- `[Observed]` X-Ray tab compiles context on first visit and renders token estimate, model, tool count, history count, and the full system prompt text. The model tile shows the model module's own display name (the same label the model card shows), falling back to the compiled model name then the provider type (`xray-labels.ts`, tested) — audit §2.10 minor #12: the tile used to show the raw provider type ("custom") while the model card showed "Minimax M3.1", one profile with two labels.
 - `[Observed]` The `'patch'` tab value exists in state but has no button and no content — unreachable.
 - `[Observed]` Toolkit / constraints selections load from the manifest but have no UI controls — not editable here.
 - `[Inferred]` Changes take effect next turn via socket hot-swap (footer copy only; the client verifies nothing after save).
@@ -40,8 +40,8 @@ Non-goals (other areas): agent CRUD (Agent Profile modal + `crowdOsStore` agent 
 | Slot 2 card (`AgentStudioModal.tsx:266-340`) | Ordered instruction-layer list with remove buttons + "snap brick" add select |
 | Slot 3 card (`AgentStudioModal.tsx:343-397`) | Skills catalog as toggle cards with required-tool chips |
 | Slot 4 card (`AgentStudioModal.tsx:400-429`) | Resolved tools as read-only badges (native vs MCP) |
-| X-Ray panel (`AgentStudioModal.tsx:434-493`) | Test-input box, Re-Compile button, 4 stat tiles, system-prompt `<pre>` |
-| Footer (`AgentStudioModal.tsx:497-518`) | Hot-swap note + Cancel / Save & Commit |
+| X-Ray panel (`AgentStudioModal.tsx:434-493`) | Test-input box, Re-Compile button, 4 stat tiles (model tile resolves the module display name via `xray-labels.ts`), system-prompt `<pre>` |
+| Footer (`AgentStudioModal.tsx:497-518`) | Hot-swap note + Cancel / Save & Commit; the hint truncates before the save button so the full "Save & Commit Manifest" label never truncates (audit §2.5/§2.10 minor #11) |
 
 ## Props & Store
 

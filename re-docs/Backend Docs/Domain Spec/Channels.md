@@ -36,7 +36,7 @@ Non-goals (other domains):
 2. Validate category: `categoryExists(categoryId, db?)` does `findFirst(categories.id)` and returns boolean (`channel-service.ts:39`); `create`/`update` run it in parallel with the main lookup (`channel-service.ts:313-321`, `channel-service.ts:421-424`).
 3. Create guard: `createChannel(body, db?)` checks category + duplicate `(lower(name), categoryId)` together (`channel-service.ts:313-321`); unknown category → `{ error: category }` (`channel-service.ts:322-327`), name hit → `{ error: duplicate_name }` (`channel-service.ts:57`).
    2026-09-25 audit fix: `listChannels` accepts and honors a `workspaceId` scope on BOTH tiers (PG: `workspaceId = ws OR workspaceId IS NULL`; local: the workspace's own `channels.json`), and `routes/channels.ts` threads the tenant header. Previously a registry-only workspace's `GET /api/channels` served the default folder's channels regardless of the header (§30 leak). No header keeps the legacy unscoped read.
-4. Create write: mints `randomUUID`, inserts `(categoryId, name, type, createdBy, position)` and returns `{ channel }` (`channel-service.ts:328-341`); `POST /api/channels` maps category error to 400 and emits `workspace:sync` on success (`routes/channels.ts:46`, `routes/channels.ts:52`).
+4. Create write: mints `randomUUID`, inserts `(categoryId, name, type, createdBy, position, description)` and returns `{ channel }` (`channel-service.ts`); the description is optional (null when omitted, migration 0030); `POST /api/channels` maps category error to 400 and emits `workspace:sync` on success (`routes/channels.ts`).
 5. Read: `getChannel(id, db?)` returns the row or `undefined` with no archived filter (`channel-service.ts:409`); socket room admission uses it as existence check AND as the source of the §30 room scope (`register-socket-server.ts` `resolveChannelRoom`).
 6. Update: `updateChannel(id, body, db?)` returns `{ notFound: true }` on miss (`channel-service.ts:418`), `{ error: category }` on bad category (`channel-service.ts:91`), patches only supplied fields (`channel-service.ts:95`), stamps/clears `archivedAt` on `type` change (`channel-service.ts:101`), returns `{ channel: updated }` (`channel-service.ts:110`); `PATCH|PUT /api/channels/:id` map to 404/400 and emit `workspace:sync` (`routes/channels.ts:61`, `routes/channels.ts:72`).
 7. Delete: `deleteChannel(id, db?)` returns `{ notFound: true }` on miss (`channel-service.ts:577`), `{ conflictGeneral: true }` when `categoryId === null && name.lower === general` (`channel-service.ts:582-583`), else hard-deletes and returns `{ deleted: true }` (`channel-service.ts:122`); route maps to 404/409, emits `workspace:sync`, returns 204 (`routes/channels.ts:96`).
@@ -45,7 +45,7 @@ Non-goals (other domains):
 ## Current Implementation
 | File | Role |
 | ---- | ---- |
-| `channel-types.ts` | Pure types, no I/O. `Category`/`ChannelType`/`Channel`/`ChannelIndex`/`CompressedSummary` shapes |
+| `channel-types.ts` | Pure types, no I/O. `Category`/`ChannelType`/`Channel`/`ChannelIndex`/`CompressedSummary` shapes (`Channel` carries an optional `description` since migration 0030) |
 | `channel-validators.ts` | Zod boundary. `channelTypeSchema` (`standard/pair_private/archived`), `createChannelSchema`, `updateChannelSchema`, `paramIdSchema` plus inferred `CreateChannelBody`/`UpdateChannelBody`/`ChannelParams` |
 | `channel-service.ts` | DB owner. `categoryExists`/`listChannels`/`createChannel`/`getChannel`/`updateChannel`/`deleteChannel` + category CRUD (`getCategoryById`/`listCategories`/`createCategory`/`updateCategory`/`removeCategory`), all `db`-overridable; file truth (`channel-local-store.ts`) when no `DATABASE_URL` |
 | `channel-local-store.ts` | File truth for categories/channels (`<workspaceFolder>/vfs/.crowdos/categories.json`, `channels.json`) plus pin rows (`channel-settings.json`); same guards (category-exists, duplicate-name, `#general` protection, category-delete cascade). Canon 2026-09-22: rows live inside their workspace folder, and `fsMounts` (`inherit`/`override`) rides each row |
@@ -59,8 +59,8 @@ Non-goals (other domains):
 - `ChannelIndex` — channel index record type.
 - `CompressedSummary` — compressed summary record type.
 - `channelTypeSchema` — zod validator for channel type.
-- `createChannelSchema` — zod validator for creation body.
-- `updateChannelSchema` — zod validator for update body.
+- `createChannelSchema` — zod validator for creation body (`name`, `categoryId`, `type`, optional `description` nullable string, 2026-10-22 audit §2.14).
+- `updateChannelSchema` — zod validator for update body (same field set; `description` nullable).
 - `paramIdSchema` — zod validator for id params.
 - `CreateChannelBody` — creation body type.
 - `UpdateChannelBody` — update body type.
@@ -104,7 +104,7 @@ Tables shared with other domains (FK readers, owned elsewhere or jointly):
 - None emitted in-domain (no broker import in `channel-service.ts` or `channel-gate.ts`); `routes/channels.ts:20` emits `workspace:sync` on create/update/delete outside the gate.
 
 ## Owns
-- `channels` (writes: insert, `categoryId/name/position/type/archivedAt` updates, hard-delete; never writes `folderPath`/`workspaceId` itself)
+- `channels` (writes: insert, `categoryId/name/position/type/archivedAt/description` updates, hard-delete; never writes `folderPath`/`workspaceId` itself)
 - `channel_settings.pinned_runtime/active_agent_id/default_agent_id` (writes: validated upsert, null-clear; `fs_policy`/`safety_settings` columns stay with safety routes — column-split ownership)
 - `channel_settings` scope keys `(channel_id, workspace_id)` — the §30 composite PK (migration 0020). This domain owns the pin columns; `routes/safety.ts` writes `fs_policy`/`safety_settings` on the same rows and now carries the same workspace scope. `workspace_id` is written by this domain's settings path and the safety route, never inferred at read time once stored.
 

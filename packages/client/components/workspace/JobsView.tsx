@@ -213,107 +213,99 @@ export function JobsView(): React.JSX.Element {
             </button>
           </div>
         ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full min-w-[560px] border-collapse text-[11px] font-mono">
-              <caption className="sr-only">Cross-channel runs with status and actions</caption>
-              <thead>
-                <tr className="text-left text-zinc-500">
-                  <th scope="col" className="font-medium px-2 py-1.5 whitespace-nowrap">Channel</th>
-                  <th scope="col" className="font-medium px-2 py-1.5 whitespace-nowrap">Agents</th>
-                  <th scope="col" className="font-medium px-2 py-1.5 whitespace-nowrap">Runtime</th>
-                  <th scope="col" className="font-medium px-2 py-1.5 whitespace-nowrap">Step</th>
-                  <th scope="col" className="font-medium px-2 py-1.5 whitespace-nowrap">Elapsed</th>
-                  <th scope="col" className="font-medium px-2 py-1.5 whitespace-nowrap">Tokens</th>
-                  <th scope="col" className="font-medium px-2 py-1.5 whitespace-nowrap">Cost</th>
-                  <th scope="col" className="font-medium px-2 py-1.5 whitespace-nowrap">Status</th>
-                  <th scope="col" className="font-medium px-2 py-1.5 whitespace-nowrap">Actions</th>
-                </tr>
-              </thead>
-              <tbody>
-                {filtered.map(job => {
-                  const terminal = TERMINAL_RUN_STATUSES.has(job.status.toLowerCase());
-                  const stoppable = isStoppableRunStatus(job.status);
-                  const resumable = job.status.toLowerCase() === String("resumable");
-                  const orphaned = job.status.toLowerCase() === String("orphaned");
-                  const cancelling = job.status.toLowerCase() === String("cancelling");
-                  const stopping = Object.keys(cancellingByAgent).some(k => k.startsWith(job.channelId + String(":")));
-                  const agentsLabel = job.agentIds.length > 0
-                    ? job.agentIds.map(id => agentNameById[id] || id).join(String(", "))
-                    : String("\u2014");
-                  return (
-                    <tr key={job.runId} className="border-t border-zinc-900 align-top">
-                      <td className="px-2 py-2 text-zinc-200 whitespace-nowrap" title={job.channelId}>{channelNameById[job.channelId] || job.channelId}</td>
-                      <td className="px-2 py-2 text-zinc-400 max-w-[140px] truncate" title={agentsLabel}>{agentsLabel}</td>
-                      <td className="px-2 py-2 text-zinc-400 whitespace-nowrap">{job.runtime || String("unknown")}</td>
-                      <td className="px-2 py-2 text-zinc-400 whitespace-nowrap">{job.step || String("\u2014")}</td>
-                      <td className="px-2 py-2 tnum text-zinc-400 whitespace-nowrap">{formatElapsedMs(job.elapsedMs)}</td>
-                      <td className="px-2 py-2 tnum text-zinc-400 whitespace-nowrap">{formatTokens(job.tokens)}</td>
-                      <td className="px-2 py-2 tnum text-zinc-400 whitespace-nowrap">{formatCost(job.cost)}</td>
-                      <td className="px-2 py-2 whitespace-nowrap">
-                        <span className={String("inline-block px-1.5 py-0.5 rounded border ") + statusTone(job.status)}>{job.status}{resumable ? String(" \u00b7 resumable") : null}</span>
-                      </td>
-                      <td className="px-2 py-2 whitespace-nowrap">
-                        <span className="inline-flex items-center gap-1">
-                          <button
-                            onClick={() => stopRun(job.runId)}
-                            disabled={!stoppable || stopping}
-                            title={terminal ? String("Run already ") + job.status : resumable ? String("Parked run — use Retry to resume") : orphaned ? String("Parked run — Stop unavailable") : cancelling ? String("Run is already stopping") : String("Stop this run")}
-                            aria-label={String("Stop run ") + job.runId}
-                            className="w-7 h-7 rounded-lg border border-zinc-800 bg-zinc-900 text-zinc-300 hover:bg-zinc-800 disabled:opacity-40 flex items-center justify-center transition cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500/30"
-                          >
-                            <Square size={12} aria-hidden="true" />
-                          </button>
-                          <button
-                            onClick={() => handleRetry(job.runId)}
-                            disabled={!resumable || retryBusy !== null}
-                            title={resumable ? String("Retry this run (resume from checkpoint)") : String("Only resumable runs can be retried")}
-                            aria-label={String("Retry run ") + job.runId}
-                            className="w-7 h-7 rounded-lg border border-zinc-800 bg-zinc-900 text-zinc-300 hover:bg-zinc-800 disabled:opacity-40 flex items-center justify-center transition cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500/30"
-                          >
-                            <RotateCcw size={12} aria-hidden="true" />
-                          </button>
-                          <button
-                            onClick={() => { if (job.channelId !== activeChannelId) setActiveChannel(job.channelId); }}
-                            title={String("Jump to ") + (channelNameById[job.channelId] || job.channelId)}
-                            aria-label={String("Jump to channel for run ") + job.runId}
-                            className="w-7 h-7 rounded-lg border border-zinc-800 bg-zinc-900 text-zinc-300 hover:bg-zinc-800 flex items-center justify-center transition cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500/30"
-                          >
-                            <ArrowRight size={12} aria-hidden="true" />
-                          </button>
-                          <button
-                            onClick={() => handleOpenDiff(job)}
-                            title="Open this run diffs (loads artifacts, jumps to its channel)"
-                            aria-label={String("Open diffs for run ") + job.runId}
-                            className="w-7 h-7 rounded-lg border border-zinc-800 bg-zinc-900 text-zinc-300 hover:bg-zinc-800 flex items-center justify-center transition cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500/30"
-                          >
-                            <FileCode2 size={12} aria-hidden="true" />
-                          </button>
-                          <button
-                            onClick={() => handleOpenLogs(job)}
-                            title="Open this run logs (the channel message stream is the log source)"
-                            aria-label={String("Open logs for run ") + job.runId}
-                            className="w-7 h-7 rounded-lg border border-zinc-800 bg-zinc-900 text-zinc-300 hover:bg-zinc-800 flex items-center justify-center transition cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500/30"
-                          >
-                            <Terminal size={12} aria-hidden="true" />
-                          </button>
-                        </span>
-                        {stopping && !terminal && (
-                          <span className="block text-[10px] text-zinc-500 mt-1">Stopping...</span>
-                        )}
-                        {retryBusy === job.runId && (
-                          <span className="block text-[10px] text-zinc-500 mt-1">Retrying...</span>
-                        )}
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
+          // UI audit §2.11 (major #10): the 9-column table (min-w 560px) was
+          // unreadable by default inside the 260px panel — the stacked job
+          // card keeps every field and action but fits the column, in BOTH
+          // hosts (desktop right panel + OperationsSheet share JobsView).
+          <ul aria-label="Cross-channel runs with status and actions" className="space-y-2">
+            {filtered.map(job => {
+              const terminal = TERMINAL_RUN_STATUSES.has(job.status.toLowerCase());
+              const stoppable = isStoppableRunStatus(job.status);
+              const resumable = job.status.toLowerCase() === String("resumable");
+              const orphaned = job.status.toLowerCase() === String("orphaned");
+              const cancelling = job.status.toLowerCase() === String("cancelling");
+              const stopping = Object.keys(cancellingByAgent).some(k => k.startsWith(job.channelId + String(":")));
+              const agentsLabel = job.agentIds.length > 0
+                ? job.agentIds.map(id => agentNameById[id] || id).join(String(", "))
+                : String("\u2014");
+              const channelLabel = channelNameById[job.channelId] || job.channelId;
+              const actionButtonClass = "w-7 h-7 rounded-lg border border-zinc-800 bg-zinc-900 text-zinc-300 hover:bg-zinc-800 disabled:opacity-40 flex items-center justify-center transition cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500/30";
+              return (
+                <li key={job.runId} className="rounded-lg border border-zinc-900 bg-zinc-900/40 p-2.5">
+                  <div className="flex items-start justify-between gap-2">
+                    <span className="min-w-0 text-[11px] font-medium text-zinc-200 truncate" title={job.channelId}>{channelLabel}</span>
+                    {/* Status alone: the old badge rendered "resumable · resumable" by appending a redundant suffix to a status already named resumable. */}
+                    <span className={'shrink-0 inline-block px-1.5 py-0.5 rounded border ' + statusTone(job.status)}>{job.status}</span>
+                  </div>
+                  <div className="mt-1 text-[10px] text-zinc-400 truncate" title={agentsLabel}>
+                    {agentsLabel} · {job.runtime || String("unknown")}
+                  </div>
+                  <div className="mt-1.5 flex flex-wrap gap-x-3 gap-y-0.5 text-[10px] text-zinc-400 tnum">
+                    <span>Step {job.step || String("\u2014")}</span>
+                    <span>{formatElapsedMs(job.elapsedMs)}</span>
+                    <span>{formatTokens(job.tokens)} tok</span>
+                    <span>{formatCost(job.cost)}</span>
+                  </div>
+                  <div className="mt-2 flex items-center gap-1">
+                    <span className="inline-flex items-center gap-1">
+                      <button
+                        onClick={() => stopRun(job.runId)}
+                        disabled={!stoppable || stopping}
+                        title={terminal ? String("Run already ") + job.status : resumable ? String("Parked run — use Retry to resume") : orphaned ? String("Parked run — Stop unavailable") : cancelling ? String("Run is already stopping") : String("Stop this run")}
+                        aria-label={String("Stop run ") + job.runId}
+                        className={actionButtonClass}
+                      >
+                        <Square size={12} aria-hidden="true" />
+                      </button>
+                      <button
+                        onClick={() => handleRetry(job.runId)}
+                        disabled={!resumable || retryBusy !== null}
+                        title={resumable ? String("Retry this run (resume from checkpoint)") : String("Only resumable runs can be retried")}
+                        aria-label={String("Retry run ") + job.runId}
+                        className={actionButtonClass}
+                      >
+                        <RotateCcw size={12} aria-hidden="true" />
+                      </button>
+                      <button
+                        onClick={() => { if (job.channelId !== activeChannelId) setActiveChannel(job.channelId); }}
+                        title={String("Jump to ") + channelLabel}
+                        aria-label={String("Jump to channel for run ") + job.runId}
+                        className={actionButtonClass}
+                      >
+                        <ArrowRight size={12} aria-hidden="true" />
+                      </button>
+                      <button
+                        onClick={() => handleOpenDiff(job)}
+                        title="Open this run diffs (loads artifacts, jumps to its channel)"
+                        aria-label={String("Open diffs for run ") + job.runId}
+                        className={actionButtonClass}
+                      >
+                        <FileCode2 size={12} aria-hidden="true" />
+                      </button>
+                      <button
+                        onClick={() => handleOpenLogs(job)}
+                        title="Open this run logs (the channel message stream is the log source)"
+                        aria-label={String("Open logs for run ") + job.runId}
+                        className={actionButtonClass}
+                      >
+                        <Terminal size={12} aria-hidden="true" />
+                      </button>
+                    </span>
+                    {stopping && !terminal && (
+                      <span className="text-[10px] text-zinc-500 ml-1">Stopping...</span>
+                    )}
+                    {retryBusy === job.runId && (
+                      <span className="text-[10px] text-zinc-500 ml-1">Retrying...</span>
+                    )}
+                  </div>
+                </li>
+              );
+            })}
+          </ul>
         )}
       </div>
       <p className="px-4 py-2 border-t border-zinc-900 text-[10px] font-mono text-zinc-600 shrink-0 select-none">
-        No Pause: the server exposes no pause endpoint, so Stop and Retry are the only run actions.
+        Stop and Retry are the only run actions — pause is not supported.
       </p>
     </>
   );

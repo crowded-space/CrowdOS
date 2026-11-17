@@ -34,4 +34,12 @@ describe("createAgentSchema", () => {
     expect(createAgentSchema.parse({ ...base, contextTokenCap: null }).contextTokenCap).toBeNull();
     expect(createAgentSchema.parse(base).contextTokenCap).toBeUndefined();
   });
+
+  it("accepts an unassigned instruction stack (null) like modelModuleId", () => {
+    // Audit §2.7: the Assemble Mind default ("No instructions (unassigned)")
+    // posts instructionModuleId: null — the form's default configuration
+    // must parse, and the service resolves it to the canon default.
+    expect(createAgentSchema.parse({ ...base, instructionModuleId: null }).instructionModuleId).toBeNull();
+    expect(createAgentSchema.parse({ ...base, instructionModuleId: undefined }).instructionModuleId).toBeUndefined();
+  });
 });

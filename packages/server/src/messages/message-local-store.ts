@@ -11,7 +11,9 @@
 // only. The counter is bumped BEFORE the message lands so a crash leaves a gap,
 // never a dup.
 
-import { appendJsonlIfAbsentByIdWithFactory, isTestStoreDir, mutateJsonlRows, mutateJsonObject, readJsonl } from "../shared/core/local-file.js";
+import { appendJsonlIfAbsentByIdWithFactory, isTestStoreDir, mutateJsonlRows, mutateJsonObject, readJsonl, resolveLocalStoreDir, searchableWorkspaceScopes } from "../shared/core/local-file.js";
+import { readdir } from "node:fs/promises";
+import { join } from "node:path";
 
 export interface LocalMessageRow {
   id: string;
@@ -141,6 +143,61 @@ export async function localRecentMessages(
   workspaceId?: string | null,
 ): Promise<any[]> {
   return localListRawMessages(channelId, { limit, workspaceId });
+}
+
+/**
+ * Workspace-wide local search (UI audit §2.15): the /api/search route is
+ * PG-only and dead without a database, so message history search silently
+ * covered only the client's in-memory (open-channel) rows. This scans every
+ * per-channel log inside the workspace store — the local-first answer for
+ * the same endpoint. Single-user local mode: O(channels × rows) is fine.
+ * Rows keep the raw store shape (id/channelId/authorName/content/
+ * isInternalMonologue/timestamp); content is truncated to 280 chars for
+ * parity with the PG search projection.
+ */
+export async function localSearchMessages(
+  query: string,
+  opts: { workspaceId?: string | null; limit?: number } = {},
+): Promise<any[]> {
+  const trimmed = query.trim().toLowerCase();
+  if (!trimmed) return [];
+  const limit = Math.max(1, Math.min(50, opts.limit ?? 20));
+  const scopes =
+    opts.workspaceId && opts.workspaceId.trim()
+      ? [opts.workspaceId.trim()]
+      : searchableWorkspaceScopes();
+  const matches: Array<{ row: LocalMessageRow; ts: number }> = [];
+  for (const scope of scopes) {
+    const dir = join(resolveLocalStoreDir(scope), "messages");
+    let files: string[] = [];
+    try {
+      files = (await readdir(dir)).filter((f) => f.endsWith(".jsonl"));
+    } catch {
+      continue; // workspace has no message logs
+    }
+    for (const file of files) {
+      const stem = file.replace(/\.jsonl$/, "");
+      let rows: LocalMessageRow[] = [];
+      try {
+        rows = (await readJsonl(stem, scope)) as unknown as LocalMessageRow[];
+      } catch {
+        continue; // unreadable log: skip it, never fail the search
+      }
+      for (const row of rows) {
+        if (typeof row?.content !== "string") continue;
+        const hit =
+          row.content.toLowerCase().includes(trimmed) ||
+          (typeof row.authorName === "string" && row.authorName.toLowerCase().includes(trimmed));
+        if (!hit) continue;
+        matches.push({ row, ts: new Date(row.timestamp).getTime() || 0 });
+      }
+    }
+  }
+  matches.sort((a, b) => b.ts - a.ts);
+  return matches.slice(0, limit).map(({ row }) => ({
+    ...revive(row),
+    content: typeof row.content === "string" ? row.content.slice(0, 280) : "",
+  }));
 }
 
 /** Exact raw-message lookup within one channel log and workspace folder. */

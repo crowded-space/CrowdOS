@@ -65,6 +65,12 @@ function AgentRowInner({ id, name, species, status, level, avatar, isOmniscient,
     ? formatElapsedMs(Math.max(0, nowMs - (startedMs as number)))
     : formatElapsedMs(elapsedMs ?? null);
   const costLabel = formatCost(cost ?? null);
+  // Audit §2.11 (minor #13): an agent with no observed run used to render a
+  // bare "— · —" whose meaning only existed in a hover tooltip. Now a run
+  // shows "elapsed · cost" (dashes there mean "run exists, value unknown"
+  // and keep the title explanation), while no run renders explicit text.
+  const hasRun = typeof runId === 'string' && runId !== '';
+  const runLabel = hasRun ? `${elapsedLabel} · ${costLabel}` : 'no run yet';
   const showStop = canStop === true && typeof onStop === 'function' && typeof runId === 'string' && runId !== '';
   const stopCls = stopping
     ? 'bg-zinc-800 border-zinc-700 text-zinc-500 cursor-wait'
@@ -101,11 +107,11 @@ function AgentRowInner({ id, name, species, status, level, avatar, isOmniscient,
       </button>
       <div className="flex flex-col items-end gap-1 shrink-0">
         <span
-          className="tnum text-[10px] font-mono text-zinc-400 whitespace-nowrap"
-          title={runId ? `Run ${runId}` : 'No run observed for this agent yet'}
-          aria-label={`Run time ${elapsedLabel}, cost ${costLabel}`}
+          className={`tnum text-[10px] font-mono whitespace-nowrap ${hasRun ? 'text-zinc-400' : 'text-zinc-600'}`}
+          title={hasRun ? `Run ${runId}` : 'No run observed for this agent yet'}
+          aria-label={hasRun ? `Run time ${elapsedLabel}, cost ${costLabel}` : 'No run observed for this agent yet'}
         >
-          {elapsedLabel} · {costLabel}
+          {runLabel}
         </span>
         {showStop && (
           <button

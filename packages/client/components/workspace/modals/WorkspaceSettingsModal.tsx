@@ -1156,20 +1156,32 @@ export default function WorkspaceSettingsModal() {
                     <p className="text-zinc-500 font-sans">Add, edit, and organize the agents that work in this workspace.</p>
                   </div>
                   <div className="flex items-center gap-2">
-                    <input 
-                      type="file" 
-                      accept=".json" 
-                      onChange={handleImportAgent} 
-                      style={{ display: 'none' }} 
-                      id="import-agent-input" 
+                    {/* Audit §2.8 (minor #15): the import control was a
+                        <label> over a hidden file input — visually a button
+                        but not focusable or keyboard-activatable as one. Now
+                        a real button (Enter/Space work) and the title states
+                        the accepted format, which is the app's own
+                        "Export agent" JSON. */}
+                    <input
+                      type="file"
+                      accept=".json"
+                      onChange={handleImportAgent}
+                      style={{ display: 'none' }}
+                      id="import-agent-input"
                     />
-                    <label 
-                      htmlFor="import-agent-input" 
-                      className="px-2.5 py-1.5 border border-zinc-800 hover:border-zinc-700 hover:bg-zinc-900 text-zinc-300 rounded-md font-semibold flex items-center gap-1.5 transition cursor-pointer select-none"
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const input = document.getElementById('import-agent-input') as HTMLInputElement | null;
+                        input?.click();
+                      }}
+                      className="px-2.5 py-1.5 border border-zinc-800 hover:border-zinc-700 hover:bg-zinc-900 text-zinc-300 rounded-md font-semibold flex items-center gap-1.5 transition cursor-pointer select-none focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500/30"
+                      title="Import an agent from the app's own 'Export agent' JSON file (Crow-Agent_config.json format)"
+                      aria-label="Import agent from exported JSON file"
                     >
-                      <Upload size={13} />
+                      <Upload size={13} aria-hidden="true" />
                       <span>Import agent</span>
-                    </label>
+                    </button>
                     {!agentFormOpen && (
                       <button
                         onClick={() => setAgentFormOpen(true)}
@@ -1683,7 +1695,7 @@ export default function WorkspaceSettingsModal() {
                               >
                                 <Edit size={11} aria-hidden="true" />
                               </button>
-                              {ag.level > 0 && (
+                              {ag.level > 0 ? (
                                 <button
                                   type="button"
                                   onClick={() => {
@@ -1703,6 +1715,19 @@ export default function WorkspaceSettingsModal() {
                                 >
                                   <Trash2 size={11} aria-hidden="true" />
                                 </button>
+                              ) : (
+                                // Audit §2.7 (minor #14): L0 rows showed no delete
+                                // control at all with no explanation. The lock is
+                                // deliberate (L0 surveillance agents are workspace
+                                // fixtures, not worker spawns), so the row now
+                                // says so instead of looking like a missing button.
+                                <span
+                                  className="inline-flex items-center justify-center p-1 rounded border border-zinc-900 bg-zinc-950 text-zinc-700 cursor-not-allowed"
+                                  title="L0 surveillance agents are fixed workspace infrastructure and cannot be removed here."
+                                  aria-label="L0 agents cannot be deleted"
+                                >
+                                  <Trash2 size={11} aria-hidden="true" />
+                                </span>
                               )}
                             </div>
                           </td>
@@ -1978,7 +2003,8 @@ export default function WorkspaceSettingsModal() {
                         className="px-2.5 py-1.5 bg-indigo-500 hover:bg-indigo-600 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-indigo-500 font-semibold text-white rounded flex items-center gap-1 cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
                       >
                         <Plus size={13} aria-hidden="true" />
-                        <span>Assemble Area</span>
+                        {/* Audit §2.14 (minor #19): "Assemble Area" said nothing about creating a channel and collided with the Assemble Mind agent term; the sibling action is "Create category". */}
+                        <span>Create channel</span>
                       </button>
                     </div>
                   </form>
@@ -3100,6 +3126,15 @@ export default function WorkspaceSettingsModal() {
     setConfirmModal(prev => ({ ...prev, open: false }));
     if (cancel) cancel();
   }}
+/>
+
+{/* Agents Board "Studio" opens here (audit §2.5): the button set
+    studioAgentId, but this modal was never rendered — the click grayed the
+    row and nothing happened. Same wiring as AgentProfileModal's studio. */}
+<AgentStudioModal
+  agentId={studioAgentId}
+  open={studioAgentId !== null}
+  onClose={() => setStudioAgentId(null)}
 />
 </>
 );

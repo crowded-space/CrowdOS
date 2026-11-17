@@ -212,5 +212,12 @@
       "tag": "0029_model_module_endpoint_thinking",
       "breakpoints": true
     }
+    ,{
+      "idx": 30,
+      "version": "7",
+      "when": 1792368000000,
+      "tag": "0030_channels_description",
+      "breakpoints": true
+    }
   ]
 }

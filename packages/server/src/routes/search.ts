@@ -1,8 +1,9 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { ilike, or, and, desc, eq, sql } from "drizzle-orm";
-import { getDb } from "../shared/config/database.js";
+import { getDb, isConnectionError } from "../shared/config/database.js";
 import { channels, messages } from "../db/schema.js";
+import { messageGate } from "../messages/message-gate.js";
 
 const searchQuerySchema = z.object({
   q: z.string().min(1),
@@ -26,8 +27,26 @@ export async function searchRoutes(app: FastifyInstance) {
       const searchPattern = `%${trimmed}%`;
       // XD-001: caller workspace handle + filter. Unscoped search leaked
       // cross-workspace channels/messages.
-      const db = (request as any).db ?? getDb();
       const callerWs = (request as any).workspaceId ?? null;
+
+      // UI audit §2.15 (§17 read degrade): without a database the PG paths are
+      // dead — `getDb()` used to throw here and answer the whole request with
+      // an unhandled 500 — and an unreachable tenant DB failed the same way.
+      // The workspace's local message logs are the truth tier, so scan them
+      // instead. Channels return [] in this tier; the client merges its own
+      // local channel matches from the store.
+      const localFallback = async () => {
+        const localRows = await messageGate.searchLocal(trimmed, { workspaceId: callerWs, limit });
+        return { query: q, channels: [], messages: localRows };
+      };
+
+      let db: any = (request as any).db;
+      try {
+        db = db ?? getDb();
+      } catch (err) {
+        if (isConnectionError(err)) return localFallback();
+        throw err;
+      }
 
       // pg_trgm similarity ranking: when extension is available, order by similarity descending
       // to surface best matches first while still using the gin_trgm_ops index (ILIKE %pat% already hits it).
@@ -71,51 +90,60 @@ export async function searchRoutes(app: FastifyInstance) {
         };
       }
 
-      const [matchedChannels, matchedMessages] = await Promise.all([
-        db
-          .select({
-            id: channels.id,
-            name: channels.name,
-            categoryId: channels.categoryId,
-            type: channels.type,
-            position: channels.position,
-            createdAt: channels.createdAt,
-            archivedAt: channels.archivedAt,
-          })
-          .from(channels)
-          .where(callerWs ? and(ilike(channels.name, searchPattern), eq(channels.workspaceId, callerWs)) : ilike(channels.name, searchPattern))
-          .limit(limit),
-        db
-          .select({
-            id: messages.id,
-            channelId: messages.channelId,
-            authorId: messages.authorId,
-            authorName: messages.authorName,
-            authorLevel: messages.authorLevel,
-            authorType: messages.authorType,
-            content: sql<string>`LEFT(${messages.content}, 280)`,
-            isInternalMonologue: messages.isInternalMonologue,
-            sequenceNumber: messages.sequenceNumber,
-            timestamp: messages.timestamp,
-          })
-          .from(messages)
-          .where(
-            callerWs
-              ? and(
-                  or(ilike(messages.content, searchPattern), ilike(messages.authorName, searchPattern)),
-                  eq(messages.workspaceId, callerWs)
-                )
-              : or(ilike(messages.content, searchPattern), ilike(messages.authorName, searchPattern))
-          )
-          .orderBy(desc(messages.timestamp))
-          .limit(limit),
-      ]);
+      // The similarity path swallows its own failures (it is a probe), so an
+      // unreachable database surfaces here: degrade to the local truth tier
+      // instead of an unhandled 500. Logic errors (bad SQL, schema drift)
+      // still propagate — they are real defects, not outages (§17).
+      try {
+        const [matchedChannels, matchedMessages] = await Promise.all([
+          db
+            .select({
+              id: channels.id,
+              name: channels.name,
+              categoryId: channels.categoryId,
+              type: channels.type,
+              position: channels.position,
+              createdAt: channels.createdAt,
+              archivedAt: channels.archivedAt,
+            })
+            .from(channels)
+            .where(callerWs ? and(ilike(channels.name, searchPattern), eq(channels.workspaceId, callerWs)) : ilike(channels.name, searchPattern))
+            .limit(limit),
+          db
+            .select({
+              id: messages.id,
+              channelId: messages.channelId,
+              authorId: messages.authorId,
+              authorName: messages.authorName,
+              authorLevel: messages.authorLevel,
+              authorType: messages.authorType,
+              content: sql<string>`LEFT(${messages.content}, 280)`,
+              isInternalMonologue: messages.isInternalMonologue,
+              sequenceNumber: messages.sequenceNumber,
+              timestamp: messages.timestamp,
+            })
+            .from(messages)
+            .where(
+              callerWs
+                ? and(
+                    or(ilike(messages.content, searchPattern), ilike(messages.authorName, searchPattern)),
+                    eq(messages.workspaceId, callerWs)
+                  )
+                : or(ilike(messages.content, searchPattern), ilike(messages.authorName, searchPattern))
+            )
+            .orderBy(desc(messages.timestamp))
+            .limit(limit),
+        ]);
 
-      return {
-        query: q,
-        channels: matchedChannels,
-        messages: matchedMessages,
-      };
+        return {
+          query: q,
+          channels: matchedChannels,
+          messages: matchedMessages,
+        };
+      } catch (err) {
+        if (isConnectionError(err)) return localFallback();
+        throw err;
+      }
     }
   );
 }

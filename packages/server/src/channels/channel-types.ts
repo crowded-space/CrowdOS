@@ -14,6 +14,8 @@ export interface Channel {
   id: string;
   categoryId: string | null;
   name: string;
+  /** Optional topic line (UI audit §2.14). Null/absent = never set. */
+  description?: string | null;
   type: ChannelType;
   createdBy: string;
   position: number;

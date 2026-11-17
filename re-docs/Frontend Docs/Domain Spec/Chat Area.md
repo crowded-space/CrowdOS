@@ -134,7 +134,7 @@ Mock recent files MUST be removed or labeled demo behind a flag. Demo data in pr
 - Oversize/over-count/long messages: toast errors + truncation, send disabled while `isSending`.
  - Oversize/over-count/long messages: toast errors + truncation, send disabled while `isSending`. Typing past the cap is impossible (`maxLength`); the over-limit path is the projected send length (draft + mention prefix): `handleSend` opens the overflow `ConfirmDialog` once (Send truncated / keep draft), and Send stays clickable so the guard is reachable.
 - Failed/cancelled turns: inline Retry + hover retry; streaming + cancelled states visually distinct.
-- Reconnect: digest banner with a named Dismiss control (`MainChatArea.tsx:789-799`); every digest change also fires a `Connection update` toast so the event survives dismissal (`MainChatArea.tsx:149-152`); Retry lives on the `OfflineBanner` degraded strip (`OfflineBanner.tsx`), and older-page loads anchor viewport.
+- Reconnect: digest banner with a named Dismiss control (`MainChatArea.tsx:789-799`); every digest change also fires a `Connection update` toast so the event survives dismissal (`MainChatArea.tsx:149-152`) — the toast is live-only (audit §2.12 minor #16: quiet toasts are not recorded in the notification journal, so connection churn no longer bumps the bell); Retry lives on the `OfflineBanner` degraded strip (`OfflineBanner.tsx`), and older-page loads anchor viewport.
 - No chat-level error boundary of its own; relies on `App.tsx` panel boundary.
 
 ## Gaps

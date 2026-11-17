@@ -1,14 +1,17 @@
 import React, { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ClipboardList, Folder, Inbox, X, type LucideIcon } from 'lucide-react';
+import { BarChart3, ClipboardList, Folder, Globe, Inbox, Users, X, type LucideIcon } from 'lucide-react';
 import { useCrowdOSStore } from '@/stores/crowdOsStore';
 import { useShallow } from 'zustand/react/shallow';
 import { JobsView } from './JobsView';
 import { OperationsInbox } from './OperationsInbox';
+import { RosterPanel } from './RosterPanel';
+import { TelemetryPanel } from './TelemetryPanel';
 
 const FileExplorer = React.lazy(() => import('./FileExplorer'));
+const BrowserPanel = React.lazy(() => import('./BrowserPanel'));
 
 /** Named ops-sheet views. A named enum, never a boolean: each tab keeps a stable address. */
-export type operationsSheetView = 'jobs' | 'approvals' | 'repo';
+export type operationsSheetView = 'jobs' | 'approvals' | 'repo' | 'roster' | 'telemetry' | 'browser';
 
 interface operationsSheetTab {
   id: operationsSheetView;
@@ -16,22 +19,30 @@ interface operationsSheetTab {
   icon: LucideIcon;
 }
 
-const SHEET_TABS: ReadonlyArray<operationsSheetTab> = [
+// Exported for the panel-parity regression test (OperationsSheet.test.ts):
+// the sheet tab list is the narrow-viewport access contract for every
+// right-panel view (UI audit §2.16).
+export const SHEET_TABS: ReadonlyArray<operationsSheetTab> = [
+  { id: 'roster', label: 'Roster', icon: Users },
   { id: 'jobs', label: 'Jobs', icon: ClipboardList },
   { id: 'approvals', label: 'Approvals', icon: Inbox },
+  { id: 'telemetry', label: 'Telemetry', icon: BarChart3 },
+  { id: 'browser', label: 'Browser', icon: Globe },
   { id: 'repo', label: 'Repo', icon: Folder },
 ];
 
 /**
- * Narrow-width ops bottom sheet (UX_GUIDELINE section 4): Jobs / Approvals /
- * Repo tabs for viewports where the right ops panel is hidden (below xl).
- * The trigger bar always renders where mounted, so ops are never fully
- * hidden. Tabs reuse the SAME store projections the desktop panel uses
- * (jobsByRun via JobsView, inboxItems via OperationsInbox, FileExplorer) -
- * no second run/approval/repo model, no new endpoints, no invented rows;
- * empty states stay honest. Dismissal is backdrop, Escape, or channel
- * selection; tabs use roving tabindex with Arrow/Home/End keys; counts are
- * icon+text with a polite live region; the sheet is static (no motion).
+ * Narrow-width ops bottom sheet (UX_GUIDELINE section 4): Roster / Jobs /
+ * Approvals / Telemetry / Browser / Repo tabs for viewports where the right
+ * ops panel is hidden (below xl). UI audit §2.16 (2026-10-22): the sheet
+ * used to cover only Jobs/Approvals/Repo, so a narrow-window user lost the
+ * roster, telemetry, and browser panels entirely — every right-panel view
+ * (types/crowdOs.ts rightPanelView) now has a sheet tab reusing the SAME
+ * component the desktop panel mounts (no second roster/telemetry/repo
+ * model, no new endpoints, no invented rows; empty states stay honest).
+ * Dismissal is backdrop, Escape, or channel selection; tabs use roving
+ * tabindex with Arrow/Home/End keys; counts are icon+text with a polite
+ * live region; the sheet is static (no motion).
  */
 export function OperationsSheet(): React.JSX.Element {
   const { jobsByRun, approvalRequests, inboxDeferred, activeChannelId } = useCrowdOSStore(useShallow(s => ({
@@ -135,7 +146,7 @@ export function OperationsSheet(): React.JSX.Element {
           <span className="tnum rounded border border-zinc-800 bg-zinc-950 px-1.5 py-0.5 text-[10px] font-medium text-zinc-400">{jobsCount} jobs</span>
           <span className="tnum rounded border border-zinc-800 bg-zinc-950 px-1.5 py-0.5 text-[10px] font-medium text-zinc-400">{pendingCount} approvals</span>
         </button>
-        <span className="font-mono text-[11px] text-zinc-600">jobs / approvals / repo</span>
+        <span className="font-mono text-[11px] text-zinc-600">roster / jobs / approvals / telemetry / browser / repo</span>
       </div>
       {open && (
         <>
@@ -150,11 +161,11 @@ export function OperationsSheet(): React.JSX.Element {
             id="ops-sheet-dialog"
             role="dialog"
             aria-modal="true"
-            aria-label="Operations sheet: jobs, approvals, repository"
+            aria-label="Operations sheet: roster, jobs, approvals, telemetry, browser, repository"
             className="fixed inset-x-0 bottom-0 z-50 flex h-[min(72dvh,540px)] min-h-0 flex-col rounded-t-xl border-t border-zinc-800 bg-[#0c0c0e] shadow-2xl xl:hidden"
           >
             <div className="flex shrink-0 items-center gap-1.5 border-b border-zinc-900 px-3 py-2">
-              <div role="tablist" aria-label="Operations views" className="flex items-center gap-1">
+              <div role="tablist" aria-label="Operations views" className="flex items-center gap-1 overflow-x-auto min-w-0">
                 {SHEET_TABS.map((t, i) => {
                   const Icon = t.icon;
                   const selected = view === t.id;
@@ -195,6 +206,25 @@ export function OperationsSheet(): React.JSX.Element {
               {view === 'approvals' && (
                 <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
                   <OperationsInbox />
+                </div>
+              )}
+              {view === 'roster' && (
+                <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+                  <RosterPanel />
+                </div>
+              )}
+              {view === 'telemetry' && (
+                <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+                  <TelemetryPanel />
+                </div>
+              )}
+              {view === 'browser' && (
+                <div className="relative min-h-0 flex-1 overflow-hidden">
+                  <div className="absolute inset-0">
+                    <Suspense fallback={<div className="p-4 text-xs text-zinc-500">Loading browser…</div>}>
+                      <BrowserPanel />
+                    </Suspense>
+                  </div>
                 </div>
               )}
               {view === 'repo' && (

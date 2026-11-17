@@ -14,6 +14,7 @@ import {
   appendMessage,
 } from "./message-service.js";
 import type { AppendMessageInput, AppendMessageOpts } from "./message-service.js";
+import { localSearchMessages } from "./message-local-store.js";
 
 export type { ChannelMessage, StructuredToolCall, ChannelMessagesPage, MessagePageCursor, ThreadMessagesPage };
 export { getMessagesParamsSchema, getMessagesQuerySchema };
@@ -31,5 +32,8 @@ export const messageGate = {
   detachThreadReplies,
   listRecent: listRecentMessages,
   parseBeforeCursor,
+  // UI audit §2.15: local-tier workspace-wide message search backing the
+  // /api/search fallback when no database is configured.
+  searchLocal: localSearchMessages,
   append: appendMessage
 };

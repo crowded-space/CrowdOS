@@ -75,6 +75,7 @@ Non-goals (other domains):
 - `DEFAULT_PAGE_LIMIT` — default page size constant (50).
 - `listRecentMessages` — raw newest-first rows for context middlewares (DB or file); an implicit PG gap-fill resolves the owning workspace handle first and uses the ambient DB only when no workspace handle resolves. An explicit DB override remains pinned.
 - `messageGate.getChannelMessages` — legacy message list getter.
+- `messageGate.searchLocal(query, { workspaceId?, limit? })` — workspace-wide local-tier message search (UI audit §2.15, 2026-10-22): scans every per-channel JSONL log under the workspace store, matches content or author name case-insensitively, newest-first, raw store rows with content truncated to 280 chars, limit clamped 1–50. `routes/search.ts` degrades to this port when no database is configured (or the tenant DB is unreachable) so OmniSearch covers persisted history in local mode instead of 500ing. Regression: `routes/search-local-fallback.test.ts`.
 - `messageGate.getChannelMessagesPage` — keyset-paginated message getter.
 - `messageGate.getThreadPage` — thread-scoped raw page getter (THR-015; the Threads domain's message-read path, raw rows incl. `threadId`).
 - `messageGate.listRecent` — alias of `listRecentMessages`.
@@ -97,7 +98,7 @@ Known outside callers of gate functions:
 - Type-only importers: `event-broker/event-types.ts` (`message:new` payload), `db/schema.ts` (`tool_calls` column type), `shared/core/token-tracker.ts`, `shared/core/librarian-runtime.ts`, `shared/sockets/register-socket-server.ts`.
 Tables owned outright (sole writer is `appendMessage`):
 - `messages` — channel + thread rows (sequence reserved per channel via `channel_sequences`, per thread via `thread_sequences`).
-- `messages` readers: `shared/core/index-builder.ts`, visibility/channel-awareness middlewares, `routes/search.ts`, `threads/thread-service.ts`. (`core/memory-builder.ts` deleted 2026-10-07 — dead legacy surface, zero importers; superseded by the Runtime context pipeline.)
+- `messages` readers: `shared/core/index-builder.ts`, visibility/channel-awareness middlewares, `routes/search.ts` (PG ILIKE + pg_trgm similarity; degrades to `messageGate.searchLocal` in local tier), `threads/thread-service.ts`. (`core/memory-builder.ts` deleted 2026-10-07 — dead legacy surface, zero importers; superseded by the Runtime context pipeline.)
 
 ## Emits-Listens
 - `message:new` (emits, on every `append` with a broker).

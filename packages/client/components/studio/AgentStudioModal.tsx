@@ -7,6 +7,7 @@ import {
 } from 'lucide-react';
 import { useCrowdOSStore } from '@/stores/crowdOsStore';
 import { useToast } from '@/components/ui/ToastProvider';
+import { xrayModelLabel } from './xray-labels';
 
 interface AgentStudioModalProps {
   agentId: string | null;
@@ -509,9 +510,10 @@ export default function AgentStudioModal({ agentId, open, onClose }: AgentStudio
                         <span className="text-base font-bold text-indigo-400 font-mono">{inspectionResult.tokenEstimate}</span>
                       </div>
                       <div className="p-2.5 bg-zinc-950 border border-zinc-800 rounded-lg">
-                        <span className="text-[10px] text-zinc-500 font-medium block">Provider</span>
+                        {/* Audit §2.10 (minor #12): label matches the model card ("Minimax M3.1"), not the raw provider type; policy in ./xray-labels. */}
+                        <span className="text-[10px] text-zinc-500 font-medium block">Model</span>
                         <span className="text-xs font-semibold text-emerald-400 font-mono truncate block">
-                          {inspectionResult.modelConfig?.provider || 'google'}
+                          {xrayModelLabel(selectedModelId, modelModules, inspectionResult.modelConfig)}
                         </span>
                       </div>
                       <div className="p-2.5 bg-zinc-950 border border-zinc-800 rounded-lg">
@@ -538,23 +540,27 @@ export default function AgentStudioModal({ agentId, open, onClose }: AgentStudio
             )}
           </div>
 
-          {/* Footer */}
-          <div className="p-3.5 bg-zinc-950 border-t border-zinc-850 flex items-center justify-between shrink-0 select-none">
-            <span className="text-[10.5px] text-zinc-500 font-mono">
+          {/* Footer — audit §2.5/§2.10 (minor #11): the save button used to
+              truncate to "Save & Commit M…" because the hint span had equal
+              flex claim on the row; the hint now yields (truncate) and the
+              button keeps its full label. */}
+          <div className="p-3.5 bg-zinc-950 border-t border-zinc-850 flex items-center justify-between gap-3 shrink-0 select-none">
+            <span className="text-[10.5px] text-zinc-500 font-mono min-w-0 truncate">
               Changes take effect on the next turn via WebSocket hot-swap.
             </span>
 
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 shrink-0">
               <button
                 onClick={onClose}
-                className="px-3 py-1.5 rounded-md border border-zinc-800 hover:bg-zinc-900 text-zinc-400 font-semibold transition cursor-pointer"
+                className="px-3 py-1.5 rounded-md border border-zinc-800 hover:bg-zinc-900 text-zinc-400 font-semibold transition cursor-pointer shrink-0"
               >
                 Cancel
               </button>
               <button
                 onClick={handleSaveManifest}
                 disabled={saving}
-                className="px-4 py-1.5 rounded-md bg-indigo-600 hover:bg-indigo-500 text-white font-semibold transition cursor-pointer disabled:opacity-50 flex items-center gap-1.5"
+                title="Save & Commit Manifest"
+                className="px-4 py-1.5 rounded-md bg-indigo-600 hover:bg-indigo-500 text-white font-semibold transition cursor-pointer disabled:opacity-50 flex items-center gap-1.5 shrink-0 whitespace-nowrap"
               >
                 {saving ? <RefreshCw size={12} className="animate-spin" /> : <CheckCircle2 size={12} />}
                 <span>Save & Commit Manifest</span>

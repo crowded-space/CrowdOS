@@ -493,6 +493,7 @@ export async function createChannel(body: CreateChannelBody, dbOverride?: any, w
         categoryId,
         workspaceId: workspaceId ?? null,
         name: body.name,
+        description: body.description ?? null,
         type: body.type,
         createdBy: body.createdBy,
         position: body.position,
@@ -558,6 +559,7 @@ export async function createChannel(body: CreateChannelBody, dbOverride?: any, w
     categoryId,
     workspaceId: ws,
     name: body.name,
+    description: body.description ?? null,
     type: body.type,
     createdBy: body.createdBy,
     position: body.position,
@@ -609,6 +611,7 @@ export async function updateChannel(id: string, body: UpdateChannelBody, dbOverr
     if ((body as any).folderPath !== undefined) updateData.folderPath = (body as any).folderPath;
     if ((body as any).fsMounts !== undefined) updateData.fsMounts = (body as any).fsMounts;
     if ((body as any).name !== undefined) updateData.name = (body as any).name;
+    if ((body as any).description !== undefined) updateData.description = (body as any).description;
     if ((body as any).position !== undefined) updateData.position = (body as any).position;
     if ((body as any).type !== undefined) {
       updateData.type = (body as any).type;
@@ -668,6 +671,7 @@ export async function updateChannel(id: string, body: UpdateChannelBody, dbOverr
   if (patch.categoryId !== undefined) full.categoryId = patch.categoryId;
   if (patch.folderPath !== undefined) full.folderPath = patch.folderPath;
   if (patch.name !== undefined) full.name = patch.name;
+  if (patch.description !== undefined) full.description = patch.description;
   if (patch.position !== undefined) full.position = patch.position;
   if (patch.type !== undefined) {
     full.type = patch.type;
@@ -686,6 +690,7 @@ export async function updateChannel(id: string, body: UpdateChannelBody, dbOverr
       if (patch.folderPath !== undefined) updateData.folderPath = patch.folderPath;
       if (patch.fsMounts !== undefined) updateData.fsMounts = patch.fsMounts;
       if (patch.name !== undefined) updateData.name = patch.name;
+      if (patch.description !== undefined) updateData.description = patch.description;
       if (patch.position !== undefined) updateData.position = patch.position;
       if (patch.type !== undefined) {
         updateData.type = patch.type;

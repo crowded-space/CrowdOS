@@ -35,7 +35,12 @@ export const createAgentSchema = z.object({
   authorityLevel: authorityLevelSchema,
   l3Subtype: l3SubtypeSchema.optional(),
   modelModuleId: z.string().min(1).nullable().optional(),
-  instructionModuleId: z.string().min(1),
+  // Nullable like modelModuleId: the "No instructions (unassigned)" form
+  // default is a legal configuration — the service resolves it to the canon
+  // default on local-tier create (agent-service falls back to
+  // DEFAULT_INSTRUCTION_MODULE_ID; localUpsertAgent ?? "instr-default").
+  // PG keeps strict validation (column is NOT NULL, references required).
+  instructionModuleId: z.string().min(1).nullable().optional(),
   toolkitModuleId: z.string().min(1).optional(),
   constraintsModuleId: z.string().min(1).optional(),
   capabilitiesModuleId: z.string().min(1).optional(),

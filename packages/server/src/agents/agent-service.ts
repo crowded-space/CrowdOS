@@ -104,7 +104,7 @@ function limitOf(filters: AgentRegistryFilters): number {
  */
 type NullableAgentMerge = Omit<
   CreateAgentProfileInput,
-  "species" | "avatar" | "l3Subtype" | "toolkitModuleId" | "constraintsModuleId" | "capabilitiesModuleId" | "fallbackAgentId"
+  "species" | "avatar" | "l3Subtype" | "toolkitModuleId" | "constraintsModuleId" | "capabilitiesModuleId" | "fallbackAgentId" | "instructionModuleId"
 > & {
   species?: string | null;
   avatar?: string | null;
@@ -113,6 +113,9 @@ type NullableAgentMerge = Omit<
   constraintsModuleId?: string | null;
   capabilitiesModuleId?: string | null;
   fallbackAgentId?: string | null;
+  // Update schema is .optional() but NOT .nullable() — only create allows the
+  // null ("No instructions") shape.
+  instructionModuleId?: string;
 };
 
 export class AgentRegistry {
@@ -290,9 +293,20 @@ export class AgentRegistry {
     return pgRecord ? mapAgentProfile(pgRecord) : null;
   }
 
-  async create(input: CreateAgentProfileInput, dbOverride?: any): Promise<AgentProfile> {
+  async create(rawInput: CreateAgentProfileInput, dbOverride?: any): Promise<AgentProfile> {
     const now = new Date();
     const agentId = randomUUID();
+    // Audit §2.7: the create schema allows instructionModuleId: null ("No
+    // instructions (unassigned)"), but the PG column is NOT NULL. Normalize
+    // BEFORE any write path sees the value: null → the canon default id. The
+    // local tier then only re-resolves UNKNOWN ids (ensureDefaults seeds the
+    // default); PG tiers validate the reference like any other id. The
+    // explicit property keeps `input.instructionModuleId` typed `string`.
+    const { DEFAULT_INSTRUCTION_MODULE_ID } = await import("../modules/module-gate.js");
+    let input = {
+      ...rawInput,
+      instructionModuleId: rawInput.instructionModuleId ?? DEFAULT_INSTRUCTION_MODULE_ID,
+    };
     const row = {
       id: agentId,
       workspaceId: input.workspaceId ?? null,
@@ -383,7 +397,14 @@ export class AgentRegistry {
       // contract), so "Launch Assembly" works before any module is created.
       const { moduleGate, DEFAULT_INSTRUCTION_MODULE_ID } = await import("../modules/module-gate.js");
       await moduleGate.ensureDefaults(input.workspaceId ?? null);
-      if (input.instructionModuleId === DEFAULT_INSTRUCTION_MODULE_ID || !(await moduleGate.instruction.get(input.instructionModuleId, input.workspaceId))) {
+      // create() normalizes null/undefined ("No instructions") to the canon
+      // default id before this runs, so only UNKNOWN ids need the fallback —
+      // audit §2.7: the default form configuration must be a legal create,
+      // not a guaranteed 400.
+      if (
+        input.instructionModuleId === DEFAULT_INSTRUCTION_MODULE_ID ||
+        !(await moduleGate.instruction.get(input.instructionModuleId, input.workspaceId))
+      ) {
         if (input.instructionModuleId !== DEFAULT_INSTRUCTION_MODULE_ID) {
           console.warn(`[agents] instruction module ${input.instructionModuleId} missing locally; falling back to ${DEFAULT_INSTRUCTION_MODULE_ID}`);
         }

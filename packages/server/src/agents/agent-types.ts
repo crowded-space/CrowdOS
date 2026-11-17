@@ -55,7 +55,8 @@ export interface CreateAgentProfileInput {
   authorityLevel: AuthorityLevel;
   l3Subtype?: L3Subtype;
   modelModuleId: string | null;
-  instructionModuleId: string;
+  /** Null/undefined = "No instructions (unassigned)" (audit §2.7): the canon default on the local tier; PG tiers validate it like any id (column is NOT NULL). */
+  instructionModuleId?: string | null;
   toolkitModuleId?: string;
   constraintsModuleId?: string;
   capabilitiesModuleId?: string;

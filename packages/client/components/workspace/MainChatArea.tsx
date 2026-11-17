@@ -97,6 +97,8 @@ export default function MainChatArea({ onOpenSearch, onOpenSidebar }: MainChatAr
     agents,
     addMessage,
     clearChannelMessages,
+    messageLocateTarget,
+    clearMessageLocate,
     rightPanelView,
     setRightPanelView,
     selectedSandboxFile,
@@ -384,6 +386,34 @@ export default function MainChatArea({ onOpenSearch, onOpenSidebar }: MainChatAr
     () => messages.filter(msg => msg.channelId === activeChannelId),
     [messages, activeChannelId]
   );
+
+  // UI audit §2.15/#22: a search-result click must land on the message, not
+  // just the channel. The store (openMessageAt) walks older pages (bounded)
+  // until the target row is in memory; this effect fires on every page load
+  // until the row exists, then scrolls to it and flashes an outline once.
+  useEffect(() => {
+    if (!messageLocateTarget || messageLocateTarget.channelId !== activeChannelId) return;
+    const targetId = messageLocateTarget.messageId;
+    const el =
+      document.getElementById(`msg-${targetId}`) ??
+      document.getElementById(`grouped-msg-${targetId}`);
+    if (!el) return;
+    el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    el.style.transition = 'outline-color 0.9s ease';
+    el.style.outline = '2px solid rgb(99, 102, 241)';
+    el.style.outlineOffset = '-2px';
+    el.style.borderRadius = '8px';
+    const fadeTimer = setTimeout(() => { el.style.outlineColor = 'transparent'; }, 1600);
+    return () => {
+      clearTimeout(fadeTimer);
+      el.style.outline = '';
+      el.style.outlineColor = '';
+      el.style.outlineOffset = '';
+      el.style.borderRadius = '';
+      el.style.transition = '';
+      if (useCrowdOSStore.getState().messageLocateTarget?.messageId === targetId) clearMessageLocate();
+    };
+  }, [messageLocateTarget, activeChannelId, currentMessages, clearMessageLocate]);
 
   // Phase E: active run per channel = latest non-terminal jobsByRun row in
   // the active channel (SAME source as JobsView, never a second run model).
@@ -833,13 +863,17 @@ export default function MainChatArea({ onOpenSearch, onOpenSidebar }: MainChatAr
           </div>
         );
       } else {
+        // UI audit §2.15/#22: stable row id so jump-to-message (search results)
+        // can scroll to the row. Grouped continuation rows carry
+        // `grouped-msg-<id>` above; the locate effect tries both.
         list.push(
-          <MessageRouter
-            key={current.id}
-            message={current}
-            agentLevel={matchedAgent?.level ?? 3}
-            toolExecutions={(current as Folded)._attachedTools}
-          />
+          <div key={current.id} id={`msg-${current.id}`}>
+            <MessageRouter
+              message={current}
+              agentLevel={matchedAgent?.level ?? 3}
+              toolExecutions={(current as Folded)._attachedTools}
+            />
+          </div>
         );
       }
     }
@@ -879,9 +913,13 @@ export default function MainChatArea({ onOpenSearch, onOpenSidebar }: MainChatAr
           <button
             type="button"
             onClick={onOpenSidebar}
-            aria-label="Open workspace menu"
+            // Audit §2.16 (minor #21): this opens the off-canvas sidebar
+            // drawer, not the workspace dropdown menu — the header workspace
+            // mark opens that one. Two controls sharing a name left
+            // screen-reader users landing on the wrong target.
+            aria-label="Open sidebar"
             className="xl:hidden w-10 h-10 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-400 hover:text-zinc-100 hover:border-zinc-700 flex items-center justify-center transition-colors cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500/30 active:scale-[0.97]"
-            title="Workspace menu"
+            title="Sidebar"
           >
             <Menu size={16} aria-hidden="true" />
           </button>

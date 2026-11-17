@@ -283,6 +283,9 @@ export const channels = pgTable("channels", {
   // local tier already makes by storing rows as JSON files.
   fsMounts: jsonb("fs_mounts"),
   name: text("name").notNull(),
+  // Channel topic/description (UI audit §2.14). Nullable: legacy rows and
+  // local-store rows created before the field keep loading unchanged.
+  description: text("description"),
   type: channelTypeEnum("type").notNull().default("standard"),
   createdBy: text("created_by").notNull(),
   position: integer("position").notNull(),
