@@ -1,8 +1,13 @@
 -- Phase 7: Scale & observability hardening
 -- SCL-2: pgvector semantic memory, SCL-3: per-run cost ledger
 
--- Ensure pgvector extension (idempotent)
-CREATE EXTENSION IF NOT EXISTS vector;--> statement-breakpoint
+-- Ensure pgvector extension (idempotent, optional): pgvector may be absent
+-- (stock postgres images, CI); everything below degrades to text storage.
+DO $$ BEGIN
+  IF EXISTS (SELECT 1 FROM pg_available_extensions WHERE name = 'vector') THEN
+    CREATE EXTENSION IF NOT EXISTS vector;
+  END IF;
+END $$;--> statement-breakpoint
 -- SCL-3: token_usage_log runId for per-run cost rollup
 ALTER TABLE "token_usage_log" ADD COLUMN IF NOT EXISTS "run_id" uuid;--> statement-breakpoint
 CREATE INDEX IF NOT EXISTS "token_usage_log_run_idx" ON "token_usage_log" USING btree ("run_id");--> statement-breakpoint

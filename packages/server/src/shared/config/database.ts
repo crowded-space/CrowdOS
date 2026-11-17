@@ -401,20 +401,16 @@ export async function withTransaction<T>(fn: (tx: DbTx) => Promise<T>): Promise<
 export async function ensurePgVectorExtension(): Promise<void> {
   const sql = getSqlClient();
 
-  try {
-    await sql`create extension if not exists vector`;
-  } catch (error) {
-    if (
-      error &&
-      typeof error === "object" &&
-      "code" in error &&
-      (error.code === "23505" || error.code === "42710")
-    ) {
-      return;
-    }
+  // pgvector is optional (local-first invariant §5.12): stock postgres images
+  // (e.g. the CI service container) do not ship it, and semantic memory
+  // degrades to JSON-text embeddings without it. Probe availability instead of
+  // crashing on the "extension is not available" error.
+  const available = await sql`
+    select 1 from pg_available_extensions where name = 'vector'
+  `;
+  if (available.length === 0) return;
 
-    throw error;
-  }
+  await sql`create extension if not exists vector`;
 }
 
 export async function closeDatabaseConnection(): Promise<void> {
