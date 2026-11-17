@@ -42,16 +42,30 @@ export function useStickToBottom<T extends HTMLElement>() {
 
   // Called when a new assistant message starts, on send, on channel switch,
   // or from the "jump to latest" button. User-triggered, so smooth is fine.
-  const resume = useCallback(() => {
+  const resume = useCallback((behavior: ScrollBehavior = 'smooth') => {
     userScrolledAwayRef.current = false;
     setIsAtBottom(true);
-    scrollToBottom('smooth');
+    scrollToBottom(behavior);
   }, [scrollToBottom]);
+
+  // Called from the passive scroll handler only when already scrolled away,
+  // so dragging the scrollbar or pressing End re-latches follow mode cleanly
+  // without letting programmatic pins cancel follow mode.
+  const syncScrollPosition = useCallback(() => {
+    if (!userScrolledAwayRef.current) return;
+    const el = containerRef.current;
+    if (!el) return;
+    if (isNearBottomFor(el)) {
+      userScrolledAwayRef.current = false;
+      setIsAtBottom(true);
+    }
+  }, []);
 
   return {
     containerRef,
     followStream,
     resume,
+    syncScrollPosition,
     isAtBottom,
     scrollHandlers: {
       onWheel: onUserScrollIntent,

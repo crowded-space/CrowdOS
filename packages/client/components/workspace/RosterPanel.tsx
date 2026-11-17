@@ -1,7 +1,7 @@
 import React, { useCallback, useMemo } from 'react';
-import { Network } from 'lucide-react';
 import { useCrowdOSStore } from '@/stores/crowdOsStore';
 import { useShallow } from 'zustand/react/shallow';
+import { CrowSigil } from '@/components/ui/CrowSigil';
 import AgentRow from './AgentRow';
 import { isStoppableRunStatus } from './run-stoppability';
 
@@ -99,14 +99,14 @@ export function RosterPanel(): React.JSX.Element {
     tierAgents: typeof tierL0,
     label: string,
     dotClass: string,
-    badgeClass: string,
+    countClass: string,
     id?: string,
   ) => (
     <div className="space-y-2" id={id}>
-      <h3 className="text-[13px] font-medium text-zinc-300 px-1 flex items-center gap-2">
-        <span className={dotClass} />
-        {label}
-        <span className={`tnum ml-auto text-[10px] font-mono font-medium px-1.5 py-0.5 rounded ${badgeClass}`}>{tierAgents.length}</span>
+      <h3 className="text-[12px] font-medium text-zinc-400 px-1 flex items-center gap-2">
+        <span className={dotClass} aria-hidden="true" />
+        <span>{label}</span>
+        <span className={`tnum ml-auto text-[11px] font-mono ${countClass}`}>{tierAgents.length}</span>
       </h3>
       <div className="space-y-1">
         {tierAgents.map(ag => {
@@ -133,28 +133,26 @@ export function RosterPanel(): React.JSX.Element {
 
   return (
     <>
-      {/* Title — larger, calmer */}
       <div className="px-4 py-3.5 border-b border-zinc-900 flex items-center justify-between shrink-0 select-none">
-        <h2 id="roster-heading" className="text-[13px] font-medium text-zinc-300 flex items-center gap-2">
-          <span className="w-7 h-7 rounded-lg bg-zinc-900 border border-zinc-800 flex items-center justify-center" aria-hidden="true">
-            <Network size={12} className="text-zinc-500" aria-hidden="true" />
+        <h2 id="roster-heading" className="text-[13px] font-medium text-zinc-200 flex items-center gap-2.5">
+          <span className="w-7 h-7 rounded-lg bg-zinc-950 border border-zinc-800 flex items-center justify-center shrink-0" aria-hidden="true">
+            <CrowSigil size={18} tone="auto" detail="compact" />
           </span>
-          Operations roster
+          <span>Operations roster</span>
         </h2>
-        <span className="tnum text-[11px] font-mono text-zinc-400 bg-zinc-900 border border-zinc-800 px-2 py-1 rounded-md">{visibleAgents.length}</span>
+        <span className="tnum text-[11px] font-mono text-zinc-400">{visibleAgents.length}</span>
       </div>
 
-      {/* Roster Area — airy spacing, progressive disclosure */}
       <div className="flex-1 overflow-y-auto px-3 py-4 space-y-6 scrollbar-thin overscroll-contain">
-        {tierL0.length > 0 && renderTier(tierL0, 'L0 · Surveillance', 'w-1.5 h-1.5 rounded-sm bg-cyan-400', 'bg-cyan-500/10 border border-cyan-500/20 text-cyan-300')}
-        {tierL1.length > 0 && renderTier(tierL1, 'L1 · Executive', 'w-1.5 h-1.5 rounded-sm bg-rose-400', 'bg-rose-500/10 border border-rose-500/20 text-rose-300', 'roster-tier-l1')}
-        {tierL2.length > 0 && renderTier(tierL2, 'L2 · Coordinators', 'w-1.5 h-1.5 rounded-sm bg-indigo-400', 'bg-indigo-500/10 border border-indigo-500/20 text-indigo-300')}
-        {tierL3.length > 0 && renderTier(tierL3, 'L3 · Workers', 'w-1.5 h-1.5 rounded-sm bg-emerald-400', 'bg-emerald-500/10 border border-emerald-500/20 text-emerald-300')}
+        {tierL0.length > 0 && renderTier(tierL0, 'L0 · Surveillance', 'w-1.5 h-1.5 rounded-sm bg-cyan-400', 'text-cyan-400')}
+        {tierL1.length > 0 && renderTier(tierL1, 'L1 · Executive', 'w-1.5 h-1.5 rounded-sm bg-rose-400', 'text-rose-400', 'roster-tier-l1')}
+        {tierL2.length > 0 && renderTier(tierL2, 'L2 · Coordinators', 'w-1.5 h-1.5 rounded-sm bg-indigo-400', 'text-indigo-400')}
+        {tierL3.length > 0 && renderTier(tierL3, 'L3 · Workers', 'w-1.5 h-1.5 rounded-sm bg-emerald-400', 'text-emerald-400')}
 
         {visibleAgents.length === 0 && (
           <div className="text-center py-12 px-4">
-            <div className="w-12 h-12 rounded-lg bg-zinc-900 border border-zinc-800 flex items-center justify-center mx-auto mb-3 text-zinc-500" aria-hidden="true">
-              <Network size={18} aria-hidden="true" />
+            <div className="w-12 h-12 rounded-xl bg-zinc-950 border border-zinc-800 flex items-center justify-center mx-auto mb-3" aria-hidden="true">
+              <CrowSigil size={28} tone="auto" detail="full" />
             </div>
             <p className="text-sm font-medium text-zinc-300">No agents yet</p>
             <p className="text-xs text-zinc-500 mt-1">Spawn your first agent in Settings → Agents Board.</p>

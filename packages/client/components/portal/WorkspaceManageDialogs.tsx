@@ -54,7 +54,7 @@ export function WorkspaceIconPicker({
                   : 'border-white/[0.07] bg-white/[0.02] hover:border-white/15 hover:bg-white/[0.05]'
               }`}
             >
-              <CrowIcon variant={variant} className="w-9 h-9 rounded-lg bg-transparent border-0 shadow-none" iconSize={70} />
+              <CrowIcon variant={variant} className="w-9 h-9 shrink-0" iconSize={68} />
               <span className={`text-[9px] font-mono leading-none truncate w-full text-center ${selected ? 'text-zinc-200' : 'text-zinc-600 group-hover:text-zinc-400'}`}>
                 {label}
               </span>

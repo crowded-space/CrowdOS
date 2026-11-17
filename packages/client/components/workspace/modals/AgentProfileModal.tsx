@@ -10,6 +10,7 @@ import StatusBadge from '../ui/StatusBadge';
 import { useToast } from '@/components/ui/ToastProvider';
 import AgentStudioModal from '@/components/studio/AgentStudioModal';
 import { useOverlayFocus } from '@/components/ui/use-overlay-focus';
+import AgentAvatar from '@/components/ui/AgentAvatar';
 
 export default function AgentProfileModal() {
   const { 
@@ -217,8 +218,13 @@ export default function AgentProfileModal() {
 
             {/* Floating Avatar cut */}
             <div className="px-6 relative -mt-10 mb-2 shrink-0 select-none">
-              <div className={`relative w-20 h-20 rounded-full bg-zinc-950 border-4 border-zinc-950 flex items-center justify-center text-3xl shadow-lg`}>
-                {agent.avatar || '🤖'}
+              <div className="relative inline-block">
+                <AgentAvatar
+                  avatar={agent.avatar}
+                  level={agent.level}
+                  size="xl"
+                  className="border-4 border-zinc-950 shadow-lg"
+                />
                 <div className="absolute bottom-0 right-0 p-0.5 bg-zinc-950 rounded-full">
                   <PresenceIndicator status={agent.status} size="md" />
                 </div>

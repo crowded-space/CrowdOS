@@ -61,7 +61,7 @@ export default function WorkspaceDropdown() {
         className="w-full flex items-center justify-between px-3.5 py-3.5 hover:bg-zinc-900/50 border-b border-zinc-900/80 transition text-left cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500/30 active:bg-zinc-900/70"
       >
         <div className="flex items-center gap-3 min-w-0">
-          <CrowIcon variant={activeWS.icon} className="w-8 h-8 rounded-xl bg-transparent border-0 shadow-sm" iconSize={64} />
+          <CrowIcon variant={activeWS.icon} className="w-8 h-8 shrink-0" iconSize={68} />
           <span className="font-semibold text-zinc-100 text-[14px] truncate tracking-[-0.015em] font-sans">
             {activeWS.name}
           </span>

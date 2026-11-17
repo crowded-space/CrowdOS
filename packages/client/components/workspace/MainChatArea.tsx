@@ -358,13 +358,18 @@ export default function MainChatArea({ onOpenSearch, onOpenSidebar }: MainChatAr
 
   // Follow-scroll owns the scroll container: wheel/touch intent (never the
   // `scroll` event, which also fires for our own pins) decides follow mode.
-  const { containerRef: scrollContainerRef, followStream, resume, isAtBottom, scrollHandlers } =
+  const { containerRef: scrollContainerRef, followStream, resume, syncScrollPosition, isAtBottom, scrollHandlers } =
     useStickToBottom<HTMLDivElement>();
   const isUserScrolledUp = !isAtBottom;
   const [missedCount, setMissedCount] = useState(0);
   const lastMessageCountRef = useRef(0);
   const firstMsgIdRef = useRef<string | null>(null);
   const loadingOlderRef = useRef(false);
+
+  useEffect(() => {
+    setMissedCount(0);
+    resume('instant');
+  }, [activeChannelId, resume]);
 
   // Find active workspace & channel
   const activeWS = workspaces.find(ws => ws.id === activeWorkspaceId);
@@ -484,6 +489,7 @@ export default function MainChatArea({ onOpenSearch, onOpenSidebar }: MainChatAr
     if (scrollRafRef.current) return;
     scrollRafRef.current = requestAnimationFrame(() => {
       scrollRafRef.current = null;
+      syncScrollPosition();
       void maybeLoadOlder();
     });
   };
@@ -1074,20 +1080,18 @@ export default function MainChatArea({ onOpenSearch, onOpenSidebar }: MainChatAr
         onCancel={() => setConfirmOverflowOpen(false)}
       />
 
-      {/* Message stream area — responsive padding, calm rhythm. Follow-scroll
-          pins via container scrollTo(instant) while streaming; intent comes
-          from wheel/touch (never the scroll event). Bottom padding clears the
-          composer so the last line is never hidden behind it. */}
-      <div
-        ref={scrollContainerRef}
-        onScroll={handleScroll}
-        onWheel={scrollHandlers.onWheel}
-        onTouchMove={scrollHandlers.onTouchMove}
-        style={{ overflowAnchor: 'auto', paddingBottom: 96 }}
-        className={`flex-1 overflow-y-auto px-3 sm:px-4 lg:px-6 ${
-          selectedSandboxFile && sandboxView === 'full' ? 'py-0' : 'py-4 sm:py-6'
-        } transition-[padding] duration-300 ease-[cubic-bezier(0.16,1,0.3,1)] space-y-3 sm:space-y-4 scrollbar-thin scroll-auto overscroll-contain contain-paint select-text selection:bg-indigo-500/30 relative`}
-      >
+      {/* Message stream area + composer-anchored Jump to present control */}
+      <div className="relative flex-1 min-h-0 flex flex-col">
+        <div
+          ref={scrollContainerRef}
+          onScroll={handleScroll}
+          onWheel={scrollHandlers.onWheel}
+          onTouchMove={scrollHandlers.onTouchMove}
+          style={{ overflowAnchor: 'auto' }}
+          className={`flex-1 overflow-y-auto px-3 sm:px-4 lg:px-6 ${
+            selectedSandboxFile && sandboxView === 'full' ? 'py-0' : 'pt-4 sm:pt-6 pb-12'
+          } transition-[padding] duration-300 ease-[cubic-bezier(0.16,1,0.3,1)] space-y-3 sm:space-y-4 scrollbar-thin scroll-auto overscroll-contain contain-paint select-text selection:bg-indigo-500/30 relative`}
+        >
         {activeRunId && (
           <div className="sticky top-0 z-10">
             <RunHeader runId={activeRunId} />
@@ -1266,19 +1270,21 @@ export default function MainChatArea({ onOpenSearch, onOpenSidebar }: MainChatAr
             )}
           </div>
         )}
-        {/* Floating Jump to Present Button */}
-        {isUserScrolledUp && (
-          <div className="sticky bottom-3 flex justify-center w-full pointer-events-none z-20">
+        </div>
+        {/* Composer-anchored Jump to present button — sits 8px above composer, calm surface */}
+        {renderedMessages.length > 0 && isUserScrolledUp && (
+          <div className="pointer-events-none absolute inset-x-0 bottom-2 z-20 flex justify-center px-3">
             <button
+              type="button"
               onClick={() => { setMissedCount(0); resume(); }}
-              className="jump-latest pointer-events-auto flex items-center gap-1.5 px-3.5 py-2 min-h-[36px] rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-medium shadow-[0_8px_24px_rgba(10,14,32,0.55)] transition-all duration-200 hover:scale-[1.03] active:scale-[0.97] cursor-pointer border border-indigo-400/30"
+              className="jump-latest pointer-events-auto flex items-center gap-1.5 h-8 px-3 rounded-lg bg-[#141416]/95 hover:bg-zinc-800 text-zinc-200 hover:text-zinc-100 text-[12px] font-medium border border-zinc-700/80 shadow-[0_4px_14px_rgba(0,0,0,0.35)] backdrop-blur-md transition-colors duration-150 active:scale-[0.98] cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500/40"
             >
               {missedCount > 0 ? (
-                <span className="tnum min-w-[18px] h-[18px] px-1 flex items-center justify-center rounded bg-white/20 text-[10px] font-mono font-semibold">
+                <span className="tnum min-w-[18px] h-[18px] px-1 flex items-center justify-center rounded bg-indigo-500/15 border border-indigo-500/30 text-indigo-400 text-[10px] font-mono font-semibold">
                   {missedCount}
                 </span>
               ) : (
-                <ArrowDown size={14} />
+                <ArrowDown size={13} className="text-zinc-400 shrink-0" aria-hidden="true" />
               )}
               <span>Jump to present</span>
             </button>
@@ -1564,7 +1570,7 @@ export default function MainChatArea({ onOpenSearch, onOpenSidebar }: MainChatAr
                 ? "Drop files here, release to attach"
                 : `Message #${activeChannel ? activeChannel.name : 'operational-matrix'}`
             }
-            className="w-full bg-transparent border-0 text-[16px] sm:text-[14px] text-zinc-100 placeholder-zinc-500 focus:ring-0 focus:outline-none resize-none px-4 pt-4 pb-2 md:py-3.5 leading-[1.5] caret-indigo-400 select-text min-h-[52px] max-h-[160px] overflow-y-auto scrollbar-thin"
+            className="w-full bg-transparent border-0 text-[16px] sm:text-[14px] text-zinc-100 placeholder-zinc-500 focus:ring-0 focus:outline-none focus-visible:outline-none resize-none px-4 pt-4 pb-2 md:py-3.5 leading-[1.5] caret-indigo-400 select-text min-h-[52px] max-h-[160px] overflow-y-auto scrollbar-thin"
           />
           {inputText.length > 3000 && (
             <div className="px-3.5 pb-1 text-right">

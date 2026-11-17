@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { Bot, Square } from 'lucide-react';
+import { Square } from 'lucide-react';
 import { useReducedMotion } from 'motion/react';
+import AgentAvatar from '@/components/ui/AgentAvatar';
 import PresenceIndicator from './ui/PresenceIndicator';
 
 const levelStyles: Record<number, { text: string; bg: string; border: string }> = {
@@ -85,9 +86,9 @@ function AgentRowInner({ id, name, species, status, level, avatar, isOmniscient,
         aria-label={`Open profile for ${name}`}
         className="flex-1 min-w-0 flex items-center gap-2 text-left cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500/30 rounded-lg active:scale-[0.99]"
       >
-        <div className={`relative w-9 h-9 rounded-lg flex items-center justify-center bg-zinc-950 border ${meta.border} select-none text-[15px] font-sans shrink-0 shadow-sm`}>
-          {avatar || <Bot size={16} className="text-zinc-500" aria-hidden="true" />}
-          <div className="absolute bottom-0 right-0 bg-[#0c0c0e] rounded-full p-0.5" aria-hidden="true">
+        <div className="relative shrink-0">
+          <AgentAvatar avatar={avatar} level={level} size="md" />
+          <div className="absolute -bottom-0.5 -right-0.5 bg-[#0c0c0e] rounded-full p-0.5" aria-hidden="true">
             <PresenceIndicator status={status as any} size="sm" />
           </div>
         </div>
@@ -95,13 +96,13 @@ function AgentRowInner({ id, name, species, status, level, avatar, isOmniscient,
           <div className="text-[13px] font-semibold text-zinc-100 truncate whitespace-nowrap flex items-center gap-2 font-sans tracking-[-0.01em]">
             <span className={`${meta.text} whitespace-nowrap`}>{name}</span>
             {isOmniscient && (
-              <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[9px] font-semibold font-mono bg-cyan-500/10 text-cyan-400 border border-cyan-500/20 tracking-tight leading-none">Omni</span>
+              <span className="text-[10px] font-mono text-cyan-400">· Omni</span>
             )}
           </div>
           <div className="text-[11px] text-zinc-500 font-sans flex items-center gap-1.5">
-            <span>{species}</span>
-            <span className="w-1 h-1 rounded-full bg-zinc-700" />
-            <span className="tnum font-mono text-[10px] font-medium px-1.5 py-0.5 rounded bg-zinc-900 border border-zinc-800 text-zinc-400">L{level}</span>
+            <span className="truncate">{species}</span>
+            <span aria-hidden="true" className="text-zinc-700">·</span>
+            <span className="tnum font-mono text-[10.5px] text-zinc-400 shrink-0">L{level}</span>
           </div>
         </div>
       </button>

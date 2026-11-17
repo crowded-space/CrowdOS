@@ -1,4 +1,4 @@
-﻿import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
   X, Cpu, Layers, Brain, Hammer, ShieldAlert, 
@@ -8,6 +8,7 @@ import {
 import { useCrowdOSStore } from '@/stores/crowdOsStore';
 import { useToast } from '@/components/ui/ToastProvider';
 import { xrayModelLabel } from './xray-labels';
+import AgentAvatar from '@/components/ui/AgentAvatar';
 
 interface AgentStudioModalProps {
   agentId: string | null;
@@ -186,9 +187,7 @@ export default function AgentStudioModal({ agentId, open, onClose }: AgentStudio
           {/* Header */}
           <div className="p-4 border-b border-zinc-800/80 bg-zinc-950 flex items-center justify-between select-none">
             <div className="flex items-center gap-3">
-              <div className="w-9 h-9 rounded-lg bg-indigo-500/10 border border-indigo-500/30 flex items-center justify-center text-indigo-400 font-bold text-sm">
-                {agent.avatar || '🤖'}
-              </div>
+              <AgentAvatar avatar={agent.avatar} level={agent.level} size="md" />
               <div>
                 <div className="flex items-center gap-2">
                   <h2 className="text-sm font-semibold text-zinc-100 font-sans">

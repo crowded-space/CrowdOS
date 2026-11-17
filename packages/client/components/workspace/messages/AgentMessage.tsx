@@ -6,6 +6,7 @@ import AttachmentsView from './AttachmentsView';
 import ToolExecutionMessage from './ToolExecutionMessage';
 import { AgentLevel, Attachment, AgentTurnStep, AgentTurnStatus, ToolExecution } from '@/types/crowdOs';
 import { useCrowdOSStore } from '@/stores/crowdOsStore';
+import AgentAvatar from '@/components/ui/AgentAvatar';
 
 interface AgentMessageProps {
   id?: string;
@@ -123,11 +124,11 @@ export default function AgentMessage({
       <button 
         type="button"
         onClick={() => openAgentProfileModal(authorId)}
-        className={`flex items-center justify-center w-9 h-9 rounded-lg border ${levelMeta.border} bg-zinc-950 text-[15px] select-none hover:opacity-90 hover:scale-[1.03] active:scale-95 transition cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500/30 shrink-0 mt-0.5 shadow-sm`}
+        className="select-none hover:opacity-90 hover:scale-[1.03] active:scale-95 transition cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500/30 rounded-lg shrink-0 mt-0.5"
         title={`View Profile of ${authorName}`}
         aria-label={`View Profile of ${authorName}`}
       >
-        {authorAvatar}
+        <AgentAvatar avatar={authorAvatar} level={level} size="md" />
       </button>
 
       <div className="flex-1 min-w-0 space-y-2">

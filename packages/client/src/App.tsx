@@ -7,19 +7,21 @@ import { lazy, Suspense, useEffect, useState, useCallback } from 'react';
 import { useCrowdOSStore } from '@/stores/crowdOsStore';
 import { useShallow } from 'zustand/react/shallow';
 import WorkspacePortal from '@/components/portal/WorkspacePortal';
-import WorkspaceSidebar from '@/components/workspace/WorkspaceSidebar';
-import MainChatArea from '@/components/workspace/MainChatArea';
-import RightSidebar from '@/components/workspace/RightSidebar';
-import BottomDrawer from '@/components/workspace/BottomDrawer';
-import OperationsSheet from '@/components/workspace/OperationsSheet';
 import { ToastProvider } from '@/components/ui/ToastProvider';
 import ErrorBoundary from '@/components/ui/ErrorBoundary';
-import LockScreen from '@/components/lockscreen/LockScreen';
 import OfflineBanner from '@/components/ui/OfflineBanner';
+import { CrowSigil } from '@/components/ui/CrowSigil';
 import { useScreenLockStore, SCREENLOCK_IDLE_MS } from '@/stores/screenLockStore';
 
-// Overlay-only surfaces: kept out of the initial bundle so first paint
-// downloads only what the workspace shell actually needs.
+// Route-level + overlay code splitting: keep heavy workspace shell modules
+// (syntax highlighting, diff viewer, file explorer, chat engine) out of the
+// initial Portal bundle so first paint stays minimal and fast.
+const WorkspaceSidebar = lazy(() => import('@/components/workspace/WorkspaceSidebar'));
+const MainChatArea = lazy(() => import('@/components/workspace/MainChatArea'));
+const RightSidebar = lazy(() => import('@/components/workspace/RightSidebar'));
+const BottomDrawer = lazy(() => import('@/components/workspace/BottomDrawer'));
+const OperationsSheet = lazy(() => import('@/components/workspace/OperationsSheet'));
+const LockScreen = lazy(() => import('@/components/lockscreen/LockScreen'));
 const AgentProfileModal = lazy(() => import('@/components/workspace/modals/AgentProfileModal'));
 const WorkspaceSettingsModal = lazy(() => import('@/components/workspace/modals/WorkspaceSettingsModal'));
 const OmniSearchModal = lazy(() => import('@/components/workspace/modals/OmniSearchModal'));
@@ -171,9 +173,11 @@ export default function App() {
   // bootstrap skeleton holds the first paint until that probe completes.
   if (!workspacesBootstrapped) {
     return (
-      <div className="w-full h-dvh bg-[#060608] flex items-center justify-center" role="status" aria-label="Loading CrowdOS">
+      <div className="w-full h-dvh bg-[#070709] flex items-center justify-center" role="status" aria-label="Loading CrowdOS">
         <div className="flex flex-col items-center gap-3">
-          <div className="w-8 h-8 rounded-lg bg-zinc-900 border border-zinc-800 animate-pulse" aria-hidden="true" />
+          <div className="w-10 h-10 rounded-xl bg-zinc-950 border border-zinc-800 flex items-center justify-center" aria-hidden="true">
+            <CrowSigil size={24} tone="auto" detail="compact" />
+          </div>
           <span className="text-[11px] font-mono text-zinc-500">Loading workspaces…</span>
         </div>
       </div>
@@ -182,11 +186,9 @@ export default function App() {
   if (!activeWorkspaceId) {
     return (
       <ToastProvider>
-        <div className="w-full h-dvh bg-[#060608] text-zinc-100 flex items-center justify-center p-4 overflow-y-auto">
-          <ErrorBoundary fallback={<div className="p-6 text-sm text-zinc-400">Portal failed to load</div>}>
-            <WorkspacePortal />
-          </ErrorBoundary>
-        </div>
+        <ErrorBoundary fallback={<div className="p-6 text-sm text-zinc-400">Portal failed to load</div>}>
+          <WorkspacePortal />
+        </ErrorBoundary>
       </ToastProvider>
     );
   }
@@ -231,24 +233,30 @@ export default function App() {
             }`}
           >
             <ErrorBoundary fallback={<div className="p-4 text-xs text-zinc-500">Sidebar failed to load</div>}>
-              <WorkspaceSidebar onClose={() => setSidebarOpen(false)} />
+              <Suspense fallback={<div className="w-full h-full bg-[#0c0c0f]" />}>
+                <WorkspaceSidebar onClose={() => setSidebarOpen(false)} />
+              </Suspense>
             </ErrorBoundary>
           </nav>
 
           {/* Center Chat Work Area */}
           <main className="flex-1 flex flex-col h-full overflow-hidden min-w-0 bg-[#121214]">
             <ErrorBoundary fallback={<div className="p-6 text-sm text-zinc-400">Chat failed to load</div>}>
-              <MainChatArea
-                onOpenSearch={() => setSearchOpen(true)}
-                onOpenSidebar={() => setSidebarOpen(true)}
-              />
+              <Suspense fallback={<div className="flex-1 flex items-center justify-center text-xs font-mono text-zinc-500">Loading workspace…</div>}>
+                <MainChatArea
+                  onOpenSearch={() => setSearchOpen(true)}
+                  onOpenSidebar={() => setSidebarOpen(true)}
+                />
+              </Suspense>
             </ErrorBoundary>
             {/* Bottom artifact drawer: stable named slot below the center chat.
                 Inside the center column so the shell row keeps nav / chat /
                 roster order; the dock stays default. */}
             <div data-slot="bottom-drawer" className="shrink-0 flex flex-col min-h-0">
               <ErrorBoundary fallback={<div className="p-4 text-xs text-zinc-500">Drawer failed to load</div>}>
-                <BottomDrawer />
+                <Suspense fallback={null}>
+                  <BottomDrawer />
+                </Suspense>
               </ErrorBoundary>
             </div>
             {/* Narrow-width ops sheet: Jobs / Approvals / Repo tabs for
@@ -258,7 +266,9 @@ export default function App() {
                 surface at xl+. */}
             <div data-slot="ops-sheet" className="shrink-0 flex flex-col min-h-0 xl:hidden">
               <ErrorBoundary fallback={<div className="p-4 text-xs text-zinc-500">Ops failed to load</div>}>
-                <OperationsSheet />
+                <Suspense fallback={null}>
+                  <OperationsSheet />
+                </Suspense>
               </ErrorBoundary>
             </div>
           </main>
@@ -266,7 +276,9 @@ export default function App() {
           {/* Keep narrow and tablet widths for the chat; the roster is desktop-only. */}
           <aside aria-label="Operations panel: roster, repository, jobs, and telemetry" className="hidden xl:flex shrink-0 h-full">
             <ErrorBoundary fallback={<div className="p-4 text-xs text-zinc-500">Roster failed to load</div>}>
-              <RightSidebar />
+              <Suspense fallback={<div className="w-[260px] h-full bg-[#0c0c0e]/95 border-l border-zinc-900" />}>
+                <RightSidebar />
+              </Suspense>
             </ErrorBoundary>
           </aside>
 
@@ -277,14 +289,18 @@ export default function App() {
             degrades to a bounded fallback with Retry instead of killing
             chat, drafts and panels. */}
         <ErrorBoundary fallback={<div className="p-6 text-sm text-zinc-400">Dialog failed to load</div>}>
-          <Suspense fallback={<SpinnerFallback />}>
+          <Suspense fallback={null}>
             <AgentProfileModal />
             <WorkspaceSettingsModal />
             <OmniSearchModal open={searchOpen} onClose={() => setSearchOpen(false)} />
             <QuickAsk open={quickAskOpen} onClose={() => setQuickAskOpen(false)} />
           </Suspense>
         </ErrorBoundary>
-        {locked && <LockScreen />}
+        {locked && (
+          <Suspense fallback={null}>
+            <LockScreen />
+          </Suspense>
+        )}
 
       </div>
     </ToastProvider>
